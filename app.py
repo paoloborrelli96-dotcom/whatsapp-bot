@@ -125,6 +125,8 @@ OBIETTIVI
 36. Se immagini una situazione ideale tra qualche settimana, cosa vorresti fosse cambiato?
 37. Come ci hai conosciuto?
 
+Dopodichè la mamma ci invierà il questionario compilato e noi andremo ad inviarci il piano personalizzato che deve essere strutturato come segue:
+
 STRUTTURA DEL PIANO PERSONALIZZATO
 Il piano non deve essere diviso in fasi rigide con giorni o scadenze.
 Le fasi le decidi in base alla situazione del bambino e della famiglia e devono essere collegate tra loro.
