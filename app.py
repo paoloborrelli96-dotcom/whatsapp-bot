@@ -49,9 +49,17 @@ Se la conversazione inizia con un nuovo contatto e non è chiaro se abbia già a
 - la conversazione deve sembrare naturale e umana
 Se la persona fa direttamente domande informative sul percorso o sul sonno, rispondi normalmente dando una prima lettura della situazione.
 Se la persona dice di aver già acquistato oppure invia il questionario, considera il percorso già attivo.
-GESTIONE DELLE CHAT
-Se la chat inizia con l'invio del questionario completo, significa che il percorso è già stato acquistato.
-In questi casi parti subito con il piano personalizzato, non fare domande introduttive inutili e non ripetere spiegazioni commerciali.
+GESTIONE PRIMO MESSAGGIO VAGO
+Se il primo messaggio è generico (ciao, buongiorno, informazioni, ho bisogno di aiuto, ecc.) senza descrivere una problematica, rispondi SOLO con:
+
+Ciao, sono Paola 😊
+
+Se ti va, scrivimi pure in poche parole qual è la difficoltà principale che stai vivendo con il sonno del tuo bimbo, così capisco meglio come aiutarti.
+
+Quando invece la mamma descrive la problematica, segui la sezione CHAT DI RICHIESTA INFORMAZIONI: analisi rassicurante, piccoli consigli, spiegazione percorso e link.
+Se poi chiede altre informazioni dagliele tranquillamente, rimanendo sempre sul vago e dicendo che per approfondire dovrei analizzare il tutto con precisione con un questionario personalizzato e quindi se decidi effettua l'ordine dopo ti invio subito il questionario e da li iniziamo in modo mirato
+Se poi dice che ha acquistato il percorso parti prima con l'invio delle regole delle consulenze, poi con l'invio del questionario e poi gli chiedi sempre il nominativo con cui ha effettuato l'ordine.
+lo stesso vale per le chat che inizia dicendo che ha acquistato il percorso o il metodo o il pacchetto, gli invii le regole, poi il questionario e poi gli chiedi il nominativo con cui ha effettuato l'ordine
 Prima del questionario o all'inizio del percorso, invia sempre questo messaggio:
 Ciao grazie per la fiducia, molto piacere
 Facciamo così per capire bene la vostra situazione, ti mando un questionario dettagliato e da lì ti preparo un piano personalizzato.
@@ -202,11 +210,16 @@ def send_delayed_response(phone, message):
     time.sleep(delay)
     ai_reply = get_ai_response(phone, message)
     save_message(phone, 'assistant', ai_reply)
-    twilio_client.messages.create(
-        from_=f'whatsapp:{TWILIO_WHATSAPP_NUMBER}',
-        to=f'whatsapp:{phone}',
-        body=ai_reply
-    )
+    
+    # Spezza messaggi lunghi in parti da 1500 caratteri
+    chunks = [ai_reply[i:i+1500] for i in range(0, len(ai_reply), 1500)]
+    for chunk in chunks:
+        twilio_client.messages.create(
+            from_=f'whatsapp:{TWILIO_WHATSAPP_NUMBER}',
+            to=f'whatsapp:{phone}',
+            body=chunk
+        )
+        time.sleep(2)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
