@@ -198,7 +198,7 @@ def get_ai_response(phone, message):
     return response.choices[0].message.content
 
 def send_delayed_response(phone, message):
-    delay = random.randint(1200, 2400)
+    delay = random.randint(60, 90)
     time.sleep(delay)
     ai_reply = get_ai_response(phone, message)
     save_message(phone, 'assistant', ai_reply)
