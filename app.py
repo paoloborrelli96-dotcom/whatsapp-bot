@@ -467,6 +467,7 @@ def get_or_create_chatwoot_contact(phone):
 
 def get_or_create_chatwoot_conversation(phone):
     """Trova o crea una conversazione su Chatwoot."""
+    # Prima controlla nel DB locale
     conv_id = get_chatwoot_conversation_id(phone)
     if conv_id:
         return conv_id
@@ -480,6 +481,23 @@ def get_or_create_chatwoot_conversation(phone):
             logger.error(f"Chatwoot: nessun contact_id per {phone}")
             return None
 
+        # Cerca conversazione esistente per questo contatto
+        resp = requests.get(
+            f"{CHATWOOT_URL}/api/v1/accounts/1/contacts/{contact_id}/conversations",
+            headers=chatwoot_headers(),
+            timeout=10
+        )
+        if resp.status_code == 200:
+            convs = resp.json().get("payload", [])
+            # Filtra per inbox corretta
+            for conv in convs:
+                if conv.get("inbox_id") == inbox_id:
+                    existing_id = conv.get("id")
+                    save_chatwoot_conversation_id(phone, existing_id)
+                    logger.info(f"Chatwoot: conversazione esistente trovata {existing_id}")
+                    return existing_id
+
+        # Nessuna conversazione esistente — creane una nuova
         resp = requests.post(
             f"{CHATWOOT_URL}/api/v1/accounts/1/conversations",
             headers=chatwoot_headers(),
@@ -507,16 +525,19 @@ def send_to_chatwoot(phone, message, is_outgoing=False):
         conv_id = get_or_create_chatwoot_conversation(phone)
         if not conv_id:
             return
-        requests.post(
+        # Messaggi in arrivo come note private, in uscita come outgoing
+        payload = {
+            "content": message,
+            "message_type": "outgoing" if is_outgoing else "incoming",
+            "private": not is_outgoing  # in arrivo = nota privata visibile solo a te
+        }
+        resp = requests.post(
             f"{CHATWOOT_URL}/api/v1/accounts/1/conversations/{conv_id}/messages",
             headers=chatwoot_headers(),
-            json={
-                "content": message,
-                "message_type": "outgoing" if is_outgoing else "incoming",
-                "private": False
-            },
+            json=payload,
             timeout=10
         )
+        logger.info(f"Chatwoot message sent: {resp.status_code}")
     except Exception as e:
         logger.error(f"Errore send_to_chatwoot: {e}")
 
@@ -719,15 +740,15 @@ def process_batch(phone):
             invia_sequenza_acquisto(phone)
             return
 
-        # Risposta informativa — 5 secondi per test (in produzione: 300)
-        time.sleep(5)
+        # Risposta informativa — 5 minuti
+        time.sleep(300)
         ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
 
     # FASE 1: ha risposto al questionario, schedula piano
     elif fase == 1:
-        piano_time = datetime.now() + timedelta(minutes=1)
+        piano_time = datetime.now() + timedelta(hours=1)
         set_fase(phone, 3, piano_scheduled_at=piano_time)
 
     # FASE 3: piano schedulato, risponde normalmente in attesa
@@ -737,9 +758,9 @@ def process_batch(phone):
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
 
-    # FASE 4: percorso attivo — 5 secondi per test (in produzione: random.randint(1800, 2400))
+    # FASE 4: percorso attivo — 30-40 minuti random
     elif fase == 4:
-        time.sleep(5)
+        time.sleep(random.randint(1800, 2400))
         ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
