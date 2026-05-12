@@ -605,6 +605,8 @@ def get_ai_response(phone, user_message, image_url=None, extra_instruction=None)
 
 # ─── INVIO ─────────────────────────────────────────────────────────────────────
 def send_whatsapp_message(phone, text):
+    import traceback
+    logger.info(f"send_whatsapp_message chiamata per {phone} — stack:\n{''.join(traceback.format_stack()[-4:-1])}")
     chunks = []
     while len(text) > 1500:
         split_point = text.rfind('\n', 0, 1500)
