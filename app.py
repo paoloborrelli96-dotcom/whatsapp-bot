@@ -36,8 +36,9 @@ message_buffers = {}
 buffer_timers   = {}
 buffer_lock     = threading.Lock()
 
-# Cache inbox Chatwoot per numero
-chatwoot_conversations = {}
+# Set per deduplicare messaggi già processati
+processed_sids = set()
+processed_sids_lock = threading.Lock()
 
 # ─── FASI ──────────────────────────────────────────────────────────────────────
 # 0  = info/primo contatto
@@ -658,6 +659,14 @@ def send_piano(phone):
 # ─── SEQUENZA ACQUISTO ─────────────────────────────────────────────────────────
 def invia_sequenza_acquisto(phone):
     """Invia benvenuto + regole + questionario in sequenza automatica."""
+    # Controlla che la fase sia ancora 0 — evita doppio invio
+    if get_fase(phone) != 0:
+        logger.info(f"Sequenza acquisto gia avviata per {phone} — skip")
+        return
+
+    # Imposta subito la fase a 1 per bloccare eventuali altri trigger
+    set_fase(phone, 1)
+
     logger.info(f"Avvio sequenza acquisto per {phone}")
     save_message(phone, "assistant", MSG_BENVENUTO)
     send_whatsapp_message(phone, MSG_BENVENUTO)
@@ -670,7 +679,6 @@ def invia_sequenza_acquisto(phone):
     save_message(phone, "assistant", MSG_QUESTIONARIO)
     send_whatsapp_message(phone, MSG_QUESTIONARIO)
 
-    set_fase(phone, 1)
     logger.info(f"Sequenza acquisto completata per {phone}")
 
 # ─── BATCHING ──────────────────────────────────────────────────────────────────
@@ -780,6 +788,18 @@ def webhook():
 
     logger.info(f"Messaggio da {phone}: '{body}' | media: {num_media}")
 
+    # ── Deduplicazione tramite MessageSid ─────────────────────────────────────
+    message_sid = request.form.get("MessageSid", "")
+    if message_sid:
+        with processed_sids_lock:
+            if message_sid in processed_sids:
+                logger.info(f"Messaggio duplicato ignorato: {message_sid}")
+                return Response("OK", status=200)
+            processed_sids.add(message_sid)
+            # Pulizia set ogni 1000 messaggi
+            if len(processed_sids) > 1000:
+                processed_sids.clear()
+
     # ── Comandi admin ──────────────────────────────────────────────────────────
     if body.startswith("/inizia"):
         parts = body.strip().split()
@@ -822,8 +842,6 @@ def webhook():
     # ── Chat in pausa ─────────────────────────────────────────────────────────
     if get_fase(phone) == 99:
         logger.info(f"Chat {phone} in pausa — ignorato")
-        # Invia comunque a Chatwoot per visibilita
-        threading.Thread(target=send_to_chatwoot, args=[phone, body, False], daemon=True).start()
         return Response("OK", status=200)
 
     # ── Rilevamento acquisto IMMEDIATO con GPT (bypassa batching) ─────────────
@@ -841,7 +859,6 @@ def webhook():
             risposta = check_response.choices[0].message.content.strip().lower()
             if risposta.startswith("si") or risposta.startswith("si"):
                 save_message(phone, "user", body)
-                threading.Thread(target=send_to_chatwoot, args=[phone, body, False], daemon=True).start()
                 with buffer_lock:
                     if phone in buffer_timers:
                         buffer_timers[phone].cancel()
