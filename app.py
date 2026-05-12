@@ -24,6 +24,9 @@ TWILIO_ACCOUNT_SID     = os.environ["TWILIO_ACCOUNT_SID"]
 TWILIO_AUTH_TOKEN      = os.environ["TWILIO_AUTH_TOKEN"]
 TWILIO_WHATSAPP_NUMBER = os.environ["TWILIO_WHATSAPP_NUMBER"]
 DATABASE_URL           = os.environ["DATABASE_URL"]
+CHATWOOT_URL           = os.environ.get("CHATWOOT_URL", "")
+CHATWOOT_API_TOKEN     = os.environ.get("CHATWOOT_API_TOKEN", "")
+CHATWOOT_INBOX_ID      = os.environ.get("CHATWOOT_INBOX_ID", "")
 
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -33,12 +36,14 @@ message_buffers = {}
 buffer_timers   = {}
 buffer_lock     = threading.Lock()
 
+# Cache inbox Chatwoot per numero
+chatwoot_conversations = {}
+
 # ─── FASI ──────────────────────────────────────────────────────────────────────
 # 0  = info/primo contatto
-# 1  = acquisto confermato, questionario parte 1 inviata
-# 2  = parte 1 risposta, parte 2 inviata
-# 3  = questionario completo, piano schedulato (1 ora)
-# 4  = piano inviato, percorso attivo (30-40 min risposta)
+# 1  = acquisto confermato, questionario inviato
+# 3  = questionario completo, piano schedulato
+# 4  = piano inviato, percorso attivo
 # 99 = chat in pausa (gestita manualmente)
 
 # ─── TESTI FISSI ───────────────────────────────────────────────────────────────
@@ -83,7 +88,6 @@ MSG_QUESTIONARIO = (
     "13. Qual e la difficolta principale che vuoi risolvere?\n"
     "14. C'e altro che vuoi dirmi che per te e importante che io sappia?"
 )
-
 
 # ─── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """Sei Paola, una consulente del sonno infantile professionale e appassionata.
@@ -150,7 +154,7 @@ fai una descrizione del percorso:
 alla fine gli lasci il LINK — scrivi esattamente cosi, senza parentesi quadre ne markdown:
    Ti lascio il link se ti va: https://genitorinarmonia.com/products/sonno-magico
 
- GESTIONE OBIEZIONI (solo se la mamma le esprime):
+GESTIONE OBIEZIONI (solo se la mamma le esprime):
    - "Inizierei fra una settimana" → "Nessun problema, acquista pure adesso — intanto leggi le guide e fra una settimana mi scrivi e partiamo."
    - Dubbi sul prezzo → spiega il valore: 30 giorni di supporto diretto, piano su misura, contatto quotidiano, adattamento continuo
 
@@ -230,7 +234,7 @@ Se la mamma e scontenta o chiede un rimborso:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COMANDI ADMIN
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se ricevi messaggi che iniziano con /inizia, /pausa, /riprendi, /nota:
+Se ricevi messaggi che iniziano con /inizia, /pausa, /riprendi, /nota, /acquisto:
 sono comandi interni. Non rispondere nulla.
 """
 
@@ -258,6 +262,7 @@ def init_db():
             start_date DATE,
             piano_scheduled_at TIMESTAMPTZ,
             renewal_sent BOOLEAN DEFAULT FALSE,
+            chatwoot_conversation_id INTEGER,
             created_at TIMESTAMPTZ DEFAULT NOW()
         )
     """)
@@ -351,6 +356,34 @@ def set_start_date(phone, start_date):
     except Exception as e:
         logger.error(f"Errore set_start_date: {e}")
 
+def get_chatwoot_conversation_id(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT chatwoot_conversation_id FROM consultations WHERE phone = %s", (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row[0] if row and row[0] else None
+    except Exception as e:
+        logger.error(f"Errore get_chatwoot_conversation_id: {e}")
+        return None
+
+def save_chatwoot_conversation_id(phone, conv_id):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO consultations (phone, chatwoot_conversation_id)
+            VALUES (%s, %s)
+            ON CONFLICT (phone) DO UPDATE SET chatwoot_conversation_id = EXCLUDED.chatwoot_conversation_id
+        """, (phone, conv_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Errore save_chatwoot_conversation_id: {e}")
+
 def get_pianos_to_send():
     try:
         conn = get_db()
@@ -394,6 +427,91 @@ def mark_renewal_sent(phone):
         conn.close()
     except Exception as e:
         logger.error(f"Errore mark_renewal_sent: {e}")
+
+# ─── CHATWOOT ──────────────────────────────────────────────────────────────────
+def chatwoot_headers():
+    return {
+        "api_access_token": CHATWOOT_API_TOKEN,
+        "Content-Type": "application/json"
+    }
+
+def get_or_create_chatwoot_contact(phone):
+    """Trova o crea un contatto su Chatwoot."""
+    try:
+        # Cerca contatto esistente
+        resp = requests.get(
+            f"{CHATWOOT_URL}/api/v1/accounts/1/contacts/search",
+            headers=chatwoot_headers(),
+            params={"q": phone},
+            timeout=10
+        )
+        data = resp.json()
+        if data.get("payload") and len(data["payload"]) > 0:
+            return data["payload"][0]["id"]
+
+        # Crea nuovo contatto
+        resp = requests.post(
+            f"{CHATWOOT_URL}/api/v1/accounts/1/contacts",
+            headers=chatwoot_headers(),
+            json={"phone_number": f"+{phone}", "name": f"+{phone}"},
+            timeout=10
+        )
+        return resp.json().get("id")
+    except Exception as e:
+        logger.error(f"Errore get_or_create_chatwoot_contact: {e}")
+        return None
+
+def get_or_create_chatwoot_conversation(phone):
+    """Trova o crea una conversazione su Chatwoot."""
+    # Controlla in DB
+    conv_id = get_chatwoot_conversation_id(phone)
+    if conv_id:
+        return conv_id
+
+    try:
+        inbox_id = int(CHATWOOT_INBOX_ID) if CHATWOOT_INBOX_ID else 1
+        contact_id = get_or_create_chatwoot_contact(phone)
+        if not contact_id:
+            return None
+
+        resp = requests.post(
+            f"{CHATWOOT_URL}/api/v1/accounts/1/conversations",
+            headers=chatwoot_headers(),
+            json={
+                "inbox_id": inbox_id,
+                "contact_id": contact_id,
+                "additional_attributes": {"phone": phone}
+            },
+            timeout=10
+        )
+        conv_id = resp.json().get("id")
+        if conv_id:
+            save_chatwoot_conversation_id(phone, conv_id)
+        return conv_id
+    except Exception as e:
+        logger.error(f"Errore get_or_create_chatwoot_conversation: {e}")
+        return None
+
+def send_to_chatwoot(phone, message, is_outgoing=False):
+    """Invia un messaggio a Chatwoot per visualizzarlo nel pannello."""
+    if not CHATWOOT_URL or not CHATWOOT_API_TOKEN:
+        return
+    try:
+        conv_id = get_or_create_chatwoot_conversation(phone)
+        if not conv_id:
+            return
+        requests.post(
+            f"{CHATWOOT_URL}/api/v1/accounts/1/conversations/{conv_id}/messages",
+            headers=chatwoot_headers(),
+            json={
+                "content": message,
+                "message_type": "outgoing" if is_outgoing else "incoming",
+                "private": False
+            },
+            timeout=10
+        )
+    except Exception as e:
+        logger.error(f"Errore send_to_chatwoot: {e}")
 
 # ─── AUDIO ─────────────────────────────────────────────────────────────────────
 def transcribe_audio(media_url):
@@ -474,6 +592,8 @@ def send_whatsapp_message(phone, text):
                 to=f"whatsapp:{phone}",
                 body=chunk
             )
+            # Invia anche a Chatwoot come messaggio in uscita
+            threading.Thread(target=send_to_chatwoot, args=[phone, chunk, True], daemon=True).start()
             if len(chunks) > 1:
                 time.sleep(1)
         except Exception as e:
@@ -509,7 +629,7 @@ def send_piano(phone):
 
 # ─── SEQUENZA ACQUISTO ─────────────────────────────────────────────────────────
 def invia_sequenza_acquisto(phone):
-    """Invia benvenuto + regole + questionario completo in sequenza automatica."""
+    """Invia benvenuto + regole + questionario in sequenza automatica."""
     logger.info(f"Avvio sequenza acquisto per {phone}")
     save_message(phone, "assistant", MSG_BENVENUTO)
     send_whatsapp_message(phone, MSG_BENVENUTO)
@@ -548,8 +668,6 @@ def process_batch(phone):
     # FASE 0: non ha ancora acquistato
     if fase == 0:
         testo_lower = (combined_text or "").lower()
-
-        # Rilevamento acquisto da testo
         parole_acquisto = [
             "ho acquistato", "ho comprato", "ho fatto l'ordine", "ho effettuato l'ordine",
             "ho preso il pacchetto", "ho preso il percorso", "ho pagato", "ho fatto il pagamento",
@@ -582,7 +700,7 @@ def process_batch(phone):
                     temperature=0
                 )
                 check = check_response.choices[0].message.content.strip().lower()
-                if check.startswith("si") or check.startswith("sì"):
+                if check.startswith("si") or check.startswith("si"):
                     is_acquisto = True
                     logger.info(f"Acquisto rilevato da immagine per {phone}")
             except Exception as e:
@@ -600,9 +718,8 @@ def process_batch(phone):
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
 
-    # FASE 1: ha risposto al questionario completo, schedula piano in silenzio
+    # FASE 1: ha risposto al questionario, schedula piano
     elif fase == 1:
-        # Per test: piano tra 1 minuto (in produzione: timedelta(hours=1))
         piano_time = datetime.now() + timedelta(minutes=1)
         set_fase(phone, 3, piano_scheduled_at=piano_time)
 
@@ -666,7 +783,6 @@ def webhook():
         return Response("OK", status=200)
 
     if body.startswith("/nota"):
-        # Formato: /nota +39XXXXXXXXX testo della nota
         parts = body.strip().split(None, 2)
         if len(parts) >= 3:
             target = parts[1].replace("+", "").replace(" ", "")
@@ -678,6 +794,8 @@ def webhook():
     # ── Chat in pausa ─────────────────────────────────────────────────────────
     if get_fase(phone) == 99:
         logger.info(f"Chat {phone} in pausa — ignorato")
+        # Invia comunque a Chatwoot per visibilita
+        threading.Thread(target=send_to_chatwoot, args=[phone, body, False], daemon=True).start()
         return Response("OK", status=200)
 
     # ── Rilevamento acquisto IMMEDIATO con GPT (bypassa batching) ─────────────
@@ -693,8 +811,9 @@ def webhook():
                 temperature=0
             )
             risposta = check_response.choices[0].message.content.strip().lower()
-            if risposta.startswith("si") or risposta.startswith("sì"):
+            if risposta.startswith("si") or risposta.startswith("si"):
                 save_message(phone, "user", body)
+                threading.Thread(target=send_to_chatwoot, args=[phone, body, False], daemon=True).start()
                 with buffer_lock:
                     if phone in buffer_timers:
                         buffer_timers[phone].cancel()
@@ -723,6 +842,10 @@ def webhook():
     if not text_to_process and not image_url_to_process:
         return Response("OK", status=200)
 
+    # Invia messaggio in arrivo a Chatwoot
+    if text_to_process:
+        threading.Thread(target=send_to_chatwoot, args=[phone, text_to_process, False], daemon=True).start()
+
     # ── Batching ──────────────────────────────────────────────────────────────
     with buffer_lock:
         if phone not in message_buffers:
@@ -741,7 +864,6 @@ def webhook():
 
 # ─── JOB BACKGROUND ────────────────────────────────────────────────────────────
 def background_job():
-    """Ogni 5 minuti: invia piani schedulati e messaggi di rinnovo."""
     while True:
         try:
             for phone in get_pianos_to_send():
