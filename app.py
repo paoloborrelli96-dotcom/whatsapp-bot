@@ -6,12 +6,12 @@ import logging
 from datetime import datetime, timedelta
 from flask import Flask, request, Response
 from twilio.rest import Client
-from twilio.request_validator import RequestValidator
 import openai
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import requests
 import base64
+import io
 
 # ─── CONFIGURAZIONE ────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
@@ -19,170 +19,218 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-OPENAI_API_KEY       = os.environ["OPENAI_API_KEY"]
-TWILIO_ACCOUNT_SID   = os.environ["TWILIO_ACCOUNT_SID"]
-TWILIO_AUTH_TOKEN    = os.environ["TWILIO_AUTH_TOKEN"]
+OPENAI_API_KEY         = os.environ["OPENAI_API_KEY"]
+TWILIO_ACCOUNT_SID     = os.environ["TWILIO_ACCOUNT_SID"]
+TWILIO_AUTH_TOKEN      = os.environ["TWILIO_AUTH_TOKEN"]
 TWILIO_WHATSAPP_NUMBER = os.environ["TWILIO_WHATSAPP_NUMBER"]
-DATABASE_URL         = os.environ["DATABASE_URL"]
+DATABASE_URL           = os.environ["DATABASE_URL"]
 
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-# Buffer messaggi (batching 30 secondi)
+# Buffer messaggi (batching)
 message_buffers = {}
 buffer_timers   = {}
 buffer_lock     = threading.Lock()
+
+# ─── FASI ──────────────────────────────────────────────────────────────────────
+# 0  = info/primo contatto
+# 1  = acquisto confermato, questionario parte 1 inviata
+# 2  = parte 1 risposta, parte 2 inviata
+# 3  = questionario completo, piano schedulato (1 ora)
+# 4  = piano inviato, percorso attivo (30-40 min risposta)
+# 99 = chat in pausa (gestita manualmente)
+
+# ─── TESTI FISSI ───────────────────────────────────────────────────────────────
+MSG_BENVENUTO = (
+    "Ciao grazie per la fiducia, molto piacere 😇\n\n"
+    "Facciamo cosi: per capire bene la vostra situazione, ti mando un questionario dettagliato "
+    "e da li ti preparo un piano personalizzato.\n"
+    "Ti mando anche un messaggio che invio a tutti con delle semplici regole per la chat e le consulenze."
+)
+
+MSG_REGOLE = (
+    "Prima di iniziare, voglio essere trasparente su come lavoro: uso un'applicazione che mi aiuta "
+    "a gestire tutta la messaggistica e a tenerla in ordine, e uno strumento digitale che mi supporta "
+    "nella scrittura e mi permette di essere piu precisa e veloce nelle risposte. "
+    "Ma dietro ci sono sempre io, Paola — leggo tutto personalmente e costruisco ogni risposta "
+    "in base a quello che mi hai raccontato.\n\n"
+    "Ti potrebbe sembrare a volte che le risposte abbiano un tono un po' strutturato — e normale, "
+    "ed e proprio per via di questi strumenti. Ma non e un sistema automatico che risponde da solo: ci sono io.\n\n"
+    "Una cosa pratica: per comodita mia e tua, ti chiedo di scrivermi invece di mandarmi messaggi vocali. "
+    "Cosi ho tutto il testo salvato e riesco a seguirti meglio e ad avere sempre tutto sotto mano. "
+    "Se in qualche momento proprio non puoi, mandami pure il vocale — riesco comunque ad ascoltarlo — "
+    "ma quando possibile il testo e molto meglio.\n\n"
+    "Rispondo dal lunedi al venerdi, dalle 9 alle 17. "
+    "Il weekend mi fermo — se mi scrivi sabato o domenica ti rispondo lunedi.\n\n"
+    "Scrivimi liberamente ogni volta che ne hai bisogno 🤍"
+)
+
+MSG_QUESTIONARIO = (
+    "Per prepararti un piano su misura ho bisogno di conoscerti meglio. Rispondimi con calma:\n\n"
+    "1. Nominativo con cui hai effettuato l'ordine e data di acquisto\n"
+    "2. Come ti chiami e quanti anni hai?\n"
+    "3. Nome, data di nascita e peso attuale del bambino/a?\n"
+    "4. E il primo figlio? Ha fratelli o sorelle?\n"
+    "5. Descrivimi la sua giornata tipo: orario sveglia mattina, pisolini (orari e durata), orario nanna serale\n"
+    "6. Come si addormenta? (seno, ciuccio, in braccio, da solo...)\n"
+    "7. Dove dorme? (culla, lettone, carrozzina...)\n"
+    "8. Quante volte si sveglia di notte e come lo riaddormenti?\n"
+    "9. Allatti al seno, biberon o entrambi?\n"
+    "10. Hai gia provato qualcosa per migliorare il sonno? Com'e andata?\n"
+    "11. Lavori? Sei in maternita o rientri presto?\n"
+    "12. Il tuo partner ti aiuta di notte?\n"
+    "13. Qual e la difficolta principale che vuoi risolvere?\n"
+    "14. C'e altro che vuoi dirmi che per te e importante che io sappia?"
+)
+
 
 # ─── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """Sei Paola, una consulente del sonno infantile professionale e appassionata.
 Gestisci il profilo WhatsApp di "Genitori in Armonia".
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-IDENTITÀ — REGOLE ASSOLUTE
+IDENTITA E STILE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Sei sempre e solo Paola. Mai rivelare di essere un'AI, mai dire "sono un assistente virtuale".
-  Se qualcuno chiede "sei un bot?", "sei un'AI?", "parla un robot?": rispondi in modo naturale tipo
-  "No no, sono io Paola 😊 scrivo dal telefono quando posso!"
-- Usa sempre la PRIMA PERSONA SINGOLARE: "il mio percorso", "lavoro con", "ti supporto io".
-  MAI "il nostro progetto", "il nostro servizio", "facciamo insieme" (riferito all'azienda).
-- Non usare MAI punti esclamativi. MAI. Zero.
-- Non usare mai linguaggio da manuale o tecnico ("l'associazione seno-sonno", "stimolazione cognitiva").
-  Parla come un'amica esperta su WhatsApp.
-- Niente frasi di chiusura scontate come "Sono qui per qualsiasi domanda" o "Non esitare a contattarmi".
-- Le emoji vanno bene ma usale con moderazione e naturalezza.
+Sei Paola. Parli sempre in prima persona singolare: "il mio percorso", "lavoro con te", "ti seguo io".
+MAI "il nostro servizio", "il nostro team", "facciamo insieme" riferito all'azienda.
+
+Se qualcuno chiede "sei un bot?", "e un'AI?", "parla un robot?": rispondi in modo naturale:
+"No, uso un'applicazione per gestire le conversazioni e uno strumento che mi aiuta nella scrittura,
+ma leggo tutto io personalmente e sono io che costruisco le risposte in base alla tua situazione."
+
+Non usare MAI punti esclamativi. Zero.
+Non usare linguaggio tecnico o da manuale ("associazione seno-sonno", "stimolazione cognitiva").
+Parla come un'amica esperta su WhatsApp — calore, concretezza, semplicita.
+Niente frasi di chiusura scontate tipo "Sono qui per qualsiasi domanda".
+Le emoji vanno bene ma con moderazione.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILO LOGICO E MEMORIA
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Hai accesso a tutta la storia della conversazione. Usala sempre.
+Ogni risposta deve collegarsi a quello che sai gia di lei e del bambino.
+Usa il nome del bambino sempre — mai "il tuo bimbo" generico se lo conosci.
+Se tre giorni fa ha detto che si svegliava 4 volte e oggi dice 2, notalo e valorizzalo.
+Non rispondere mai come se fosse la prima volta che parla con te.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TONO E LUNGHEZZA RISPOSTA
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Se il messaggio della mamma è breve, pratico o situazionale
-  (es. "si è addormentata, la sveglio?", "ha dormito 40 minuti", "stanotte è andata male"),
-  rispondi in modo brevissimo e diretto — massimo 2-3 righe.
-  Come farebbe un'amica esperta su WhatsApp. Solo la risposta pratica.
-- Se il messaggio è una richiesta di informazioni più ampia, puoi rispondere con più dettaglio
-  seguendo la struttura indicata più avanti.
+Se il messaggio e breve, pratico o situazionale
+(es. "si e addormentata, la sveglio?", "stanotte e andata male", "ha dormito 40 minuti"):
+rispondi in 2-3 righe al massimo. Solo la risposta pratica, come un'amica esperta.
+
+Se la mamma racconta la situazione o chiede informazioni piu ampie:
+rispondi con piu dettaglio seguendo la struttura indicata piu avanti.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PRIMO MESSAGGIO VAGO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se il primo messaggio è vago, generico o di saluto
-(es. "ciao", "info", "buongiorno", "vorrei informazioni", "ho visto il vostro profilo"):
-rispondi SOLO ed ESATTAMENTE con questo testo, nient'altro:
+Se il primo messaggio e vago o di saluto (es. "ciao", "info", "buongiorno", "vorrei informazioni"):
+rispondi SOLO ed ESATTAMENTE con questo testo:
 
 "Ciao, sono Paola 😊
 
-Se ti va, scrivimi pure in poche parole qual è la difficoltà principale che stai vivendo con il sonno del tuo bimbo, così capisco meglio come aiutarti."
+Se ti va, scrivimi pure in poche parole qual e la difficolta principale che stai vivendo con il sonno del tuo bimbo, cosi capisco meglio come aiutarti."
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MESSAGGI INFORMATIVI (mamma racconta il problema)
+MESSAGGI INFORMATIVI
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quando la mamma descrive la sua situazione o chiede consigli sul sonno, rispondi seguendo questa struttura:
+Quando la mamma descrive la situazione o chiede consigli, rispondi cosi:
 
-1. EMPATIA breve e naturale (1-2 righe) — "Ci passano tantissime mamme", "Lo capisco bene"
-2. 2-3 CONSIGLI PRATICI concreti e semplici — no tecnicismi, scritti come li direbbe un'amica
-3. PERCORSO — spiega in modo naturale:
-   "Per lavorarci in modo più strutturato e su misura per te, lavoro con le famiglie per 30 giorni via WhatsApp a 37€.
-    Parti con un questionario dettagliato, ti mando 4 guide pratiche sulla tua situazione specifica e da lì costruiamo insieme un piano personalizzato, passo dopo passo."
-4. LINK — "Ti lascio il link se ti va: https://genitorinarmonia.com/products/sonno-magico"
+1. EMPATIA breve e naturale (1-2 righe)
+2. 2-3 CONSIGLI PRATICI concreti — scritti come li direbbe un'amica, niente tecnicismi
+3. DESCRIZIONE DEL PERCORSO:
+   "Per lavorarci in modo strutturato e su misura, lavoro con le famiglie per 30 giorni via WhatsApp a 37 euro.
+    Si parte con un questionario dettagliato, ricevi subito 4 guide pratiche in PDF sui concetti fondamentali del sonno
+    (le scarichi in automatico dopo l'acquisto o ti arriva il link via email),
+    e da li costruiamo insieme un piano personalizzato sulla tua situazione specifica.
+    Ci sentiamo ogni giorno, adattiamo tutto man mano e lavoriamo sempre in base a come risponde il tuo bambino."
+4. LINK — scrivi esattamente cosi, senza parentesi quadre ne markdown:
+   Ti lascio il link se ti va: https://genitorinarmonia.com/products/sonno-magico
 5. GESTIONE OBIEZIONI (solo se la mamma le esprime):
-   - "Inizierei fra una settimana/mese" → "Nessun problema, acquista pure adesso — intanto inizia a leggere le guide e fra una settimana mi scrivi e partiamo."
-   - Dubbi sul prezzo → spiega il valore concreto (30 giorni, WhatsApp diretto, guide pratiche, piano personalizzato)
+   - "Inizierei fra una settimana" → "Nessun problema, acquista pure adesso — intanto leggi le guide e fra una settimana mi scrivi e partiamo."
+   - Dubbi sul prezzo → spiega il valore: 30 giorni di supporto diretto, piano su misura, contatto quotidiano, adattamento continuo
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUANDO LA MAMMA DICE "ACQUISTO SUBITO" / "LO PRENDO" / "LO COMPRO"
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-NON partire subito con benvenuto e questionario. La mamma NON ha ancora acquistato.
-Rispondi:
-"Perfetto, ti aspetto qui. Effettua l'ordine dal link e poi scrivimi quando hai completato, così iniziamo subito 🤍"
+NON mandare benvenuto ne questionario. La mamma NON ha ancora acquistato.
+Rispondi esattamente cosi:
+"Perfetto, ti aspetto qui. Effettua l'ordine dal link e poi scrivimi quando hai completato, cosi iniziamo subito 🤍"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-QUANDO LA MAMMA DICE "HO ACQUISTATO" / "HO COMPRATO" / "HO FATTO L'ORDINE"
+DURANTE IL PERCORSO ATTIVO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Manda i seguenti messaggi IN SEQUENZA (uno alla volta, separati):
-
-MESSAGGIO 1 — Benvenuto:
-"Ciao grazie per la fiducia, molto piacere   😇
-Facciamo così per capire bene la vostra situazione, ti mando un questionario dettagliato  e da lì ti preparo un piano personalizzato.
-Ti mando anche un messaggio che invio a tutti con delle semplici regole per la chat e le consulenze
-
-MESSAGGIO 2 — Regole:
-"Prima di iniziare, due cose pratiche:
-- Scrivimi liberamente ogni volta che ne hai bisogno
-- Rispondo sempre entro qualche ora, non in tempo reale
-- Tutto quello che condividi resta tra noi"
-
-MESSAGGIO 3 — Questionario (parte 1, domande 1-20):
-"Per prepararti un piano su misura ho bisogno di conoscerti un po'. Rispondimi con calma 🤍
-
-1. Come ti chiami?
-2. Quanti anni hai?
-3. In che città vivi?
-4. Nome del bambino/a?
-5. Data di nascita del bambino/a?
-6. È il primo figlio?
-7. Allatti al seno, con il biberon o entrambi?
-8. Quante volte si sveglia di notte in media?
-9. A che ora va a letto la sera?
-10. A che ora si sveglia la mattina?
-11. Fa pisolini durante il giorno? Quanti e di quanto?
-12. Come si addormenta? (seno, ciuccio, in braccio, da solo...)
-13. Dove dorme? (culla, lettone, carrozzina...)
-14. Ha un oggetto del conforto (pupazzo, copertina...)?
-15. Come si comporta quando ha sonno? (piange, sfrega gli occhi, diventa iperattivo...)
-16. C'è qualcosa che disturba il suo sonno? (rumori, luce, caldo/freddo...)
-17. Ha mai avuto problemi di salute che influenzano il sonno?
-18. Stai seguendo qualche metodo o consiglio in questo momento?
-19. Qual è la difficoltà principale che vuoi risolvere?
-20. Quanto urgente è per te migliorare la situazione del sonno?"
-
-MESSAGGIO 4 — Questionario (parte 2, domande 21-37):
-"Ancora qualche domanda 🙏
-
-21. Come stai dormendo tu in questo periodo?
-22. Il tuo partner partecipa alla gestione del sonno notturno?
-23. Hai una rete di supporto (nonni, baby sitter...)?
-24. Lavori? Se sì, a che ora esci la mattina?
-25. Sei in maternità o rientri presto?
-26. Il bambino va all'asilo nido? Se sì, da quando?
-27. Ha avuto cambiamenti recenti (trasloco, fratellino, nuovo dente...)?
-28. Come reagisce quando lo metti giù sveglio?
-29. Riesci a posarlo nel letto senza svegliarlo?
-30. Usa il ciuccio? Se sì, lo sa rimettere da solo?
-31. Ha una routine serale (bagno, pasto, storia...)?
-32. A che ora cena?
-33. Mangia solidi? Da quando?
-34. Ha allergie o intolleranze alimentari?
-35. Prende vitamina D o altri integratori?
-36. Hai già provato qualcosa per migliorare il sonno? Come è andata?
-37. C'è altro che vuoi dirmi e che pensi sia utile che io sappia?"
-
-MESSAGGIO 5 — Nominativo (solo dopo che la mamma ha risposto al questionario):
-"Dimmi anche il nominativo con cui hai effettuato l'ordine, così verifico tutto 🤍"
-
-IMPORTANTE: Il messaggio 5 con il nominativo va mandato SOLO dopo che la mamma ha risposto al questionario.
-NON incorporare la richiesta del nominativo dentro il questionario o in altri messaggi.
+Quando la mamma e in percorso e ti scrive aggiornamenti o domande:
+- Rispondi sempre collegandoti a tutto quello che sai di lei e del bambino
+- Usa sempre il nome del bambino
+- Se c'e un miglioramento, riconoscilo
+- Se c'e un passo indietro, normalizzalo e rimetti in carreggiata
+- Mantieni sempre il filo logico con tutto il percorso
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RICHIESTA DATA ACQUISTO
+PIANO PERSONALIZZATO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Chiedi la data di acquisto SOLO se la chat inizia direttamente con "ho acquistato" / "ho comprato"
-senza che prima ci sia stato uno scambio di informazioni.
+Quando ti viene chiesto di generare il piano, costruiscilo in modo dettagliato.
 
-In quel caso, dopo il nominativo, aggiungi:
-"E da che data vorresti far partire il percorso? Se vuoi iniziare oggi scrivi oggi,
-altrimenti dimmi la data e parto da quella."
+Il piano deve sembrare scritto apposta per lei. Usa sempre il nome del bambino.
+Fai riferimento esplicito agli orari, alle abitudini e alla situazione specifica.
+Non usare mai frasi generiche o template standard.
 
-NON chiedere la data se la mamma aveva già chiesto informazioni e poi è tornata dicendo di aver acquistato —
-in quel caso il percorso parte da quel momento.
+STRUTTURA DEL PIANO:
+Dividi in fasi (2, 3, 4 o piu) in base alla situazione.
+Le fasi spiegano cosa fare ora e come mantenere una linea chiara nei primi giorni.
+L'evoluzione si adatta strada facendo via WhatsApp.
 
-Quando la mamma indica la data, anche in modo informale ("martedì scorso", "3 giorni fa", "l'ho fatto il 10"),
-interpreta correttamente la data del calendario e registrala mentalmente per il follow-up a 30 giorni.
+OGNI FASE DEVE CONTENERE:
+- Mini premessa su cosa si lavora e perche
+- Come iniziare concretamente
+- Indicazioni pratiche passo passo
+- Cosa aspettarsi dal bambino
+- Come gestire pianto o protesta senza rigidita
+- Come comportarsi nei risvegli notturni
+- Come capire se si va nella direzione giusta
+- Come rientrare dopo una giornata difficile
+
+IL PIANO DEVE SEMPRE INCLUDERE:
+- Addormentamento serale
+- Risvegli notturni
+- Pisolini diurni
+- Finestre di veglia orientative
+- Ambiente e stimoli
+- Distinzione tra fame, stanchezza e bisogno di contatto
+- Come monitorare i progressi
+
+LINGUAGGIO:
+Usa "io ti propongo", "potresti provare", "vediamo insieme".
+Mai regole assolute. Accompagna con esempi concreti e flessibili.
+Il genitore deve sentirsi ascoltato, accompagnato e sostenuto.
+
+CHIUDI SEMPRE IL PIANO CON:
+"Aggiornami fra qualche giorno e fammi sapere come va 🤍"
+
+Non dare mai consigli medici. Se emergono aspetti sanitari, rimanda sempre al pediatra.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-COMANDO ADMIN /inizia
+GESTIONE RIMBORSI
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se ricevi un messaggio nel formato "/inizia +39XXXXXXXXXX" o "/inizia +1XXXXXXXXXX",
-è un comando dell'amministratore per registrare la data di inizio percorso di una mamma.
-Non rispondere nulla — il sistema registra automaticamente la data.
+Se la mamma e scontenta o chiede un rimborso:
+
+1. Prima empatizza genuinamente — capisce che e frustrata e vuole capire cosa non ha funzionato
+2. Fai domande per capire se puoi aiutarla in modo diverso o se c'e qualcosa che non ha capito
+3. Se insiste nel voler il rimborso, rispondi cosi:
+   "Capisco, mi dispiace che le cose non siano andate come speravi.
+    Ti lascio il link con la nostra politica di rimborso, dove trovi anche l'email per inviare la richiesta formale:
+    https://genitorinarmonia.com/policies/refund-policy
+    Ti ricordo pero che il rimborso non e applicabile a chi ha gia usufruito in parte o totalmente delle consulenze."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+COMANDI ADMIN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Se ricevi messaggi che iniziano con /inizia, /pausa, /riprendi, /nota:
+sono comandi interni. Non rispondere nulla.
 """
 
 # ─── DATABASE ──────────────────────────────────────────────────────────────────
@@ -205,7 +253,9 @@ def init_db():
         CREATE TABLE IF NOT EXISTS consultations (
             id SERIAL PRIMARY KEY,
             phone TEXT UNIQUE NOT NULL,
-            start_date DATE NOT NULL,
+            fase INTEGER DEFAULT 0,
+            start_date DATE,
+            piano_scheduled_at TIMESTAMPTZ,
             renewal_sent BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMPTZ DEFAULT NOW()
         )
@@ -248,21 +298,73 @@ def get_history(phone, days=30):
         logger.error(f"Errore lettura history: {e}")
         return []
 
-def save_consultation_start(phone, start_date):
+def get_fase(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT fase FROM consultations WHERE phone = %s", (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row[0] if row else 0
+    except Exception as e:
+        logger.error(f"Errore get_fase: {e}")
+        return 0
+
+def set_fase(phone, fase, piano_scheduled_at=None):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        if piano_scheduled_at:
+            cur.execute("""
+                INSERT INTO consultations (phone, fase, piano_scheduled_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (phone) DO UPDATE
+                SET fase = EXCLUDED.fase, piano_scheduled_at = EXCLUDED.piano_scheduled_at
+            """, (phone, fase, piano_scheduled_at))
+        else:
+            cur.execute("""
+                INSERT INTO consultations (phone, fase)
+                VALUES (%s, %s)
+                ON CONFLICT (phone) DO UPDATE SET fase = EXCLUDED.fase
+            """, (phone, fase))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Errore set_fase: {e}")
+
+def set_start_date(phone, start_date):
     try:
         conn = get_db()
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO consultations (phone, start_date)
             VALUES (%s, %s)
-            ON CONFLICT (phone) DO UPDATE SET start_date = EXCLUDED.start_date, renewal_sent = FALSE
+            ON CONFLICT (phone) DO UPDATE
+            SET start_date = EXCLUDED.start_date, renewal_sent = FALSE
         """, (phone, start_date))
         conn.commit()
         cur.close()
         conn.close()
-        logger.info(f"Data inizio consulenza salvata per {phone}: {start_date}")
     except Exception as e:
-        logger.error(f"Errore salvataggio consulenza: {e}")
+        logger.error(f"Errore set_start_date: {e}")
+
+def get_pianos_to_send():
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT phone FROM consultations
+            WHERE fase = 3 AND piano_scheduled_at <= NOW()
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [r["phone"] for r in rows]
+    except Exception as e:
+        logger.error(f"Errore get_pianos_to_send: {e}")
+        return []
 
 def get_consultations_due_for_renewal():
     try:
@@ -271,14 +373,14 @@ def get_consultations_due_for_renewal():
         thirty_days_ago = datetime.now().date() - timedelta(days=30)
         cur.execute("""
             SELECT phone FROM consultations
-            WHERE start_date <= %s AND renewal_sent = FALSE
+            WHERE start_date <= %s AND renewal_sent = FALSE AND start_date IS NOT NULL
         """, (thirty_days_ago,))
         rows = cur.fetchall()
         cur.close()
         conn.close()
         return [r["phone"] for r in rows]
     except Exception as e:
-        logger.error(f"Errore query rinnovi: {e}")
+        logger.error(f"Errore get_consultations_due_for_renewal: {e}")
         return []
 
 def mark_renewal_sent(phone):
@@ -290,9 +392,9 @@ def mark_renewal_sent(phone):
         cur.close()
         conn.close()
     except Exception as e:
-        logger.error(f"Errore aggiornamento rinnovo: {e}")
+        logger.error(f"Errore mark_renewal_sent: {e}")
 
-# ─── TRASCRIZIONE AUDIO ─────────────────────────────────────────────────────────
+# ─── AUDIO ─────────────────────────────────────────────────────────────────────
 def transcribe_audio(media_url):
     try:
         response = requests.get(
@@ -300,9 +402,7 @@ def transcribe_audio(media_url):
             auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
             timeout=30
         )
-        audio_data = response.content
-        import io
-        audio_file = io.BytesIO(audio_data)
+        audio_file = io.BytesIO(response.content)
         audio_file.name = "audio.ogg"
         transcript = openai_client.audio.transcriptions.create(
             model="whisper-1",
@@ -313,12 +413,11 @@ def transcribe_audio(media_url):
         logger.error(f"Errore trascrizione audio: {e}")
         return None
 
-# ─── AI RESPONSE ───────────────────────────────────────────────────────────────
-def get_ai_response(phone, user_message, image_url=None):
+# ─── AI ────────────────────────────────────────────────────────────────────────
+def get_ai_response(phone, user_message, image_url=None, extra_instruction=None):
     history = get_history(phone)
 
     if image_url:
-        # Scarica e codifica l'immagine in base64
         try:
             img_response = requests.get(
                 image_url,
@@ -328,12 +427,7 @@ def get_ai_response(phone, user_message, image_url=None):
             img_data = base64.b64encode(img_response.content).decode("utf-8")
             content_type = img_response.headers.get("Content-Type", "image/jpeg")
             user_content = [
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{content_type};base64,{img_data}"
-                    }
-                },
+                {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{img_data}"}},
                 {"type": "text", "text": user_message or "Guarda questa immagine"}
             ]
         except Exception as e:
@@ -341,6 +435,9 @@ def get_ai_response(phone, user_message, image_url=None):
             user_content = user_message or ""
     else:
         user_content = user_message
+
+    if extra_instruction:
+        user_content = str(user_content) + f"\n\n[ISTRUZIONE SISTEMA: {extra_instruction}]"
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
@@ -350,7 +447,7 @@ def get_ai_response(phone, user_message, image_url=None):
         response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
-            max_tokens=2000,
+            max_tokens=3000,
             temperature=0.85
         )
         return response.choices[0].message.content.strip()
@@ -358,9 +455,8 @@ def get_ai_response(phone, user_message, image_url=None):
         logger.error(f"Errore OpenAI: {e}")
         return "Scusa, ho avuto un piccolo problema tecnico. Riprova tra qualche minuto 🙏"
 
-# ─── INVIO MESSAGGI ─────────────────────────────────────────────────────────────
+# ─── INVIO ─────────────────────────────────────────────────────────────────────
 def send_whatsapp_message(phone, text):
-    """Invia un messaggio spezzandolo se supera 1500 caratteri."""
     chunks = []
     while len(text) > 1500:
         split_point = text.rfind('\n', 0, 1500)
@@ -370,7 +466,6 @@ def send_whatsapp_message(phone, text):
         text = text[split_point:].strip()
     if text:
         chunks.append(text)
-
     for chunk in chunks:
         try:
             twilio_client.messages.create(
@@ -381,19 +476,55 @@ def send_whatsapp_message(phone, text):
             if len(chunks) > 1:
                 time.sleep(1)
         except Exception as e:
-            logger.error(f"Errore invio messaggio a {phone}: {e}")
+            logger.error(f"Errore invio a {phone}: {e}")
 
 def send_renewal_message(phone):
     text = (
         "Ciao, come va? Come sta andando il sonno del tuo bimbo in queste settimane? 🤍\n\n"
-        "Volevo dirti che il tuo percorso di 30 giorni è arrivato al termine. "
-        "Se vuoi continuare insieme per altri 60 giorni, il rinnovo è sempre a 37€. "
+        "Volevo dirti che il tuo percorso di 30 giorni e arrivato al termine. "
+        "Se vuoi continuare insieme per altri 60 giorni, il rinnovo e sempre a 37 euro. "
         "Ti lascio qui il link: https://genitorinarmonia.com/products/sonno-magico"
     )
     send_whatsapp_message(phone, text)
     logger.info(f"Messaggio rinnovo inviato a {phone}")
 
-# ─── BATCHING + DELAYED RESPONSE ───────────────────────────────────────────────
+def send_piano(phone):
+    logger.info(f"Generazione piano per {phone}")
+    piano = get_ai_response(
+        phone,
+        "Genera ora il piano personalizzato completo.",
+        extra_instruction=(
+            "Genera il piano personalizzato COMPLETO e DETTAGLIATO adesso, "
+            "basandoti su tutto quello che la mamma ha raccontato nel questionario. "
+            "Inizia direttamente con il piano senza premesse. "
+            "Usa il nome del bambino. Sii specifico sulla sua situazione."
+        )
+    )
+    save_message(phone, "assistant", piano)
+    send_whatsapp_message(phone, piano)
+    set_fase(phone, 4)
+    set_start_date(phone, datetime.now().date())
+    logger.info(f"Piano inviato a {phone}")
+
+# ─── SEQUENZA ACQUISTO ─────────────────────────────────────────────────────────
+def invia_sequenza_acquisto(phone):
+    """Invia benvenuto + regole + questionario completo in sequenza automatica."""
+    logger.info(f"Avvio sequenza acquisto per {phone}")
+    save_message(phone, "assistant", MSG_BENVENUTO)
+    send_whatsapp_message(phone, MSG_BENVENUTO)
+    time.sleep(3)
+
+    save_message(phone, "assistant", MSG_REGOLE)
+    send_whatsapp_message(phone, MSG_REGOLE)
+    time.sleep(3)
+
+    save_message(phone, "assistant", MSG_QUESTIONARIO)
+    send_whatsapp_message(phone, MSG_QUESTIONARIO)
+
+    set_fase(phone, 1)
+    logger.info(f"Sequenza acquisto completata per {phone}")
+
+# ─── BATCHING ──────────────────────────────────────────────────────────────────
 def process_batch(phone):
     with buffer_lock:
         batch = message_buffers.pop(phone, [])
@@ -402,50 +533,108 @@ def process_batch(phone):
     if not batch:
         return
 
-    # Unisce tutti i messaggi del batch
     combined_text = "\n".join([b["text"] for b in batch if b.get("text")])
     image_url = next((b["image_url"] for b in batch if b.get("image_url")), None)
 
     if not combined_text and not image_url:
         return
 
-    # Salva il messaggio dell'utente nel DB PRIMA di chiamare OpenAI
     save_message(phone, "user", combined_text or "[immagine]")
 
-    # Ritardo umano (2 secondi per test — in produzione cambia con random.randint(1800, 2400))
-    time.sleep(2)
+    fase = get_fase(phone)
+    logger.info(f"Processing batch per {phone} — fase {fase}")
 
-    # Genera risposta
-    ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
+    # FASE 0: non ha ancora acquistato
+    if fase == 0:
+        parole_acquisto = [
+            "ho acquistato", "ho comprato", "ho fatto l'ordine",
+            "ho effettuato l'ordine", "ho preso il pacchetto", "ho preso il percorso"
+        ]
+        testo_lower = (combined_text or "").lower()
+        is_acquisto = any(p in testo_lower for p in parole_acquisto)
 
-    # Salva la risposta nel DB
-    save_message(phone, "assistant", ai_reply)
+        if is_acquisto:
+            time.sleep(2)
+            invia_sequenza_acquisto(phone)
+            return
 
-    # Invia
-    send_whatsapp_message(phone, ai_reply)
+        # Risposta informativa — 5 secondi per test (in produzione: 300)
+        time.sleep(5)
+        ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
+        save_message(phone, "assistant", ai_reply)
+        send_whatsapp_message(phone, ai_reply)
+
+    # FASE 1: ha risposto al questionario completo, schedula piano in silenzio
+    elif fase == 1:
+        # Per test: piano tra 1 minuto (in produzione: timedelta(hours=1))
+        piano_time = datetime.now() + timedelta(minutes=1)
+        set_fase(phone, 3, piano_scheduled_at=piano_time)
+
+    # FASE 3: piano schedulato, risponde normalmente in attesa
+    elif fase == 3:
+        time.sleep(2)
+        ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
+        save_message(phone, "assistant", ai_reply)
+        send_whatsapp_message(phone, ai_reply)
+
+    # FASE 4: percorso attivo — 5 secondi per test (in produzione: random.randint(1800, 2400))
+    elif fase == 4:
+        time.sleep(5)
+        ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
+        save_message(phone, "assistant", ai_reply)
+        send_whatsapp_message(phone, ai_reply)
 
 def schedule_batch(phone):
-    """Timer: aspetta 30 secondi poi processa il batch."""
     time.sleep(30)
     process_batch(phone)
 
 # ─── WEBHOOK ───────────────────────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    phone         = request.form.get("From", "").replace("whatsapp:", "")
-    body          = request.form.get("Body", "").strip()
-    num_media     = int(request.form.get("NumMedia", 0))
-    media_type    = request.form.get("MediaContentType0", "")
-    media_url     = request.form.get("MediaUrl0", "")
+    phone      = request.form.get("From", "").replace("whatsapp:", "")
+    body       = request.form.get("Body", "").strip()
+    num_media  = int(request.form.get("NumMedia", 0))
+    media_type = request.form.get("MediaContentType0", "")
+    media_url  = request.form.get("MediaUrl0", "")
 
-    logger.info(f"Messaggio da {phone}: '{body}' | media: {num_media} ({media_type})")
+    logger.info(f"Messaggio da {phone}: '{body}' | media: {num_media}")
 
-    # ── Comando admin /inizia ─────────────────────────────────────────────────
+    # ── Comandi admin ──────────────────────────────────────────────────────────
     if body.startswith("/inizia"):
         parts = body.strip().split()
         if len(parts) == 2:
-            target_phone = parts[1].replace("+", "").replace(" ", "")
-            save_consultation_start(target_phone, datetime.now().date())
+            target = parts[1].replace("+", "").replace(" ", "")
+            set_start_date(target, datetime.now().date())
+            set_fase(target, 4)
+        return Response("OK", status=200)
+
+    if body.startswith("/pausa"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            set_fase(target, 99)
+        return Response("OK", status=200)
+
+    if body.startswith("/riprendi"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            set_fase(target, 4)
+        return Response("OK", status=200)
+
+    if body.startswith("/nota"):
+        # Formato: /nota +39XXXXXXXXX testo della nota
+        parts = body.strip().split(None, 2)
+        if len(parts) >= 3:
+            target = parts[1].replace("+", "").replace(" ", "")
+            nota = parts[2]
+            save_message(target, "user", f"[NOTA ADMIN: {nota}]")
+            logger.info(f"Nota salvata per {target}: {nota}")
+        return Response("OK", status=200)
+
+    # ── Chat in pausa ─────────────────────────────────────────────────────────
+    if get_fase(phone) == 99:
+        logger.info(f"Chat {phone} in pausa — ignorato")
         return Response("OK", status=200)
 
     # ── Gestione media ────────────────────────────────────────────────────────
@@ -454,24 +643,13 @@ def webhook():
 
     if num_media > 0 and media_url:
         if media_type.startswith("audio/"):
-            logger.info(f"Trascrizione audio da {phone}")
             transcribed = transcribe_audio(media_url)
-            if transcribed:
-                text_to_process = transcribed
-                logger.info(f"Trascrizione: {transcribed}")
-            else:
-                text_to_process = "[messaggio vocale non comprensibile]"
-
+            text_to_process = transcribed if transcribed else "[messaggio vocale non comprensibile]"
         elif media_type.startswith("image/"):
             image_url_to_process = media_url
             text_to_process = body or ""
-            logger.info(f"Immagine ricevuta da {phone}")
-
         elif media_type.startswith("video/"):
-            send_whatsapp_message(
-                phone,
-                "Non riesco a vedere i video, scrivimi pure qui in chat e ti rispondo 🙏"
-            )
+            send_whatsapp_message(phone, "Non riesco a vedere i video, scrivimi pure qui in chat 🙏")
             return Response("OK", status=200)
 
     if not text_to_process and not image_url_to_process:
@@ -481,45 +659,40 @@ def webhook():
     with buffer_lock:
         if phone not in message_buffers:
             message_buffers[phone] = []
-
         message_buffers[phone].append({
             "text": text_to_process,
             "image_url": image_url_to_process
         })
-
-        # Se c'è già un timer attivo, lo cancella e ne crea uno nuovo
         if phone in buffer_timers:
             buffer_timers[phone].cancel()
-
         timer = threading.Timer(30, process_batch, args=[phone])
         buffer_timers[phone] = timer
         timer.start()
 
     return Response("OK", status=200)
 
-# ─── JOB RINNOVO GIORNALIERO ───────────────────────────────────────────────────
-def renewal_job():
-    """Controlla ogni giorno se ci sono consulenze scadute e manda il messaggio di rinnovo."""
+# ─── JOB BACKGROUND ────────────────────────────────────────────────────────────
+def background_job():
+    """Ogni 5 minuti: invia piani schedulati e messaggi di rinnovo."""
     while True:
         try:
-            phones = get_consultations_due_for_renewal()
-            for phone in phones:
+            for phone in get_pianos_to_send():
+                send_piano(phone)
+            for phone in get_consultations_due_for_renewal():
                 send_renewal_message(phone)
                 mark_renewal_sent(phone)
         except Exception as e:
-            logger.error(f"Errore nel job rinnovo: {e}")
-        # Aspetta 24 ore
-        time.sleep(86400)
+            logger.error(f"Errore background job: {e}")
+        time.sleep(300)
 
 # ─── AVVIO ─────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
+def startup():
     init_db()
-    # Avvia il job rinnovo in background
-    renewal_thread = threading.Thread(target=renewal_job, daemon=True)
-    renewal_thread.start()
+    threading.Thread(target=background_job, daemon=True).start()
+    logger.info("Bot avviato")
+
+if __name__ == "__main__":
+    startup()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
-    # Necessario per Gunicorn (Procfile: web: gunicorn app:app)
-    init_db()
-    renewal_thread = threading.Thread(target=renewal_job, daemon=True)
-    renewal_thread.start()
+    startup()
