@@ -553,6 +553,18 @@ def process_batch(phone):
         testo_lower = (combined_text or "").lower()
         is_acquisto = any(p in testo_lower for p in parole_acquisto)
 
+        # Se arriva un'immagine e il testo non contiene parole chiave,
+        # chiedi a gpt-4o se e una conferma d'ordine
+        if not is_acquisto and image_url:
+            check = get_ai_response(
+                phone,
+                "Guarda questa immagine. Rispondo SOLO con SI o NO: mostra una conferma d'ordine, ricevuta di pagamento o schermata di acquisto completato?",
+                image_url=image_url,
+            )
+            if check.strip().upper().startswith("SI"):
+                is_acquisto = True
+                logger.info(f"Acquisto rilevato da immagine per {phone}")
+
         if is_acquisto:
             time.sleep(2)
             invia_sequenza_acquisto(phone)
