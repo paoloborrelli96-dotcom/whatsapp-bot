@@ -154,15 +154,6 @@ Quando la mamma descrive la situazione o chiede consigli, rispondi cosi:
    - Dubbi sul prezzo → spiega il valore: 30 giorni di supporto diretto, piano su misura, contatto quotidiano, adattamento continuo
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-QUANDO LA MAMMA DICE "HO ACQUISTATO" / "HO COMPRATO" / "HO FATTO L'ORDINE" O SIMILI
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Il sistema invia automaticamente benvenuto, regole e questionario.
-Tu NON devi fare nulla — NON rispondere, NON chiedere informazioni, NON parlare del questionario.
-Il sistema gestisce tutto in automatico.
-Se per qualsiasi motivo ti trovi a dover rispondere dopo un acquisto confermato,
-di solo: "Perfetto, ti ho appena inviato tutto il necessario per iniziare 🤍"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUANDO LA MAMMA DICE "ACQUISTO SUBITO" / "LO PRENDO" / "LO COMPRO"
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 NON mandare benvenuto ne questionario. La mamma NON ha ancora acquistato.
@@ -666,6 +657,13 @@ def webhook():
             set_fase(target, 4)
         return Response("OK", status=200)
 
+    if body.startswith("/acquisto"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            threading.Thread(target=invia_sequenza_acquisto, args=[target], daemon=True).start()
+        return Response("OK", status=200)
+
     if body.startswith("/nota"):
         # Formato: /nota +39XXXXXXXXX testo della nota
         parts = body.strip().split(None, 2)
@@ -681,27 +679,30 @@ def webhook():
         logger.info(f"Chat {phone} in pausa — ignorato")
         return Response("OK", status=200)
 
-    # ── Rilevamento acquisto IMMEDIATO (bypassa batching) ─────────────────────
+    # ── Rilevamento acquisto IMMEDIATO con GPT (bypassa batching) ─────────────
     if get_fase(phone) == 0 and body:
-        parole_acquisto = [
-            "ho acquistato", "ho comprato", "ho fatto l'ordine", "ho effettuato l'ordine",
-            "ho preso il pacchetto", "ho preso il percorso", "ho pagato", "ho fatto il pagamento",
-            "ordine completato", "pagamento completato", "ho preso", "l'ho preso",
-            "l'ho comprato", "l'ho acquistato", "ho fatto l'acquisto", "fatto l'ordine",
-            "completato l'ordine", "ho completato", "acquisto completato"
-        ]
-        testo_lower = body.lower()
-        if any(p in testo_lower for p in parole_acquisto):
-            save_message(phone, "user", body)
-            # Cancella eventuale timer di batching attivo
-            with buffer_lock:
-                if phone in buffer_timers:
-                    buffer_timers[phone].cancel()
-                    buffer_timers.pop(phone, None)
-                message_buffers.pop(phone, None)
-            # Avvia sequenza in thread separato
-            threading.Thread(target=invia_sequenza_acquisto, args=[phone], daemon=True).start()
-            return Response("OK", status=200)
+        try:
+            check_response = openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO."},
+                    {"role": "user", "content": f"La persona sta comunicando in qualsiasi modo di aver acquistato, pagato, completato un ordine o effettuato una transazione? Messaggio: '{body}'"}
+                ],
+                max_tokens=5,
+                temperature=0
+            )
+            risposta = check_response.choices[0].message.content.strip().lower()
+            if risposta.startswith("si") or risposta.startswith("sì"):
+                save_message(phone, "user", body)
+                with buffer_lock:
+                    if phone in buffer_timers:
+                        buffer_timers[phone].cancel()
+                        buffer_timers.pop(phone, None)
+                    message_buffers.pop(phone, None)
+                threading.Thread(target=invia_sequenza_acquisto, args=[phone], daemon=True).start()
+                return Response("OK", status=200)
+        except Exception as e:
+            logger.error(f"Errore check acquisto GPT: {e}")
 
     # ── Gestione media ────────────────────────────────────────────────────────
     text_to_process = body
