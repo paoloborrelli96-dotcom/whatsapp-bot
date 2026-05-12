@@ -519,28 +519,8 @@ def get_or_create_chatwoot_conversation(phone):
         return None
 
 def send_to_chatwoot(phone, message, is_outgoing=False):
-    """Invia un messaggio a Chatwoot per visualizzarlo nel pannello."""
-    if not CHATWOOT_URL or not CHATWOOT_API_TOKEN:
-        return
-    try:
-        conv_id = get_or_create_chatwoot_conversation(phone)
-        if not conv_id:
-            return
-        # Messaggi in arrivo come note private, in uscita come outgoing
-        payload = {
-            "content": message,
-            "message_type": "outgoing" if is_outgoing else "incoming",
-            "private": not is_outgoing  # in arrivo = nota privata visibile solo a te
-        }
-        resp = requests.post(
-            f"{CHATWOOT_URL}/api/v1/accounts/1/conversations/{conv_id}/messages",
-            headers=chatwoot_headers(),
-            json=payload,
-            timeout=10
-        )
-        logger.info(f"Chatwoot message sent: {resp.status_code}")
-    except Exception as e:
-        logger.error(f"Errore send_to_chatwoot: {e}")
+    """Chatwoot temporaneamente disabilitato per debug."""
+    pass
 
 # ─── AUDIO ─────────────────────────────────────────────────────────────────────
 def transcribe_audio(media_url):
