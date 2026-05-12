@@ -437,11 +437,15 @@ def chatwoot_headers():
 
 def get_or_create_chatwoot_contact(phone):
     """Trova o crea un contatto su Chatwoot."""
+    # Normalizza il numero — rimuovi + iniziale se presente
+    phone_clean = phone.lstrip("+")
+    phone_e164 = f"+{phone_clean}"
+
     try:
         resp = requests.get(
             f"{CHATWOOT_URL}/api/v1/accounts/1/contacts/search",
             headers=chatwoot_headers(),
-            params={"q": phone},
+            params={"q": phone_e164},
             timeout=10
         )
         logger.info(f"Chatwoot contact search: {resp.status_code} — {resp.text[:300]}")
@@ -452,7 +456,7 @@ def get_or_create_chatwoot_contact(phone):
         resp = requests.post(
             f"{CHATWOOT_URL}/api/v1/accounts/1/contacts",
             headers=chatwoot_headers(),
-            json={"phone_number": f"+{phone}", "name": f"+{phone}"},
+            json={"phone_number": phone_e164, "name": phone_e164},
             timeout=10
         )
         logger.info(f"Chatwoot contact create: {resp.status_code} — {resp.text[:300]}")
@@ -469,6 +473,8 @@ def get_or_create_chatwoot_conversation(phone):
 
     try:
         inbox_id = int(CHATWOOT_INBOX_ID) if CHATWOOT_INBOX_ID else 1
+        phone_clean = phone.lstrip("+")
+        phone_e164 = f"+{phone_clean}"
         contact_id = get_or_create_chatwoot_contact(phone)
         if not contact_id:
             logger.error(f"Chatwoot: nessun contact_id per {phone}")
@@ -480,7 +486,7 @@ def get_or_create_chatwoot_conversation(phone):
             json={
                 "inbox_id": inbox_id,
                 "contact_id": contact_id,
-                "additional_attributes": {"phone": phone}
+                "source_id": f"whatsapp:{phone_e164}",
             },
             timeout=10
         )
