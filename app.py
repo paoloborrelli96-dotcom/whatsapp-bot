@@ -714,6 +714,25 @@ def process_batch(phone):
         ]
         is_acquisto = any(p in testo_lower for p in parole_acquisto)
 
+        # Se non rilevato da parole chiave, usa GPT
+        if not is_acquisto and combined_text:
+            try:
+                check_response = openai_client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO."},
+                        {"role": "user", "content": f"La persona sta comunicando di aver acquistato, pagato o completato un ordine? Messaggio: '{combined_text}'"}
+                    ],
+                    max_tokens=5,
+                    temperature=0
+                )
+                risposta = check_response.choices[0].message.content.strip().lower()
+                if risposta.startswith("si"):
+                    is_acquisto = True
+                    logger.info(f"Acquisto rilevato da GPT per {phone}")
+            except Exception as e:
+                logger.error(f"Errore check acquisto GPT: {e}")
+
         # Se non rilevato da testo ma c'e un'immagine, chiedi a gpt-4o
         if not is_acquisto and image_url:
             try:
@@ -845,31 +864,6 @@ def webhook():
     if get_fase(phone) == 99:
         logger.info(f"Chat {phone} in pausa — ignorato")
         return Response("OK", status=200)
-
-    # ── Rilevamento acquisto IMMEDIATO con GPT (bypassa batching) ─────────────
-    if get_fase(phone) == 0 and body:
-        try:
-            check_response = openai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO."},
-                    {"role": "user", "content": f"La persona sta comunicando in qualsiasi modo di aver acquistato, pagato, completato un ordine o effettuato una transazione? Messaggio: '{body}'"}
-                ],
-                max_tokens=5,
-                temperature=0
-            )
-            risposta = check_response.choices[0].message.content.strip().lower()
-            if risposta.startswith("si") or risposta.startswith("si"):
-                save_message(phone, "user", body)
-                with buffer_lock:
-                    if phone in buffer_timers:
-                        buffer_timers[phone].cancel()
-                        buffer_timers.pop(phone, None)
-                    message_buffers.pop(phone, None)
-                threading.Thread(target=invia_sequenza_acquisto, args=[phone], daemon=True).start()
-                return Response("OK", status=200)
-        except Exception as e:
-            logger.error(f"Errore check acquisto GPT: {e}")
 
     # ── Gestione media ────────────────────────────────────────────────────────
     text_to_process = body
