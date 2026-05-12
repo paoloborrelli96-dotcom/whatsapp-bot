@@ -173,8 +173,6 @@ Quando la mamma e in percorso e ti scrive aggiornamenti o domande:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PIANO PERSONALIZZATO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quando ti viene chiesto di generare il piano, costruiscilo in modo dettagliato.
-
 Il piano deve sembrare scritto apposta per lei. Usa sempre il nome del bambino.
 Fai riferimento esplicito agli orari, alle abitudini e alla situazione specifica.
 Non usare mai frasi generiche o template standard.
@@ -546,26 +544,17 @@ def process_batch(phone):
 
     # FASE 0: non ha ancora acquistato
     if fase == 0:
-        parole_acquisto = [
-            "ho acquistato", "ho comprato", "ho fatto l'ordine",
-            "ho effettuato l'ordine", "ho preso il pacchetto", "ho preso il percorso"
-        ]
-        testo_lower = (combined_text or "").lower()
-        is_acquisto = any(p in testo_lower for p in parole_acquisto)
-
-        # Se arriva un'immagine e il testo non contiene parole chiave,
-        # chiedi a gpt-4o se e una conferma d'ordine
-        if not is_acquisto and image_url:
-            check = get_ai_response(
-                phone,
-                "Guarda questa immagine. Rispondo SOLO con SI o NO: mostra una conferma d'ordine, ricevuta di pagamento o schermata di acquisto completato?",
-                image_url=image_url,
-            )
-            if check.strip().upper().startswith("SI"):
-                is_acquisto = True
-                logger.info(f"Acquisto rilevato da immagine per {phone}")
+        # Chiedi a gpt-4o se la mamma ha acquistato in qualsiasi forma
+        check_content = combined_text or ""
+        check = get_ai_response(
+            phone,
+            f"Analizza questo messaggio e/o immagine. Rispondi SOLO con SI o NO: la persona sta comunicando in qualsiasi modo di aver acquistato, pagato, completato un ordine o effettuato una transazione? Messaggio: {check_content}",
+            image_url=image_url,
+        )
+        is_acquisto = "si" in check.strip().lower()[:5]
 
         if is_acquisto:
+            logger.info(f"Acquisto rilevato per {phone}")
             time.sleep(2)
             invia_sequenza_acquisto(phone)
             return
