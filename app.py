@@ -438,24 +438,24 @@ def chatwoot_headers():
 def get_or_create_chatwoot_contact(phone):
     """Trova o crea un contatto su Chatwoot."""
     try:
-        # Cerca contatto esistente
         resp = requests.get(
             f"{CHATWOOT_URL}/api/v1/accounts/1/contacts/search",
             headers=chatwoot_headers(),
             params={"q": phone},
             timeout=10
         )
+        logger.info(f"Chatwoot contact search: {resp.status_code} — {resp.text[:300]}")
         data = resp.json()
         if data.get("payload") and len(data["payload"]) > 0:
             return data["payload"][0]["id"]
 
-        # Crea nuovo contatto
         resp = requests.post(
             f"{CHATWOOT_URL}/api/v1/accounts/1/contacts",
             headers=chatwoot_headers(),
             json={"phone_number": f"+{phone}", "name": f"+{phone}"},
             timeout=10
         )
+        logger.info(f"Chatwoot contact create: {resp.status_code} — {resp.text[:300]}")
         return resp.json().get("id")
     except Exception as e:
         logger.error(f"Errore get_or_create_chatwoot_contact: {e}")
@@ -463,7 +463,6 @@ def get_or_create_chatwoot_contact(phone):
 
 def get_or_create_chatwoot_conversation(phone):
     """Trova o crea una conversazione su Chatwoot."""
-    # Controlla in DB
     conv_id = get_chatwoot_conversation_id(phone)
     if conv_id:
         return conv_id
@@ -472,6 +471,7 @@ def get_or_create_chatwoot_conversation(phone):
         inbox_id = int(CHATWOOT_INBOX_ID) if CHATWOOT_INBOX_ID else 1
         contact_id = get_or_create_chatwoot_contact(phone)
         if not contact_id:
+            logger.error(f"Chatwoot: nessun contact_id per {phone}")
             return None
 
         resp = requests.post(
@@ -484,6 +484,7 @@ def get_or_create_chatwoot_conversation(phone):
             },
             timeout=10
         )
+        logger.info(f"Chatwoot conversation create: {resp.status_code} — {resp.text[:300]}")
         conv_id = resp.json().get("id")
         if conv_id:
             save_chatwoot_conversation_id(phone, conv_id)
