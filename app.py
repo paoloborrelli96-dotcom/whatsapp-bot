@@ -154,6 +154,15 @@ Quando la mamma descrive la situazione o chiede consigli, rispondi cosi:
    - Dubbi sul prezzo → spiega il valore: 30 giorni di supporto diretto, piano su misura, contatto quotidiano, adattamento continuo
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUANDO LA MAMMA DICE "HO ACQUISTATO" / "HO COMPRATO" / "HO FATTO L'ORDINE" O SIMILI
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Il sistema invia automaticamente benvenuto, regole e questionario.
+Tu NON devi fare nulla — NON rispondere, NON chiedere informazioni, NON parlare del questionario.
+Il sistema gestisce tutto in automatico.
+Se per qualsiasi motivo ti trovi a dover rispondere dopo un acquisto confermato,
+di solo: "Perfetto, ti ho appena inviato tutto il necessario per iniziare 🤍"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUANDO LA MAMMA DICE "ACQUISTO SUBITO" / "LO PRENDO" / "LO COMPRO"
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 NON mandare benvenuto ne questionario. La mamma NON ha ancora acquistato.
@@ -173,6 +182,8 @@ Quando la mamma e in percorso e ti scrive aggiornamenti o domande:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PIANO PERSONALIZZATO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Quando generi il piano personalizzato, costruiscilo in modo dettagliato.
+
 Il piano deve sembrare scritto apposta per lei. Usa sempre il nome del bambino.
 Fai riferimento esplicito agli orari, alle abitudini e alla situazione specifica.
 Non usare mai frasi generiche o template standard.
@@ -544,14 +555,46 @@ def process_batch(phone):
 
     # FASE 0: non ha ancora acquistato
     if fase == 0:
-        # Chiedi a gpt-4o se la mamma ha acquistato in qualsiasi forma
-        check_content = combined_text or ""
-        check = get_ai_response(
-            phone,
-            f"Analizza questo messaggio e/o immagine. Rispondi SOLO con SI o NO: la persona sta comunicando in qualsiasi modo di aver acquistato, pagato, completato un ordine o effettuato una transazione? Messaggio: {check_content}",
-            image_url=image_url,
-        )
-        is_acquisto = "si" in check.strip().lower()[:5]
+        testo_lower = (combined_text or "").lower()
+
+        # Rilevamento acquisto da testo
+        parole_acquisto = [
+            "ho acquistato", "ho comprato", "ho fatto l'ordine", "ho effettuato l'ordine",
+            "ho preso il pacchetto", "ho preso il percorso", "ho pagato", "ho fatto il pagamento",
+            "ordine completato", "pagamento completato", "ho preso", "l'ho preso",
+            "l'ho comprato", "l'ho acquistato", "ho fatto l'acquisto"
+        ]
+        is_acquisto = any(p in testo_lower for p in parole_acquisto)
+
+        # Se non rilevato da testo ma c'e un'immagine, chiedi a gpt-4o
+        if not is_acquisto and image_url:
+            try:
+                img_response = requests.get(
+                    image_url,
+                    auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+                    timeout=30
+                )
+                img_data = base64.b64encode(img_response.content).decode("utf-8")
+                content_type = img_response.headers.get("Content-Type", "image/jpeg")
+                check_messages = [
+                    {"role": "system", "content": "Sei un analizzatore di immagini. Rispondi SOLO con SI o NO."},
+                    {"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{img_data}"}},
+                        {"type": "text", "text": "Questa immagine mostra una conferma d'ordine, ricevuta di pagamento o schermata di acquisto completato? Rispondi SOLO con SI o NO."}
+                    ]}
+                ]
+                check_response = openai_client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=check_messages,
+                    max_tokens=5,
+                    temperature=0
+                )
+                check = check_response.choices[0].message.content.strip().lower()
+                if check.startswith("si") or check.startswith("sì"):
+                    is_acquisto = True
+                    logger.info(f"Acquisto rilevato da immagine per {phone}")
+            except Exception as e:
+                logger.error(f"Errore check immagine acquisto: {e}")
 
         if is_acquisto:
             logger.info(f"Acquisto rilevato per {phone}")
@@ -637,6 +680,28 @@ def webhook():
     if get_fase(phone) == 99:
         logger.info(f"Chat {phone} in pausa — ignorato")
         return Response("OK", status=200)
+
+    # ── Rilevamento acquisto IMMEDIATO (bypassa batching) ─────────────────────
+    if get_fase(phone) == 0 and body:
+        parole_acquisto = [
+            "ho acquistato", "ho comprato", "ho fatto l'ordine", "ho effettuato l'ordine",
+            "ho preso il pacchetto", "ho preso il percorso", "ho pagato", "ho fatto il pagamento",
+            "ordine completato", "pagamento completato", "ho preso", "l'ho preso",
+            "l'ho comprato", "l'ho acquistato", "ho fatto l'acquisto", "fatto l'ordine",
+            "completato l'ordine", "ho completato", "acquisto completato"
+        ]
+        testo_lower = body.lower()
+        if any(p in testo_lower for p in parole_acquisto):
+            save_message(phone, "user", body)
+            # Cancella eventuale timer di batching attivo
+            with buffer_lock:
+                if phone in buffer_timers:
+                    buffer_timers[phone].cancel()
+                    buffer_timers.pop(phone, None)
+                message_buffers.pop(phone, None)
+            # Avvia sequenza in thread separato
+            threading.Thread(target=invia_sequenza_acquisto, args=[phone], daemon=True).start()
+            return Response("OK", status=200)
 
     # ── Gestione media ────────────────────────────────────────────────────────
     text_to_process = body
