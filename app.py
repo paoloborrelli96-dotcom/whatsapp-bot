@@ -24,9 +24,10 @@ TWILIO_ACCOUNT_SID     = os.environ["TWILIO_ACCOUNT_SID"]
 TWILIO_AUTH_TOKEN      = os.environ["TWILIO_AUTH_TOKEN"]
 TWILIO_WHATSAPP_NUMBER = os.environ["TWILIO_WHATSAPP_NUMBER"]
 DATABASE_URL           = os.environ["DATABASE_URL"]
-CHATWOOT_URL           = os.environ.get("CHATWOOT_URL", "")
-CHATWOOT_API_TOKEN     = os.environ.get("CHATWOOT_API_TOKEN", "")
-CHATWOOT_INBOX_ID      = os.environ.get("CHATWOOT_INBOX_ID", "")
+
+CHATWOOT_URL       = os.environ.get("CHATWOOT_URL", "")
+CHATWOOT_API_TOKEN = os.environ.get("CHATWOOT_API_TOKEN", "")
+CHATWOOT_INBOX_ID  = os.environ.get("CHATWOOT_INBOX_ID", "1")
 
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -36,7 +37,7 @@ message_buffers = {}
 buffer_timers   = {}
 buffer_lock     = threading.Lock()
 
-# Set per deduplicare messaggi già processati
+# Deduplicazione messaggi
 processed_sids = set()
 processed_sids_lock = threading.Lock()
 
@@ -45,7 +46,7 @@ processed_sids_lock = threading.Lock()
 # 1  = acquisto confermato, questionario inviato
 # 3  = questionario completo, piano schedulato
 # 4  = piano inviato, percorso attivo
-# 99 = chat in pausa (gestita manualmente)
+# 99 = chat in pausa
 
 # ─── TESTI FISSI ───────────────────────────────────────────────────────────────
 MSG_BENVENUTO = (
@@ -224,8 +225,8 @@ GESTIONE RIMBORSI
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Se la mamma e scontenta o chiede un rimborso:
 
-1. Prima empatizza genuinamente — capisce che e frustrata e vuole capire cosa non ha funzionato
-2. Fai domande per capire se puoi aiutarla in modo diverso o se c'e qualcosa che non ha capito
+1. Prima empatizza genuinamente
+2. Fai domande per capire se puoi aiutarla in modo diverso
 3. Se insiste nel voler il rimborso, rispondi cosi:
    "Capisco, mi dispiace che le cose non siano andate come speravi.
     Ti lascio il link con la nostra politica di rimborso, dove trovi anche l'email per inviare la richiesta formale:
@@ -263,7 +264,6 @@ def init_db():
             start_date DATE,
             piano_scheduled_at TIMESTAMPTZ,
             renewal_sent BOOLEAN DEFAULT FALSE,
-            chatwoot_conversation_id INTEGER,
             created_at TIMESTAMPTZ DEFAULT NOW()
         )
     """)
@@ -357,34 +357,6 @@ def set_start_date(phone, start_date):
     except Exception as e:
         logger.error(f"Errore set_start_date: {e}")
 
-def get_chatwoot_conversation_id(phone):
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT chatwoot_conversation_id FROM consultations WHERE phone = %s", (phone,))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        return row[0] if row and row[0] else None
-    except Exception as e:
-        logger.error(f"Errore get_chatwoot_conversation_id: {e}")
-        return None
-
-def save_chatwoot_conversation_id(phone, conv_id):
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO consultations (phone, chatwoot_conversation_id)
-            VALUES (%s, %s)
-            ON CONFLICT (phone) DO UPDATE SET chatwoot_conversation_id = EXCLUDED.chatwoot_conversation_id
-        """, (phone, conv_id))
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        logger.error(f"Errore save_chatwoot_conversation_id: {e}")
-
 def get_pianos_to_send():
     try:
         conn = get_db()
@@ -430,97 +402,92 @@ def mark_renewal_sent(phone):
         logger.error(f"Errore mark_renewal_sent: {e}")
 
 # ─── CHATWOOT ──────────────────────────────────────────────────────────────────
-def chatwoot_headers():
-    return {
-        "api_access_token": CHATWOOT_API_TOKEN,
-        "Content-Type": "application/json"
-    }
-
-def get_or_create_chatwoot_contact(phone):
-    """Trova o crea un contatto su Chatwoot."""
-    # Normalizza il numero — rimuovi + iniziale se presente
-    phone_clean = phone.lstrip("+")
-    phone_e164 = f"+{phone_clean}"
-
+def chatwoot_get_or_create_conversation(phone):
+    """Trova o crea una conversazione su Chatwoot per questo numero."""
+    if not CHATWOOT_URL or not CHATWOOT_API_TOKEN:
+        return None
     try:
+        phone_e164 = f"+{phone.lstrip('+')}"
+        headers = {
+            "api_access_token": CHATWOOT_API_TOKEN,
+            "Content-Type": "application/json"
+        }
+        inbox_id = int(CHATWOOT_INBOX_ID)
+
+        # Cerca contatto esistente
         resp = requests.get(
             f"{CHATWOOT_URL}/api/v1/accounts/1/contacts/search",
-            headers=chatwoot_headers(),
+            headers=headers,
             params={"q": phone_e164},
             timeout=10
         )
-        logger.info(f"Chatwoot contact search: {resp.status_code} — {resp.text[:300]}")
-        data = resp.json()
-        if data.get("payload") and len(data["payload"]) > 0:
-            return data["payload"][0]["id"]
+        contacts = resp.json().get("payload", [])
+        if contacts:
+            contact_id = contacts[0]["id"]
+        else:
+            # Crea contatto
+            resp = requests.post(
+                f"{CHATWOOT_URL}/api/v1/accounts/1/contacts",
+                headers=headers,
+                json={"phone_number": phone_e164, "name": phone_e164},
+                timeout=10
+            )
+            contact_id = resp.json().get("id")
 
-        resp = requests.post(
-            f"{CHATWOOT_URL}/api/v1/accounts/1/contacts",
-            headers=chatwoot_headers(),
-            json={"phone_number": phone_e164, "name": phone_e164},
-            timeout=10
-        )
-        logger.info(f"Chatwoot contact create: {resp.status_code} — {resp.text[:300]}")
-        return resp.json().get("id")
-    except Exception as e:
-        logger.error(f"Errore get_or_create_chatwoot_contact: {e}")
-        return None
-
-def get_or_create_chatwoot_conversation(phone):
-    """Trova o crea una conversazione su Chatwoot."""
-    # Prima controlla nel DB locale
-    conv_id = get_chatwoot_conversation_id(phone)
-    if conv_id:
-        return conv_id
-
-    try:
-        inbox_id = int(CHATWOOT_INBOX_ID) if CHATWOOT_INBOX_ID else 1
-        phone_clean = phone.lstrip("+")
-        phone_e164 = f"+{phone_clean}"
-        contact_id = get_or_create_chatwoot_contact(phone)
         if not contact_id:
-            logger.error(f"Chatwoot: nessun contact_id per {phone}")
             return None
 
-        # Cerca conversazione esistente per questo contatto
+        # Cerca conversazione esistente per questo contatto e inbox
         resp = requests.get(
             f"{CHATWOOT_URL}/api/v1/accounts/1/contacts/{contact_id}/conversations",
-            headers=chatwoot_headers(),
+            headers=headers,
             timeout=10
         )
-        if resp.status_code == 200:
-            convs = resp.json().get("payload", [])
-            # Filtra per inbox corretta
-            for conv in convs:
-                if conv.get("inbox_id") == inbox_id:
-                    existing_id = conv.get("id")
-                    save_chatwoot_conversation_id(phone, existing_id)
-                    logger.info(f"Chatwoot: conversazione esistente trovata {existing_id}")
-                    return existing_id
+        convs = resp.json().get("payload", [])
+        for conv in convs:
+            if conv.get("inbox_id") == inbox_id:
+                return conv["id"]
 
-        # Nessuna conversazione esistente — creane una nuova
+        # Crea nuova conversazione
         resp = requests.post(
             f"{CHATWOOT_URL}/api/v1/accounts/1/conversations",
-            headers=chatwoot_headers(),
+            headers=headers,
             json={
                 "inbox_id": inbox_id,
                 "contact_id": contact_id,
-                "source_id": f"whatsapp:{phone_e164}",
+                "source_id": f"whatsapp:{phone_e164}"
             },
             timeout=10
         )
-        logger.info(f"Chatwoot conversation create: {resp.status_code} — {resp.text[:300]}")
-        conv_id = resp.json().get("id")
-        if conv_id:
-            save_chatwoot_conversation_id(phone, conv_id)
-        return conv_id
+        return resp.json().get("id")
     except Exception as e:
-        logger.error(f"Errore get_or_create_chatwoot_conversation: {e}")
+        logger.error(f"Errore Chatwoot conversation: {e}")
         return None
 
-def send_to_chatwoot(phone, message, is_outgoing=False):
-    """Chatwoot temporaneamente disabilitato per debug."""
-    pass
+def chatwoot_send(phone, message, is_outgoing=False):
+    """Manda un messaggio a Chatwoot. In background per non bloccare."""
+    if not CHATWOOT_URL or not CHATWOOT_API_TOKEN:
+        return
+    try:
+        conv_id = chatwoot_get_or_create_conversation(phone)
+        if not conv_id:
+            return
+        headers = {
+            "api_access_token": CHATWOOT_API_TOKEN,
+            "Content-Type": "application/json"
+        }
+        requests.post(
+            f"{CHATWOOT_URL}/api/v1/accounts/1/conversations/{conv_id}/messages",
+            headers=headers,
+            json={
+                "content": message,
+                "message_type": "outgoing" if is_outgoing else "incoming",
+                "private": False
+            },
+            timeout=10
+        )
+    except Exception as e:
+        logger.error(f"Errore Chatwoot send: {e}")
 
 # ─── AUDIO ─────────────────────────────────────────────────────────────────────
 def transcribe_audio(media_url):
@@ -585,8 +552,6 @@ def get_ai_response(phone, user_message, image_url=None, extra_instruction=None)
 
 # ─── INVIO ─────────────────────────────────────────────────────────────────────
 def send_whatsapp_message(phone, text):
-    import traceback
-    logger.info(f"send_whatsapp_message chiamata per {phone} — stack:\n{''.join(traceback.format_stack()[-4:-1])}")
     chunks = []
     while len(text) > 1500:
         split_point = text.rfind('\n', 0, 1500)
@@ -603,8 +568,8 @@ def send_whatsapp_message(phone, text):
                 to=f"whatsapp:{phone}",
                 body=chunk
             )
-            # Invia anche a Chatwoot come messaggio in uscita
-            threading.Thread(target=send_to_chatwoot, args=[phone, chunk, True], daemon=True).start()
+            # Invia copia a Chatwoot in background
+            threading.Thread(target=chatwoot_send, args=[phone, chunk, True], daemon=True).start()
             if len(chunks) > 1:
                 time.sleep(1)
         except Exception as e:
@@ -618,7 +583,6 @@ def send_renewal_message(phone):
         "Ti lascio qui il link: https://genitorinarmonia.com/products/sonno-magico"
     )
     send_whatsapp_message(phone, text)
-    logger.info(f"Messaggio rinnovo inviato a {phone}")
 
 def send_piano(phone):
     logger.info(f"Generazione piano per {phone}")
@@ -636,17 +600,15 @@ def send_piano(phone):
     send_whatsapp_message(phone, piano)
     set_fase(phone, 4)
     set_start_date(phone, datetime.now().date())
-    logger.info(f"Piano inviato a {phone}")
 
 # ─── SEQUENZA ACQUISTO ─────────────────────────────────────────────────────────
 def invia_sequenza_acquisto(phone):
-    """Invia benvenuto + regole + questionario in sequenza automatica."""
     # Controlla che la fase sia ancora 0 — evita doppio invio
     if get_fase(phone) != 0:
         logger.info(f"Sequenza acquisto gia avviata per {phone} — skip")
         return
 
-    # Imposta subito la fase a 1 per bloccare eventuali altri trigger
+    # Imposta subito fase 1 per bloccare altri trigger
     set_fase(phone, 1)
 
     logger.info(f"Avvio sequenza acquisto per {phone}")
@@ -660,7 +622,6 @@ def invia_sequenza_acquisto(phone):
 
     save_message(phone, "assistant", MSG_QUESTIONARIO)
     send_whatsapp_message(phone, MSG_QUESTIONARIO)
-
     logger.info(f"Sequenza acquisto completata per {phone}")
 
 # ─── BATCHING ──────────────────────────────────────────────────────────────────
@@ -689,7 +650,7 @@ def process_batch(phone):
         parole_acquisto = [
             "ho acquistato", "ho comprato", "ho fatto l'ordine", "ho effettuato l'ordine",
             "ho preso il pacchetto", "ho preso il percorso", "ho pagato", "ho fatto il pagamento",
-            "ordine completato", "pagamento completato", "ho preso", "l'ho preso",
+            "ordine completato", "pagamento completato", "l'ho preso",
             "l'ho comprato", "l'ho acquistato", "ho fatto l'acquisto"
         ]
         is_acquisto = any(p in testo_lower for p in parole_acquisto)
@@ -737,15 +698,13 @@ def process_batch(phone):
                     temperature=0
                 )
                 check = check_response.choices[0].message.content.strip().lower()
-                if check.startswith("si") or check.startswith("si"):
+                if check.startswith("si"):
                     is_acquisto = True
                     logger.info(f"Acquisto rilevato da immagine per {phone}")
             except Exception as e:
                 logger.error(f"Errore check immagine acquisto: {e}")
 
         if is_acquisto:
-            logger.info(f"Acquisto rilevato per {phone}")
-            time.sleep(2)
             invia_sequenza_acquisto(phone)
             return
 
@@ -760,14 +719,14 @@ def process_batch(phone):
         piano_time = datetime.now() + timedelta(hours=1)
         set_fase(phone, 3, piano_scheduled_at=piano_time)
 
-    # FASE 3: piano schedulato, risponde normalmente in attesa
+    # FASE 3: piano schedulato, risponde normalmente
     elif fase == 3:
         time.sleep(2)
         ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
 
-    # FASE 4: percorso attivo — 30-40 minuti random
+    # FASE 4: percorso attivo — 30-40 minuti
     elif fase == 4:
         time.sleep(random.randint(1800, 2400))
         ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
@@ -789,15 +748,14 @@ def webhook():
 
     logger.info(f"Messaggio da {phone}: '{body}' | media: {num_media}")
 
-    # ── Deduplicazione tramite MessageSid ─────────────────────────────────────
+    # Deduplicazione
     message_sid = request.form.get("MessageSid", "")
     if message_sid:
         with processed_sids_lock:
             if message_sid in processed_sids:
-                logger.info(f"Messaggio duplicato ignorato: {message_sid}")
+                logger.info(f"Duplicato ignorato: {message_sid}")
                 return Response("OK", status=200)
             processed_sids.add(message_sid)
-            # Pulizia set ogni 1000 messaggi
             if len(processed_sids) > 1000:
                 processed_sids.clear()
 
@@ -837,7 +795,6 @@ def webhook():
             target = parts[1].replace("+", "").replace(" ", "")
             nota = parts[2]
             save_message(target, "user", f"[NOTA ADMIN: {nota}]")
-            logger.info(f"Nota salvata per {target}: {nota}")
         return Response("OK", status=200)
 
     # ── Chat in pausa ─────────────────────────────────────────────────────────
@@ -863,9 +820,9 @@ def webhook():
     if not text_to_process and not image_url_to_process:
         return Response("OK", status=200)
 
-    # Invia messaggio in arrivo a Chatwoot
+    # Invia messaggio in entrata a Chatwoot in background
     if text_to_process:
-        threading.Thread(target=send_to_chatwoot, args=[phone, text_to_process, False], daemon=True).start()
+        threading.Thread(target=chatwoot_send, args=[phone, text_to_process, False], daemon=True).start()
 
     # ── Batching ──────────────────────────────────────────────────────────────
     with buffer_lock:
