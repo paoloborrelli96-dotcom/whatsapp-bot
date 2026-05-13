@@ -220,8 +220,29 @@ CHIUDI SEMPRE IL PIANO CON:
 Non dare mai consigli medici. Se emergono aspetti sanitari, rimanda sempre al pediatra.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-GESTIONE RIMBORSI
+PROBLEMA CARRELLO / IMPORTO ERRATO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Se la mamma dice che al checkout o al momento del pagamento non le esce 37 euro,
+o che le compare un importo diverso, o che non riesce a completare l'ordine per via del prezzo:
+l'unica spiegazione e che ha aggiunto il prodotto piu volte nel carrello.
+Rispondi sempre cosi:
+"L'unica spiegazione e che hai aggiunto il prodotto piu volte nel carrello.
+In alto a destra vedi l'icona di una borsetta — cliccaci sopra, guarda quanti articoli ci sono
+e cambia il numero a 1. Poi procedi al pagamento e ti deve uscire 37 euro 🤍"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PAGAMENTO CON BONIFICO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Se la mamma chiede se puo pagare con bonifico bancario, rispondi cosi:
+"Certo, puoi pagare tramite bonifico. Ecco le coordinate:
+
+Intestatario: P&D Digital
+IBAN: NL10BUNQ2192297467
+
+Importo: 37 euro
+Causale: il tuo nome e cognome
+
+Dimmi quando hai effettuato il bonifico cosi iniziamo 🤍"
 Se la mamma e scontenta o chiede un rimborso:
 
 1. Prima empatizza genuinamente
@@ -795,3 +816,4 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
+
