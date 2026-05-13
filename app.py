@@ -465,7 +465,7 @@ def get_ai_response(phone, user_message, image_url=None, extra_instruction=None)
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4o-mini",
             messages=messages,
             max_tokens=3000,
             temperature=0.85
@@ -516,16 +516,22 @@ def send_renewal_message(phone):
 
 def send_piano(phone):
     logger.info(f"Generazione piano per {phone}")
-    piano = get_ai_response(
-        phone,
-        "Genera ora il piano personalizzato completo.",
-        extra_instruction=(
-            "Genera il piano personalizzato COMPLETO e DETTAGLIATO adesso, "
-            "basandoti su tutto quello che la mamma ha raccontato nel questionario. "
-            "Inizia direttamente con il piano senza premesse. "
-            "Usa il nome del bambino. Sii specifico sulla sua situazione."
+    # Usa gpt-4o per il piano — massima qualità
+    history = get_history(phone)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": "Genera ora il piano personalizzato completo.\n\n[ISTRUZIONE SISTEMA: Genera il piano personalizzato COMPLETO e DETTAGLIATO adesso, basandoti su tutto quello che la mamma ha raccontato nel questionario. Inizia direttamente con il piano senza premesse. Usa il nome del bambino. Sii specifico sulla sua situazione.]"})
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            max_tokens=4000,
+            temperature=0.85
         )
-    )
+        piano = response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"Errore generazione piano: {e}")
+        piano = "Scusa, ho avuto un problema tecnico nel generare il piano. Riprovo a breve 🙏"
     save_message(phone, "assistant", piano)
     send_whatsapp_message(phone, piano)
     set_fase(phone, 4)
