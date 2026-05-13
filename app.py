@@ -24,9 +24,8 @@ TWILIO_ACCOUNT_SID     = os.environ["TWILIO_ACCOUNT_SID"]
 TWILIO_AUTH_TOKEN      = os.environ["TWILIO_AUTH_TOKEN"]
 TWILIO_WHATSAPP_NUMBER = os.environ["TWILIO_WHATSAPP_NUMBER"]
 DATABASE_URL           = os.environ["DATABASE_URL"]
-
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_BOT_TOKEN     = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID       = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -156,8 +155,13 @@ alla fine gli lasci il LINK — scrivi esattamente cosi, senza parentesi quadre 
    Ti lascio il link se ti va: https://genitorinarmonia.com/products/sonno-magico
 
 GESTIONE OBIEZIONI (solo se la mamma le esprime):
-   - "Inizierei fra una settimana" → "Nessun problema, acquista pure adesso — intanto leggi le guide e fra una settimana mi scrivi e partiamo."
+   - "Inizierei fra una settimana" → rassicurala che non c'e fretta, puo acquistare adesso e iniziare quando vuole — intanto legge le guide
    - Dubbi sul prezzo → spiega il valore: 30 giorni di supporto diretto, piano su misura, contatto quotidiano, adattamento continuo
+   - "Perche costa cosi poco?" → e una scelta precisa per rendere il percorso accessibile a piu famiglie possibile. Il prezzo basso non riflette meno attenzione — sono 30 giorni di supporto diretto con un piano costruito sulla situazione specifica di quel bambino
+   - "Ho gia provato tutto" → empatizza con la frustrazione, poi fai capire che un piano su misura e diverso dai metodi generici — parte da quello che lei ha raccontato, dalla routine del suo bambino, dai suoi orari. Non e un metodo preconfezionato
+   - "E troppo piccolo" → rassicura che non esiste un'eta troppo presto per lavorare sul sonno in modo rispettoso. Anzi, prima si inizia e meglio e. Il piano tiene conto esattamente dell'eta e dei bisogni di quella fase specifica
+
+   Importante: non rispondere con frasi preconfezionate. Adatta sempre il tono e le parole al contesto specifico di quella conversazione, come farebbe un'amica che conosce bene la situazione.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUANDO LA MAMMA DICE "ACQUISTO SUBITO" / "LO PRENDO" / "LO COMPRO"
@@ -243,6 +247,10 @@ Importo: 37 euro
 Causale: il tuo nome e cognome
 
 Dimmi quando hai effettuato il bonifico cosi iniziamo 🤍"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GESTIONE RIMBORSI
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Se la mamma e scontenta o chiede un rimborso:
 
 1. Prima empatizza genuinamente
@@ -262,11 +270,9 @@ sono comandi interni. Non rispondere nulla.
 
 # ─── TELEGRAM ──────────────────────────────────────────────────────────────────
 def send_telegram(message):
-    """Manda una notifica su Telegram. Spezza i messaggi lunghi."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
     try:
-        # Spezza in chunks da 4000 caratteri
         chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
         for chunk in chunks:
             requests.post(
@@ -518,10 +524,9 @@ def send_whatsapp_message(phone, text):
                 to=f"whatsapp:{phone}",
                 body=chunk
             )
-            # Notifica Telegram risposta bot
             threading.Thread(
                 target=send_telegram,
-                args=[f"🤖 <b>Bot → {phone}</b>\n{chunk[:300]}{'...' if len(chunk) > 300 else ''}"],
+                args=[f"🤖 <b>Bot → {phone}</b>\n{chunk[:500]}{'...' if len(chunk) > 500 else ''}"],
                 daemon=True
             ).start()
             if len(chunks) > 1:
@@ -540,11 +545,16 @@ def send_renewal_message(phone):
 
 def send_piano(phone):
     logger.info(f"Generazione piano per {phone}")
-    # Usa gpt-4o per il piano — massima qualità
     history = get_history(phone)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
-    messages.append({"role": "user", "content": "Genera ora il piano personalizzato completo.\n\n[ISTRUZIONE SISTEMA: Genera il piano personalizzato COMPLETO e DETTAGLIATO adesso, basandoti su tutto quello che la mamma ha raccontato nel questionario. Inizia direttamente con il piano senza premesse. Usa il nome del bambino. Sii specifico sulla sua situazione.]"})
+    messages.append({"role": "user", "content": (
+        "Genera ora il piano personalizzato completo.\n\n"
+        "[ISTRUZIONE SISTEMA: Genera il piano personalizzato COMPLETO e DETTAGLIATO adesso, "
+        "basandoti su tutto quello che la mamma ha raccontato nel questionario. "
+        "Inizia direttamente con il piano senza premesse. "
+        "Usa il nome del bambino. Sii specifico sulla sua situazione.]"
+    )})
     try:
         response = openai_client.chat.completions.create(
             model="gpt-4o",
@@ -612,15 +622,19 @@ def process_batch(phone):
         ]
         is_acquisto = any(p in testo_lower for p in parole_acquisto)
 
+        # Se non rilevato da parole chiave, usa GPT con contesto
         if not is_acquisto and combined_text:
             try:
                 history = get_history(phone)
-                history_text = "\n".join([f"{'Mamma' if m['role']=='user' else 'Bot'}: {m['content'][:100]}" for m in history[-5:]])
+                history_text = "\n".join([
+                    f"{'Mamma' if m['role']=='user' else 'Bot'}: {m['content'][:100]}"
+                    for m in history[-5:]
+                ])
                 check_response = openai_client.chat.completions.create(
-                    model="gpt-4o",
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO."},
-                        {"role": "user", "content": f"Considerando questo contesto di conversazione:\n{history_text}\n\nL'ultimo messaggio della persona indica che ha acquistato, pagato o completato un ordine? Ultimo messaggio: '{combined_text}'"}
+                        {"role": "user", "content": f"Contesto conversazione:\n{history_text}\n\nL'ultimo messaggio indica che la persona ha acquistato, pagato o completato un ordine? Messaggio: '{combined_text}'"}
                     ],
                     max_tokens=5,
                     temperature=0
@@ -632,6 +646,7 @@ def process_batch(phone):
             except Exception as e:
                 logger.error(f"Errore check acquisto GPT: {e}")
 
+        # Se non rilevato da testo ma c'e un'immagine
         if not is_acquisto and image_url:
             try:
                 img_response = requests.get(
@@ -665,6 +680,7 @@ def process_batch(phone):
             invia_sequenza_acquisto(phone)
             return
 
+        # Risposta informativa — 5 minuti
         time.sleep(300)
         ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
         save_message(phone, "assistant", ai_reply)
@@ -770,11 +786,12 @@ def webhook():
         return Response("OK", status=200)
 
     # Notifica Telegram messaggio in entrata
-    threading.Thread(
-        target=send_telegram,
-        args=[f"📩 <b>{phone}</b>\n{text_to_process or '[immagine]'}"],
-        daemon=True
-    ).start()
+    if text_to_process:
+        threading.Thread(
+            target=send_telegram,
+            args=[f"📩 <b>{phone}</b>\n{text_to_process[:500]}"],
+            daemon=True
+        ).start()
 
     # ── Batching ──────────────────────────────────────────────────────────────
     with buffer_lock:
@@ -816,4 +833,3 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
-
