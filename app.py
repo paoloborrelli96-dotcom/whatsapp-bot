@@ -25,6 +25,9 @@ TWILIO_AUTH_TOKEN      = os.environ["TWILIO_AUTH_TOKEN"]
 TWILIO_WHATSAPP_NUMBER = os.environ["TWILIO_WHATSAPP_NUMBER"]
 DATABASE_URL           = os.environ["DATABASE_URL"]
 
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID", "")
+
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
@@ -235,6 +238,20 @@ COMANDI ADMIN
 Se ricevi messaggi che iniziano con /inizia, /pausa, /riprendi, /nota, /acquisto:
 sono comandi interni. Non rispondere nulla.
 """
+
+# ─── TELEGRAM ──────────────────────────────────────────────────────────────────
+def send_telegram(message):
+    """Manda una notifica su Telegram. Gira in background."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
+            timeout=10
+        )
+    except Exception as e:
+        logger.error(f"Errore Telegram: {e}")
 
 # ─── DATABASE ──────────────────────────────────────────────────────────────────
 def get_db():
@@ -456,6 +473,7 @@ def get_ai_response(phone, user_message, image_url=None, extra_instruction=None)
         return response.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"Errore OpenAI: {e}")
+        threading.Thread(target=send_telegram, args=[f"⚠️ Errore OpenAI per {phone}: {e}"], daemon=True).start()
         return "Scusa, ho avuto un piccolo problema tecnico. Riprova tra qualche minuto 🙏"
 
 # ─── INVIO ─────────────────────────────────────────────────────────────────────
@@ -476,6 +494,12 @@ def send_whatsapp_message(phone, text):
                 to=f"whatsapp:{phone}",
                 body=chunk
             )
+            # Notifica Telegram risposta bot
+            threading.Thread(
+                target=send_telegram,
+                args=[f"🤖 <b>Bot → {phone}</b>\n{chunk[:300]}{'...' if len(chunk) > 300 else ''}"],
+                daemon=True
+            ).start()
             if len(chunks) > 1:
                 time.sleep(1)
         except Exception as e:
@@ -560,11 +584,13 @@ def process_batch(phone):
 
         if not is_acquisto and combined_text:
             try:
+                history = get_history(phone)
+                history_text = "\n".join([f"{'Mamma' if m['role']=='user' else 'Bot'}: {m['content'][:100]}" for m in history[-5:]])
                 check_response = openai_client.chat.completions.create(
                     model="gpt-4o",
                     messages=[
                         {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO."},
-                        {"role": "user", "content": f"La persona sta comunicando di aver acquistato, pagato o completato un ordine? Messaggio: '{combined_text}'"}
+                        {"role": "user", "content": f"Considerando questo contesto di conversazione:\n{history_text}\n\nL'ultimo messaggio della persona indica che ha acquistato, pagato o completato un ordine? Ultimo messaggio: '{combined_text}'"}
                     ],
                     max_tokens=5,
                     temperature=0
@@ -713,6 +739,13 @@ def webhook():
     if not text_to_process and not image_url_to_process:
         return Response("OK", status=200)
 
+    # Notifica Telegram messaggio in entrata
+    threading.Thread(
+        target=send_telegram,
+        args=[f"📩 <b>{phone}</b>\n{text_to_process or '[immagine]'}"],
+        daemon=True
+    ).start()
+
     # ── Batching ──────────────────────────────────────────────────────────────
     with buffer_lock:
         if phone not in message_buffers:
@@ -753,4 +786,3 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
-
