@@ -241,15 +241,18 @@ sono comandi interni. Non rispondere nulla.
 
 # ─── TELEGRAM ──────────────────────────────────────────────────────────────────
 def send_telegram(message):
-    """Manda una notifica su Telegram. Gira in background."""
+    """Manda una notifica su Telegram. Spezza i messaggi lunghi."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"},
-            timeout=10
-        )
+        # Spezza in chunks da 4000 caratteri
+        chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
+        for chunk in chunks:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "HTML"},
+                timeout=10
+            )
     except Exception as e:
         logger.error(f"Errore Telegram: {e}")
 
