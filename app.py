@@ -509,15 +509,13 @@ def send_piano(phone):
 
 # ─── SEQUENZA ACQUISTO ─────────────────────────────────────────────────────────
 def invia_sequenza_acquisto(phone):
-    # Controlla che la fase sia ancora 0 — evita doppio invio
     if get_fase(phone) != 0:
         logger.info(f"Sequenza acquisto gia avviata per {phone} — skip")
         return
 
-    # Imposta subito fase 1 per bloccare altri trigger
     set_fase(phone, 1)
-
     logger.info(f"Avvio sequenza acquisto per {phone}")
+
     save_message(phone, "assistant", MSG_BENVENUTO)
     send_whatsapp_message(phone, MSG_BENVENUTO)
     time.sleep(3)
@@ -550,7 +548,6 @@ def process_batch(phone):
     fase = get_fase(phone)
     logger.info(f"Processing batch per {phone} — fase {fase}")
 
-    # FASE 0: non ha ancora acquistato
     if fase == 0:
         testo_lower = (combined_text or "").lower()
         parole_acquisto = [
@@ -561,7 +558,6 @@ def process_batch(phone):
         ]
         is_acquisto = any(p in testo_lower for p in parole_acquisto)
 
-        # Se non rilevato da parole chiave, usa GPT
         if not is_acquisto and combined_text:
             try:
                 check_response = openai_client.chat.completions.create(
@@ -580,7 +576,6 @@ def process_batch(phone):
             except Exception as e:
                 logger.error(f"Errore check acquisto GPT: {e}")
 
-        # Se non rilevato da testo ma c'e un'immagine, chiedi a gpt-4o
         if not is_acquisto and image_url:
             try:
                 img_response = requests.get(
@@ -614,34 +609,26 @@ def process_batch(phone):
             invia_sequenza_acquisto(phone)
             return
 
-        # Risposta informativa — 5 minuti
         time.sleep(300)
         ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
 
-    # FASE 1: ha risposto al questionario, schedula piano
     elif fase == 1:
         piano_time = datetime.now() + timedelta(hours=1)
         set_fase(phone, 3, piano_scheduled_at=piano_time)
 
-    # FASE 3: piano schedulato, risponde normalmente
     elif fase == 3:
         time.sleep(2)
         ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
 
-    # FASE 4: percorso attivo — 30-40 minuti
     elif fase == 4:
         time.sleep(random.randint(1800, 2400))
         ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
-
-def schedule_batch(phone):
-    time.sleep(30)
-    process_batch(phone)
 
 # ─── WEBHOOK ───────────────────────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
@@ -766,3 +753,4 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
+
