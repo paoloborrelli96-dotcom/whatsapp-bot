@@ -25,10 +25,6 @@ TWILIO_AUTH_TOKEN      = os.environ["TWILIO_AUTH_TOKEN"]
 TWILIO_WHATSAPP_NUMBER = os.environ["TWILIO_WHATSAPP_NUMBER"]
 DATABASE_URL           = os.environ["DATABASE_URL"]
 
-CHATWOOT_URL       = os.environ.get("CHATWOOT_URL", "")
-CHATWOOT_API_TOKEN = os.environ.get("CHATWOOT_API_TOKEN", "")
-CHATWOOT_INBOX_ID  = os.environ.get("CHATWOOT_INBOX_ID", "1")
-
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
@@ -401,94 +397,6 @@ def mark_renewal_sent(phone):
     except Exception as e:
         logger.error(f"Errore mark_renewal_sent: {e}")
 
-# ─── CHATWOOT ──────────────────────────────────────────────────────────────────
-def chatwoot_get_or_create_conversation(phone):
-    """Trova o crea una conversazione su Chatwoot per questo numero."""
-    if not CHATWOOT_URL or not CHATWOOT_API_TOKEN:
-        return None
-    try:
-        phone_e164 = f"+{phone.lstrip('+')}"
-        headers = {
-            "api_access_token": CHATWOOT_API_TOKEN,
-            "Content-Type": "application/json"
-        }
-        inbox_id = int(CHATWOOT_INBOX_ID)
-
-        # Cerca contatto esistente
-        resp = requests.get(
-            f"{CHATWOOT_URL}/api/v1/accounts/1/contacts/search",
-            headers=headers,
-            params={"q": phone_e164},
-            timeout=10
-        )
-        contacts = resp.json().get("payload", [])
-        if contacts:
-            contact_id = contacts[0]["id"]
-        else:
-            # Crea contatto
-            resp = requests.post(
-                f"{CHATWOOT_URL}/api/v1/accounts/1/contacts",
-                headers=headers,
-                json={"phone_number": phone_e164, "name": phone_e164},
-                timeout=10
-            )
-            contact_id = resp.json().get("id")
-
-        if not contact_id:
-            return None
-
-        # Cerca conversazione esistente per questo contatto e inbox
-        resp = requests.get(
-            f"{CHATWOOT_URL}/api/v1/accounts/1/contacts/{contact_id}/conversations",
-            headers=headers,
-            timeout=10
-        )
-        convs = resp.json().get("payload", [])
-        for conv in convs:
-            if conv.get("inbox_id") == inbox_id:
-                return conv["id"]
-
-        # Crea nuova conversazione
-        resp = requests.post(
-            f"{CHATWOOT_URL}/api/v1/accounts/1/conversations",
-            headers=headers,
-            json={
-                "inbox_id": inbox_id,
-                "contact_id": contact_id,
-                "source_id": f"whatsapp:{phone_e164}"
-            },
-            timeout=10
-        )
-        return resp.json().get("id")
-    except Exception as e:
-        logger.error(f"Errore Chatwoot conversation: {e}")
-        return None
-
-def chatwoot_send(phone, message, is_outgoing=False):
-    """Manda un messaggio a Chatwoot. In background per non bloccare."""
-    if not CHATWOOT_URL or not CHATWOOT_API_TOKEN:
-        return
-    try:
-        conv_id = chatwoot_get_or_create_conversation(phone)
-        if not conv_id:
-            return
-        headers = {
-            "api_access_token": CHATWOOT_API_TOKEN,
-            "Content-Type": "application/json"
-        }
-        requests.post(
-            f"{CHATWOOT_URL}/api/v1/accounts/1/conversations/{conv_id}/messages",
-            headers=headers,
-            json={
-                "content": message,
-                "message_type": "outgoing" if is_outgoing else "incoming",
-                "private": False
-            },
-            timeout=10
-        )
-    except Exception as e:
-        logger.error(f"Errore Chatwoot send: {e}")
-
 # ─── AUDIO ─────────────────────────────────────────────────────────────────────
 def transcribe_audio(media_url):
     try:
@@ -568,8 +476,6 @@ def send_whatsapp_message(phone, text):
                 to=f"whatsapp:{phone}",
                 body=chunk
             )
-            # Invia copia a Chatwoot in background
-            threading.Thread(target=chatwoot_send, args=[phone, chunk, True], daemon=True).start()
             if len(chunks) > 1:
                 time.sleep(1)
         except Exception as e:
@@ -819,10 +725,6 @@ def webhook():
 
     if not text_to_process and not image_url_to_process:
         return Response("OK", status=200)
-
-    # Invia messaggio in entrata a Chatwoot in background
-    if text_to_process:
-        threading.Thread(target=chatwoot_send, args=[phone, text_to_process, False], daemon=True).start()
 
     # ── Batching ──────────────────────────────────────────────────────────────
     with buffer_lock:
