@@ -536,7 +536,7 @@ def send_whatsapp_message(phone, text):
             )
             threading.Thread(
                 target=send_telegram,
-                args=[f"🤖 <b>Bot → {phone}</b>\n{chunk[:500]}{'...' if len(chunk) > 500 else ''}"],
+                args=[f"🤖 <b>Bot → {phone}</b>\n{chunk}"],
                 daemon=True
             ).start()
             if len(chunks) > 1:
