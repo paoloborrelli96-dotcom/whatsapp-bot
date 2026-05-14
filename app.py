@@ -40,7 +40,8 @@ processed_sids_lock = threading.Lock()
 
 # ─── FASI ──────────────────────────────────────────────────────────────────────
 # 0  = info/primo contatto
-# 1  = acquisto confermato, benvenuto+regole+questionario inviati
+# 1  = acquisto confermato, benvenuto+regole+questionario parte 1 inviati
+# 2  = mamma ha risposto parte 1, questionario parte 2 inviato
 # 3  = questionario completo, piano schedulato (1 ora)
 # 4  = piano inviato, percorso attivo
 # 99 = chat in pausa
@@ -70,15 +71,21 @@ MSG_REGOLE = (
     "Scrivimi liberamente ogni volta che ne hai bisogno 🤍"
 )
 
-MSG_QUESTIONARIO = (
-    "Per prepararti un piano su misura ho bisogno di conoscerti meglio. Rispondimi con calma:\n\n"
+MSG_QUESTIONARIO_1 = (
+    "Per prepararti un piano su misura ho bisogno di conoscerti meglio. Iniziamo con alcune domande, "
+    "rispondimi con calma:\n\n"
     "1. Nominativo con cui hai effettuato l'ordine e data di acquisto\n"
     "2. Come ti chiami e quanti anni hai?\n"
     "3. Nome, data di nascita e peso attuale del bambino/a?\n"
     "4. E il primo figlio? Ha fratelli o sorelle?\n"
     "5. Descrivimi la sua giornata tipo: orario sveglia mattina, pisolini (orari e durata), orario nanna serale\n"
     "6. Come si addormenta? (seno, ciuccio, in braccio, da solo...)\n"
-    "7. Dove dorme? (culla, lettone, carrozzina...)\n"
+    "7. Dove dorme? (culla, lettone, carrozzina...)\n\n"
+    "Rispondimi a queste prime domande con calma, poi ti mando le altre 🤍"
+)
+
+MSG_QUESTIONARIO_2 = (
+    "Grazie, quasi finita:\n\n"
     "8. Quante volte si sveglia di notte e come lo riaddormenti?\n"
     "9. Allatti al seno, biberon o entrambi?\n"
     "10. Hai gia provato qualcosa per migliorare il sonno? Com'e andata?\n"
@@ -133,13 +140,13 @@ I concetti si esprimono in modo naturale nel testo, non in liste.
 
 QUANDO RISPONDERE IN MODO MINIMO
 Se il messaggio e una conferma, una chiusura o qualcosa di breve senza una domanda reale:
-tipo "ok", "grazie", "ci penso", "va bene", "capito", "perfetto", "👍", "ci provo", "ok grazie",
+tipo "ok", "grazie", "ci penso", "va bene", "capito", "perfetto", "ci provo", "ok grazie",
 non aggiungere nulla di nuovo.
 Rispondi solo con qualcosa di brevissimo e naturale, adattato al contesto:
 In fase informativa prima dell'acquisto: "Certo, sono qui quando vuoi 🤍"
 Durante il percorso attivo: "Bene, fammi sapere come va 🤍"
-E poi basta. Non aggiungere frasi motivazionali, non ribadire il percorso, non dire che non vedi l'ora, non ripetere cose gia dette.
-Se non c'e nulla di utile da aggiungere, non aggiungere nulla. Stare quasi in silenzio e piu professionale che rispondere per forza.
+E poi basta. Non aggiungere frasi motivazionali, non ribadire il percorso, non ripetere cose gia dette.
+Se non c'e nulla di utile da aggiungere, non aggiungere nulla.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PRIMO MESSAGGIO VAGO
@@ -279,7 +286,7 @@ Se la mamma e scontenta o chiede un rimborso:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COMANDI ADMIN
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se ricevi messaggi che iniziano con /inizia, /pausa, /riprendi, /nota, /acquisto:
+Se ricevi messaggi che iniziano con /inizia, /pausa, /riprendi, /nota, /acquisto, /scrivi:
 sono comandi interni. Non rispondere nulla.
 """
 
@@ -364,11 +371,9 @@ def get_history(phone, days=30):
         return []
 
 def get_messages_since_last_reply(phone):
-    """Restituisce tutti i messaggi della mamma arrivati dopo l'ultima risposta del bot."""
     try:
         conn = get_db()
         cur = conn.cursor(cursor_factory=RealDictCursor)
-        # Trova timestamp ultima risposta del bot
         cur.execute("""
             SELECT timestamp FROM messages
             WHERE phone = %s AND role = 'assistant'
@@ -379,7 +384,6 @@ def get_messages_since_last_reply(phone):
             cutoff = last_reply["timestamp"]
         else:
             cutoff = datetime.now() - timedelta(days=30)
-        # Prendi tutti i messaggi utente dopo quella data
         cur.execute("""
             SELECT content FROM messages
             WHERE phone = %s AND role = 'user' AND timestamp > %s
@@ -510,23 +514,13 @@ def transcribe_audio(media_url):
 
 # ─── AI ────────────────────────────────────────────────────────────────────────
 def get_ai_response(phone, image_url=None):
-    """Legge tutta la storia dal DB e genera risposta."""
     history = get_history(phone)
-
-    # Messaggio utente sintetico con tutti i messaggi non ancora risposti
     pending = get_messages_since_last_reply(phone)
-    if pending:
-        user_message = "\n".join(pending)
-    else:
-        user_message = "(nessun nuovo messaggio)"
+    user_message = "\n".join(pending) if pending else "(nessun nuovo messaggio)"
 
     if image_url:
         try:
-            img_response = requests.get(
-                image_url,
-                auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
-                timeout=30
-            )
+            img_response = requests.get(image_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=30)
             img_data = base64.b64encode(img_response.content).decode("utf-8")
             content_type = img_response.headers.get("Content-Type", "image/jpeg")
             user_content = [
@@ -559,10 +553,10 @@ def get_ai_response(phone, image_url=None):
 # ─── INVIO ─────────────────────────────────────────────────────────────────────
 def send_whatsapp_message(phone, text):
     chunks = []
-    while len(text) > 1500:
-        split_point = text.rfind('\n', 0, 1500)
+    while len(text) > 1000:
+        split_point = text.rfind('\n', 0, 1000)
         if split_point == -1:
-            split_point = 1500
+            split_point = 1000
         chunks.append(text[:split_point].strip())
         text = text[split_point:].strip()
     if text:
@@ -638,17 +632,12 @@ def invia_sequenza_acquisto(phone):
     send_whatsapp_message(phone, MSG_REGOLE)
     time.sleep(3)
 
-    save_message(phone, "assistant", MSG_QUESTIONARIO)
-    send_whatsapp_message(phone, MSG_QUESTIONARIO)
+    save_message(phone, "assistant", MSG_QUESTIONARIO_1)
+    send_whatsapp_message(phone, MSG_QUESTIONARIO_1)
     logger.info(f"Sequenza acquisto completata per {phone}")
 
 # ─── ELABORAZIONE RISPOSTA ─────────────────────────────────────────────────────
 def process_response(phone, image_url=None):
-    """
-    Viene chiamata dal timer. Legge dal DB tutti i messaggi non ancora risposti
-    e genera UNA SOLA risposta coerente.
-    """
-    # Rimuovi il timer attivo
     with active_timers_lock:
         active_timers.pop(phone, None)
 
@@ -656,7 +645,6 @@ def process_response(phone, image_url=None):
     logger.info(f"process_response per {phone} — fase {fase}")
 
     if fase == 0:
-        # Controlla se ha acquistato leggendo i messaggi pendenti
         pending = get_messages_since_last_reply(phone)
         combined = "\n".join(pending).lower()
 
@@ -668,7 +656,6 @@ def process_response(phone, image_url=None):
         ]
         is_acquisto = any(p in combined for p in parole_acquisto)
 
-        # Check GPT se non rilevato da parole chiave
         if not is_acquisto and combined:
             try:
                 history = get_history(phone)
@@ -685,14 +672,12 @@ def process_response(phone, image_url=None):
                     max_tokens=5,
                     temperature=0
                 )
-                risposta = check_response.choices[0].message.content.strip().lower()
-                if risposta.startswith("si"):
+                if check_response.choices[0].message.content.strip().lower().startswith("si"):
                     is_acquisto = True
                     logger.info(f"Acquisto rilevato da GPT per {phone}")
             except Exception as e:
                 logger.error(f"Errore check acquisto GPT: {e}")
 
-        # Check immagine
         if not is_acquisto and image_url:
             try:
                 img_response = requests.get(image_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=30)
@@ -719,24 +704,29 @@ def process_response(phone, image_url=None):
             invia_sequenza_acquisto(phone)
             return
 
-        # Risposta informativa normale
         ai_reply = get_ai_response(phone, image_url=image_url)
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
 
     elif fase == 1:
-        # Ha risposto al questionario — schedula piano tra 1 ora
+        # Mamma ha risposto alla parte 1 — manda parte 2 dopo 5 minuti
+        time.sleep(300)
+        save_message(phone, "assistant", MSG_QUESTIONARIO_2)
+        send_whatsapp_message(phone, MSG_QUESTIONARIO_2)
+        set_fase(phone, 2)
+        logger.info(f"Questionario parte 2 inviato a {phone}")
+
+    elif fase == 2:
+        # Mamma ha risposto alla parte 2 — schedula piano tra 1 ora
         piano_time = datetime.now() + timedelta(hours=1)
         set_fase(phone, 3, piano_scheduled_at=piano_time)
         logger.info(f"Piano schedulato per {phone} alle {piano_time}")
 
     elif fase == 3:
-        # In attesa del piano — bot non risponde, aspetta in silenzio
-        # Il piano arriva automaticamente dopo 1 ora dal job background
-        logger.info(f"Fase 3 per {phone} — messaggio salvato, bot in attesa del piano")
+        # In attesa del piano — bot silenzioso
+        logger.info(f"Fase 3 per {phone} — bot in attesa del piano")
 
     elif fase == 4:
-        # Percorso attivo — risponde dopo 30-40 min (il timer e gia stato aspettato)
         ai_reply = get_ai_response(phone, image_url=image_url)
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
@@ -801,6 +791,16 @@ def webhook():
             save_message(target, "user", f"[NOTA ADMIN: {nota}]")
         return Response("OK", status=200)
 
+    if body.startswith("/scrivi"):
+        parts = body.strip().split(None, 2)
+        if len(parts) >= 3:
+            target = parts[1].replace("+", "").replace(" ", "")
+            testo = parts[2]
+            save_message(target, "assistant", testo)
+            send_whatsapp_message(target, testo)
+            logger.info(f"Messaggio admin inviato a {target}")
+        return Response("OK", status=200)
+
     # ── Chat in pausa ─────────────────────────────────────────────────────────
     if get_fase(phone) == 99:
         logger.info(f"Chat {phone} in pausa — ignorato")
@@ -824,7 +824,7 @@ def webhook():
     if not text_to_process and not image_url_to_process:
         return Response("OK", status=200)
 
-    # Salva subito il messaggio nel DB
+    # Salva subito nel DB
     save_message(phone, "user", text_to_process or "[immagine]")
 
     # Notifica Telegram
@@ -836,21 +836,18 @@ def webhook():
         ).start()
 
     # ── Timer unico per numero ─────────────────────────────────────────────────
-    # Se c'e gia un timer attivo per questo numero, NON creare un nuovo timer.
-    # Il messaggio e gia salvato nel DB e verra letto quando il timer scade.
     with active_timers_lock:
         if phone in active_timers:
             logger.info(f"Timer gia attivo per {phone} — messaggio salvato nel DB")
             return Response("OK", status=200)
 
-        # Nessun timer attivo — creane uno in base alla fase
         fase = get_fase(phone)
         if fase == 0:
-            delay = 300  # 5 minuti
+            delay = 300
         elif fase == 4:
-            delay = random.randint(1800, 2400)  # 30-40 minuti
+            delay = random.randint(1800, 2400)
         else:
-            delay = 5  # fase 1 e 3: quasi subito (il lavoro vero lo fa process_response)
+            delay = 5
 
         timer = threading.Timer(delay, process_response, args=[phone, image_url_to_process])
         active_timers[phone] = timer
