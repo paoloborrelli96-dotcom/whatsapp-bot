@@ -721,10 +721,9 @@ def process_response(phone, image_url=None):
         logger.info(f"Piano schedulato per {phone} alle {piano_time}")
 
     elif fase == 3:
-        # In attesa del piano — risponde normalmente
-        ai_reply = get_ai_response(phone, image_url=image_url)
-        save_message(phone, "assistant", ai_reply)
-        send_whatsapp_message(phone, ai_reply)
+        # In attesa del piano — bot non risponde, aspetta in silenzio
+        # Il piano arriva automaticamente dopo 1 ora dal job background
+        logger.info(f"Fase 3 per {phone} — messaggio salvato, bot in attesa del piano")
 
     elif fase == 4:
         # Percorso attivo — risponde dopo 30-40 min (il timer e gia stato aspettato)
