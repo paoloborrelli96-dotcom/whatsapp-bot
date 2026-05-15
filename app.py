@@ -26,6 +26,7 @@ TWILIO_WHATSAPP_NUMBER = os.environ["TWILIO_WHATSAPP_NUMBER"]
 DATABASE_URL           = os.environ["DATABASE_URL"]
 TELEGRAM_BOT_TOKEN     = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID       = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_GROUP_ID      = os.environ.get("TELEGRAM_GROUP_ID", "")
 
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -37,6 +38,10 @@ active_timers_lock = threading.Lock()
 # Deduplicazione messaggi
 processed_sids = set()
 processed_sids_lock = threading.Lock()
+
+# Cache topic Telegram per numero (phone -> thread_id)
+topic_cache = {}
+topic_cache_lock = threading.Lock()
 
 # ─── FASI ──────────────────────────────────────────────────────────────────────
 # 0  = info/primo contatto
@@ -290,8 +295,80 @@ Se ricevi messaggi che iniziano con /inizia, /pausa, /riprendi, /nota, /acquisto
 sono comandi interni. Non rispondere nulla.
 """
 
-# ─── TELEGRAM ──────────────────────────────────────────────────────────────────
+# ─── TELEGRAM FORUM ────────────────────────────────────────────────────────────
+def get_or_create_topic(phone):
+    """Ottiene o crea un topic Telegram per questo numero."""
+    if not TELEGRAM_GROUP_ID or not TELEGRAM_BOT_TOKEN:
+        return None
+    with topic_cache_lock:
+        if phone in topic_cache:
+            return topic_cache[phone]
+    try:
+        # Cerca topic esistente nel DB
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS telegram_topics (
+                phone TEXT PRIMARY KEY,
+                thread_id INTEGER NOT NULL
+            )
+        """)
+        conn.commit()
+        cur.execute("SELECT thread_id FROM telegram_topics WHERE phone = %s", (phone,))
+        row = cur.fetchone()
+        if row:
+            thread_id = row[0]
+            cur.close()
+            conn.close()
+            with topic_cache_lock:
+                topic_cache[phone] = thread_id
+            return thread_id
+        # Crea nuovo topic
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/createForumTopic",
+            json={"chat_id": TELEGRAM_GROUP_ID, "name": phone},
+            timeout=10
+        )
+        data = resp.json()
+        if data.get("ok"):
+            thread_id = data["result"]["message_thread_id"]
+            cur.execute("INSERT INTO telegram_topics (phone, thread_id) VALUES (%s, %s)", (phone, thread_id))
+            conn.commit()
+            cur.close()
+            conn.close()
+            with topic_cache_lock:
+                topic_cache[phone] = thread_id
+            return thread_id
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Errore get_or_create_topic per {phone}: {e}")
+    return None
+
+def send_to_topic(phone, message, is_bot=False):
+    """Manda un messaggio nel topic della mamma."""
+    thread_id = get_or_create_topic(phone)
+    if not thread_id:
+        return
+    try:
+        prefix = "🤖 Bot: " if is_bot else "📩 Mamma: "
+        chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
+        for chunk in chunks:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json={
+                    "chat_id": TELEGRAM_GROUP_ID,
+                    "message_thread_id": thread_id,
+                    "text": f"{prefix}{chunk}",
+                    "parse_mode": "HTML"
+                },
+                timeout=10
+            )
+    except Exception as e:
+        logger.error(f"Errore send_to_topic per {phone}: {e}")
+
 def send_telegram(message):
+    """Notifica personale (chat diretta con il bot)."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
     try:
@@ -304,6 +381,56 @@ def send_telegram(message):
             )
     except Exception as e:
         logger.error(f"Errore Telegram: {e}")
+
+# ─── TELEGRAM WEBHOOK (risposta dal topic) ──────────────────────────────────────
+@app.route("/telegram_webhook", methods=["POST"])
+def telegram_webhook():
+    """
+    Riceve messaggi dal bot Telegram.
+    Se Paola risponde in un topic, il messaggio viene mandato alla mamma su WhatsApp.
+    """
+    data = request.json
+    if not data:
+        return Response("OK", status=200)
+    try:
+        message = data.get("message", {})
+        if not message:
+            return Response("OK", status=200)
+
+        # Ignora messaggi del bot stesso
+        if message.get("from", {}).get("is_bot"):
+            return Response("OK", status=200)
+
+        chat_id = str(message.get("chat", {}).get("id", ""))
+        thread_id = message.get("message_thread_id")
+        text = message.get("text", "").strip()
+
+        # Controlla che sia un messaggio nel gruppo forum
+        if chat_id != str(TELEGRAM_GROUP_ID) or not thread_id or not text:
+            return Response("OK", status=200)
+
+        # Trova il numero della mamma da thread_id
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT phone FROM telegram_topics WHERE thread_id = %s", (thread_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not row:
+            return Response("OK", status=200)
+
+        phone = row[0]
+        logger.info(f"Risposta Paola via Telegram topic per {phone}: {text[:50]}")
+
+        # Salva e manda su WhatsApp
+        save_message(phone, "assistant", text)
+        send_whatsapp_message(phone, text)
+
+    except Exception as e:
+        logger.error(f"Errore telegram_webhook: {e}")
+
+    return Response("OK", status=200)
 
 # ─── DATABASE ──────────────────────────────────────────────────────────────────
 def get_db():
@@ -330,6 +457,12 @@ def init_db():
             piano_scheduled_at TIMESTAMPTZ,
             renewal_sent BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS telegram_topics (
+            phone TEXT PRIMARY KEY,
+            thread_id INTEGER NOT NULL
         )
     """)
     conn.commit()
@@ -568,11 +701,8 @@ def send_whatsapp_message(phone, text):
                 to=f"whatsapp:{phone}",
                 body=chunk
             )
-            threading.Thread(
-                target=send_telegram,
-                args=[f"🤖 <b>Bot → {phone}</b>\n{chunk}"],
-                daemon=True
-            ).start()
+            # Notifica nel topic
+            threading.Thread(target=send_to_topic, args=[phone, chunk, True], daemon=True).start()
             if len(chunks) > 1:
                 time.sleep(1)
         except Exception as e:
@@ -709,7 +839,6 @@ def process_response(phone, image_url=None):
         send_whatsapp_message(phone, ai_reply)
 
     elif fase == 1:
-        # Mamma ha risposto alla parte 1 — manda parte 2 dopo 5 minuti
         time.sleep(300)
         save_message(phone, "assistant", MSG_QUESTIONARIO_2)
         send_whatsapp_message(phone, MSG_QUESTIONARIO_2)
@@ -717,13 +846,11 @@ def process_response(phone, image_url=None):
         logger.info(f"Questionario parte 2 inviato a {phone}")
 
     elif fase == 2:
-        # Mamma ha risposto alla parte 2 — schedula piano tra 1 ora
         piano_time = datetime.now() + timedelta(hours=1)
         set_fase(phone, 3, piano_scheduled_at=piano_time)
         logger.info(f"Piano schedulato per {phone} alle {piano_time}")
 
     elif fase == 3:
-        # In attesa del piano — bot silenzioso
         logger.info(f"Fase 3 per {phone} — bot in attesa del piano")
 
     elif fase == 4:
@@ -731,7 +858,7 @@ def process_response(phone, image_url=None):
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
 
-# ─── WEBHOOK ───────────────────────────────────────────────────────────────────
+# ─── WEBHOOK WHATSAPP ──────────────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def webhook():
     phone      = request.form.get("From", "").replace("whatsapp:", "")
@@ -742,7 +869,6 @@ def webhook():
 
     logger.info(f"Messaggio da {phone}: '{body}' | media: {num_media}")
 
-    # Deduplicazione
     message_sid = request.form.get("MessageSid", "")
     if message_sid:
         with processed_sids_lock:
@@ -760,6 +886,11 @@ def webhook():
             target = parts[1].replace("+", "").replace(" ", "")
             set_start_date(target, datetime.now().date())
             set_fase(target, 4)
+            # Cancella timer attivo se presente
+            with active_timers_lock:
+                if target in active_timers:
+                    active_timers[target].cancel()
+                    active_timers.pop(target, None)
         return Response("OK", status=200)
 
     if body.startswith("/pausa"):
@@ -801,12 +932,10 @@ def webhook():
             logger.info(f"Messaggio admin inviato a {target}")
         return Response("OK", status=200)
 
-    # ── Chat in pausa ─────────────────────────────────────────────────────────
     if get_fase(phone) == 99:
         logger.info(f"Chat {phone} in pausa — ignorato")
         return Response("OK", status=200)
 
-    # ── Gestione media ────────────────────────────────────────────────────────
     text_to_process = body
     image_url_to_process = None
 
@@ -824,18 +953,12 @@ def webhook():
     if not text_to_process and not image_url_to_process:
         return Response("OK", status=200)
 
-    # Salva subito nel DB
     save_message(phone, "user", text_to_process or "[immagine]")
 
-    # Notifica Telegram
+    # Notifica nel topic Telegram
     if text_to_process:
-        threading.Thread(
-            target=send_telegram,
-            args=[f"📩 <b>{phone}</b>\n{text_to_process[:500]}"],
-            daemon=True
-        ).start()
+        threading.Thread(target=send_to_topic, args=[phone, text_to_process, False], daemon=True).start()
 
-    # ── Timer unico per numero ─────────────────────────────────────────────────
     with active_timers_lock:
         if phone in active_timers:
             logger.info(f"Timer gia attivo per {phone} — messaggio salvato nel DB")
@@ -843,13 +966,13 @@ def webhook():
 
         fase = get_fase(phone)
         if fase == 0:
-            delay = 300                      # 5 minuti
+            delay = 300
         elif fase == 1:
-            delay = 600                      # 10 minuti — raccoglie risposte parte 1
+            delay = 600
         elif fase == 2:
-            delay = 600                      # 10 minuti — raccoglie risposte parte 2
+            delay = 600
         elif fase == 4:
-            delay = random.randint(1800, 2400)  # 30-40 minuti
+            delay = random.randint(1800, 2400)
         else:
             delay = 5
 
@@ -873,10 +996,26 @@ def background_job():
             logger.error(f"Errore background job: {e}")
         time.sleep(300)
 
+def setup_telegram_webhook():
+    """Registra il webhook Telegram per ricevere risposte dal topic."""
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    try:
+        webhook_url = f"https://whatsapp-bot-production-a276.up.railway.app/telegram_webhook"
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook",
+            json={"url": webhook_url, "allowed_updates": ["message"]},
+            timeout=10
+        )
+        logger.info(f"Telegram webhook impostato: {resp.json()}")
+    except Exception as e:
+        logger.error(f"Errore setup telegram webhook: {e}")
+
 # ─── AVVIO ─────────────────────────────────────────────────────────────────────
 def startup():
     init_db()
     threading.Thread(target=background_job, daemon=True).start()
+    setup_telegram_webhook()
     logger.info("Bot avviato")
 
 if __name__ == "__main__":
