@@ -26,6 +26,7 @@ TWILIO_WHATSAPP_NUMBER = os.environ["TWILIO_WHATSAPP_NUMBER"]
 DATABASE_URL           = os.environ["DATABASE_URL"]
 TELEGRAM_BOT_TOKEN     = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID       = os.environ.get("TELEGRAM_CHAT_ID", "")
+ADMIN_PASSWORD         = os.environ.get("ADMIN_PASSWORD", "Arbitro00@")
 
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -731,6 +732,267 @@ def process_response(phone, image_url=None):
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
 
+# ─── ADMIN ─────────────────────────────────────────────────────────────────────
+from flask import session, redirect, url_for, render_template_string
+import json
+
+app.secret_key = os.environ.get("ADMIN_PASSWORD", "Arbitro00@") + "_secret"
+
+ADMIN_HTML = """
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Genitori in Armonia — Admin</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Georgia', serif; background: #faf9f7; color: #2c2c2c; }
+.header { background: #2c2c2c; color: #f5f0e8; padding: 20px 30px; display: flex; align-items: center; justify-content: space-between; }
+.header h1 { font-size: 1.3rem; font-weight: normal; letter-spacing: 0.05em; }
+.header a { color: #c8a882; font-size: 0.85rem; text-decoration: none; }
+.container { max-width: 1100px; margin: 0 auto; padding: 30px 20px; }
+.stats { display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap; }
+.stat { background: white; border: 1px solid #e8e2d9; border-radius: 8px; padding: 15px 20px; flex: 1; min-width: 120px; }
+.stat .num { font-size: 2rem; font-weight: bold; color: #2c2c2c; }
+.stat .label { font-size: 0.75rem; color: #888; margin-top: 3px; text-transform: uppercase; letter-spacing: 0.05em; }
+.chat-list { display: flex; flex-direction: column; gap: 10px; }
+.chat-card { background: white; border: 1px solid #e8e2d9; border-radius: 8px; padding: 15px 20px; cursor: pointer; transition: border-color 0.2s; display: flex; align-items: center; justify-content: space-between; text-decoration: none; color: inherit; }
+.chat-card:hover { border-color: #c8a882; }
+.chat-card .info { display: flex; flex-direction: column; gap: 4px; }
+.chat-card .phone { font-weight: bold; font-size: 1rem; }
+.chat-card .note { font-size: 0.85rem; color: #666; }
+.chat-card .meta { text-align: right; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: bold; }
+.badge-0 { background: #f0f0f0; color: #666; }
+.badge-1, .badge-2 { background: #fff3cd; color: #856404; }
+.badge-3 { background: #cce5ff; color: #004085; }
+.badge-4 { background: #d4edda; color: #155724; }
+.badge-99 { background: #f8d7da; color: #721c24; }
+.days { font-size: 0.8rem; color: #888; }
+.days.urgent { color: #dc3545; font-weight: bold; }
+
+/* Chat detail */
+.back { display: inline-block; margin-bottom: 20px; color: #c8a882; text-decoration: none; font-size: 0.9rem; }
+.chat-header { background: white; border: 1px solid #e8e2d9; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+.chat-header h2 { font-size: 1.2rem; margin-bottom: 10px; }
+.chat-actions { display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
+.btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
+.btn-primary { background: #2c2c2c; color: white; }
+.btn-danger { background: #dc3545; color: white; }
+.btn-warning { background: #ffc107; color: #2c2c2c; }
+.btn-success { background: #28a745; color: white; }
+.note-field { width: 100%; padding: 8px 12px; border: 1px solid #e8e2d9; border-radius: 6px; font-family: inherit; font-size: 0.9rem; margin-top: 10px; }
+.messages { display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 80%; padding: 12px 16px; border-radius: 12px; font-size: 0.9rem; line-height: 1.5; }
+.msg.user { background: #f0ebe3; align-self: flex-start; border-bottom-left-radius: 3px; }
+.msg.assistant { background: #2c2c2c; color: #f5f0e8; align-self: flex-end; border-bottom-right-radius: 3px; }
+.msg-time { font-size: 0.7rem; opacity: 0.6; margin-top: 5px; }
+.msg-wrap { display: flex; flex-direction: column; }
+.msg-wrap.user { align-items: flex-start; }
+.msg-wrap.assistant { align-items: flex-end; }
+
+/* Login */
+.login-box { max-width: 400px; margin: 100px auto; background: white; border: 1px solid #e8e2d9; border-radius: 12px; padding: 40px; text-align: center; }
+.login-box h2 { margin-bottom: 5px; font-size: 1.4rem; }
+.login-box p { color: #888; margin-bottom: 25px; font-size: 0.9rem; }
+.login-box input { width: 100%; padding: 12px; border: 1px solid #e8e2d9; border-radius: 6px; font-size: 1rem; margin-bottom: 15px; font-family: inherit; }
+.login-box button { width: 100%; padding: 12px; background: #2c2c2c; color: white; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; font-family: inherit; }
+.error { color: #dc3545; margin-bottom: 15px; font-size: 0.9rem; }
+
+.fase-label { font-size: 0.8rem; color: #888; margin-top: 5px; }
+</style>
+</head>
+<body>
+{{ content }}
+</body>
+</html>
+"""
+
+def fase_badge(fase):
+    labels = {0: "Info", 1: "Questionario 1", 2: "Questionario 2", 3: "In attesa piano", 4: "Percorso attivo", 99: "In pausa"}
+    label = labels.get(fase, str(fase))
+    return f'<span class="badge badge-{fase}">{label}</span>'
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    error = ""
+    if request.method == "POST":
+        if request.form.get("password") == ADMIN_PASSWORD:
+            session["admin"] = True
+            return redirect("/admin")
+        error = "Password errata"
+    content = f"""
+    <div class="login-box">
+        <h2>Genitori in Armonia</h2>
+        <p>Pannello admin</p>
+        {'<div class="error">' + error + '</div>' if error else ''}
+        <form method="POST">
+            <input type="password" name="password" placeholder="Password" autofocus>
+            <button type="submit">Accedi</button>
+        </form>
+    </div>
+    """
+    return render_template_string(ADMIN_HTML, content=content)
+
+@app.route("/admin/logout")
+def admin_logout():
+    session.pop("admin", None)
+    return redirect("/admin/login")
+
+@app.route("/admin")
+def admin_index():
+    if not session.get("admin"):
+        return redirect("/admin/login")
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT c.phone, c.fase, c.start_date, c.created_at,
+                   (SELECT content FROM messages WHERE phone = c.phone AND role = 'user' ORDER BY timestamp DESC LIMIT 1) as last_msg,
+                   (SELECT timestamp FROM messages WHERE phone = c.phone ORDER BY timestamp DESC LIMIT 1) as last_time
+            FROM consultations c
+            ORDER BY last_time DESC NULLS LAST
+        """)
+        chats = cur.fetchall()
+
+        cur.execute("SELECT COUNT(DISTINCT phone) as tot FROM consultations WHERE fase = 4")
+        attive = cur.fetchone()["tot"]
+        cur.execute("SELECT COUNT(DISTINCT phone) as tot FROM consultations WHERE fase = 0")
+        info = cur.fetchone()["tot"]
+        cur.execute("SELECT COUNT(DISTINCT phone) as tot FROM consultations")
+        totale = cur.fetchone()["tot"]
+        cur.close()
+        conn.close()
+
+        cards = ""
+        for c in chats:
+            fase = c["fase"]
+            phone = c["phone"]
+            last_msg = (c["last_msg"] or "")[:80]
+            last_time = c["last_time"].strftime("%d/%m %H:%M") if c["last_time"] else ""
+            days_str = ""
+            if c["start_date"] and fase == 4:
+                days_left = 30 - (datetime.now().date() - c["start_date"]).days
+                urgent = "urgent" if days_left <= 5 else ""
+                days_str = f'<span class="days {urgent}">{days_left} giorni rimasti</span>'
+            cards += f"""
+            <a class="chat-card" href="/admin/chat/{phone}">
+                <div class="info">
+                    <span class="phone">{phone}</span>
+                    <span class="note">{last_msg}</span>
+                </div>
+                <div class="meta">
+                    {fase_badge(fase)}
+                    <span class="days">{last_time}</span>
+                    {days_str}
+                </div>
+            </a>
+            """
+
+        content = f"""
+        <div class="header">
+            <h1>Genitori in Armonia — Admin</h1>
+            <a href="/admin/logout">Esci</a>
+        </div>
+        <div class="container">
+            <div class="stats">
+                <div class="stat"><div class="num">{totale}</div><div class="label">Totale chat</div></div>
+                <div class="stat"><div class="num">{attive}</div><div class="label">Percorsi attivi</div></div>
+                <div class="stat"><div class="num">{info}</div><div class="label">In fase info</div></div>
+            </div>
+            <div class="chat-list">{cards}</div>
+        </div>
+        """
+        return render_template_string(ADMIN_HTML, content=content)
+    except Exception as e:
+        return f"Errore: {e}"
+
+@app.route("/admin/chat/<phone>")
+def admin_chat(phone):
+    if not session.get("admin"):
+        return redirect("/admin/login")
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM consultations WHERE phone = %s", (phone,))
+        cons = cur.fetchone()
+        cur.execute("""
+            SELECT role, content, timestamp FROM messages
+            WHERE phone = %s ORDER BY timestamp ASC
+        """, (phone,))
+        msgs = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        fase = cons["fase"] if cons else 0
+        start_date = cons["start_date"].strftime("%d/%m/%Y") if cons and cons["start_date"] else "Non impostata"
+        days_left = ""
+        if cons and cons["start_date"] and fase == 4:
+            dl = 30 - (datetime.now().date() - cons["start_date"]).days
+            days_left = f" — {dl} giorni rimasti"
+
+        bubbles = ""
+        for m in msgs:
+            role = m["role"]
+            text = m["content"].replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+            ts = m["timestamp"].strftime("%d/%m %H:%M")
+            bubbles += f"""
+            <div class="msg-wrap {role}">
+                <div class="msg {role}">{text}<div class="msg-time">{ts}</div></div>
+            </div>
+            """
+
+        content = f"""
+        <div class="header">
+            <h1>Genitori in Armonia — Admin</h1>
+            <a href="/admin/logout">Esci</a>
+        </div>
+        <div class="container">
+            <a class="back" href="/admin">← Torna alla lista</a>
+            <div class="chat-header">
+                <h2>{phone}</h2>
+                <div>{fase_badge(fase)}</div>
+                <div class="fase-label">Data inizio: {start_date}{days_left}</div>
+                <div class="chat-actions">
+                    <form method="POST" action="/admin/action/{phone}" style="display:contents">
+                        <input type="hidden" name="action" value="pausa">
+                        <button class="btn btn-warning" type="submit">⏸ Pausa bot</button>
+                    </form>
+                    <form method="POST" action="/admin/action/{phone}" style="display:contents">
+                        <input type="hidden" name="action" value="riprendi">
+                        <button class="btn btn-success" type="submit">▶ Riprendi bot</button>
+                    </form>
+                </div>
+                <form method="POST" action="/admin/action/{phone}">
+                    <input type="hidden" name="action" value="scrivi">
+                    <textarea class="note-field" name="testo" rows="3" placeholder="Scrivi un messaggio alla mamma..."></textarea>
+                    <button class="btn btn-primary" type="submit" style="margin-top:8px">Invia messaggio</button>
+                </form>
+            </div>
+            <div class="messages">{bubbles}</div>
+        </div>
+        """
+        return render_template_string(ADMIN_HTML, content=content)
+    except Exception as e:
+        return f"Errore: {e}"
+
+@app.route("/admin/action/<phone>", methods=["POST"])
+def admin_action(phone):
+    if not session.get("admin"):
+        return redirect("/admin/login")
+    action = request.form.get("action")
+    if action == "pausa":
+        set_fase(phone, 99)
+    elif action == "riprendi":
+        set_fase(phone, 4)
+    elif action == "scrivi":
+        testo = request.form.get("testo", "").strip()
+        if testo:
+            save_message(phone, "assistant", testo)
+            threading.Thread(target=send_whatsapp_message, args=[phone, testo], daemon=True).start()
+    return redirect(f"/admin/chat/{phone}")
+
 # ─── WEBHOOK ───────────────────────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -884,4 +1146,3 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
-
