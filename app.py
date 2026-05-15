@@ -4,7 +4,7 @@ import random
 import threading
 import logging
 from datetime import datetime, timedelta
-from flask import Flask, request, Response, session, redirect, render_template_string
+from flask import Flask, request, Response
 from twilio.rest import Client
 import openai
 import psycopg2
@@ -26,16 +26,14 @@ TWILIO_WHATSAPP_NUMBER = os.environ["TWILIO_WHATSAPP_NUMBER"]
 DATABASE_URL           = os.environ["DATABASE_URL"]
 TELEGRAM_BOT_TOKEN     = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID       = os.environ.get("TELEGRAM_CHAT_ID", "")
-ADMIN_PASSWORD         = os.environ.get("ADMIN_PASSWORD", "Arbitro00@")
-
-app.secret_key = ADMIN_PASSWORD + "_secret"
 
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-# Timer attivi per numero — UN solo timer per numero alla volta
-active_timers = {}
-active_timers_lock = threading.Lock()
+# Buffer messaggi (batching)
+message_buffers = {}
+buffer_timers   = {}
+buffer_lock     = threading.Lock()
 
 # Deduplicazione messaggi
 processed_sids = set()
@@ -43,9 +41,8 @@ processed_sids_lock = threading.Lock()
 
 # ─── FASI ──────────────────────────────────────────────────────────────────────
 # 0  = info/primo contatto
-# 1  = acquisto confermato, benvenuto+regole+questionario parte 1 inviati
-# 2  = mamma ha risposto parte 1, questionario parte 2 inviato
-# 3  = questionario completo, piano schedulato (1 ora)
+# 1  = acquisto confermato, questionario inviato
+# 3  = questionario completo, piano schedulato
 # 4  = piano inviato, percorso attivo
 # 99 = chat in pausa
 
@@ -74,21 +71,15 @@ MSG_REGOLE = (
     "Scrivimi liberamente ogni volta che ne hai bisogno 🤍"
 )
 
-MSG_QUESTIONARIO_1 = (
-    "Per prepararti un piano su misura ho bisogno di conoscerti meglio. Iniziamo con alcune domande, "
-    "rispondimi con calma:\n\n"
+MSG_QUESTIONARIO = (
+    "Per prepararti un piano su misura ho bisogno di conoscerti meglio. Rispondimi con calma:\n\n"
     "1. Nominativo con cui hai effettuato l'ordine e data di acquisto\n"
     "2. Come ti chiami e quanti anni hai?\n"
     "3. Nome, data di nascita e peso attuale del bambino/a?\n"
     "4. E il primo figlio? Ha fratelli o sorelle?\n"
     "5. Descrivimi la sua giornata tipo: orario sveglia mattina, pisolini (orari e durata), orario nanna serale\n"
     "6. Come si addormenta? (seno, ciuccio, in braccio, da solo...)\n"
-    "7. Dove dorme? (culla, lettone, carrozzina...)\n\n"
-    "Rispondimi a queste prime domande con calma, poi ti mando le altre 🤍"
-)
-
-MSG_QUESTIONARIO_2 = (
-    "Grazie, quasi finita:\n\n"
+    "7. Dove dorme? (culla, lettone, carrozzina...)\n"
     "8. Quante volte si sveglia di notte e come lo riaddormenti?\n"
     "9. Allatti al seno, biberon o entrambi?\n"
     "10. Hai gia provato qualcosa per migliorare il sonno? Com'e andata?\n"
@@ -136,20 +127,6 @@ rispondi in 2-3 righe al massimo. Solo la risposta pratica, come un'amica espert
 
 Se la mamma racconta la situazione o chiede informazioni piu ampie:
 rispondi con piu dettaglio seguendo la struttura indicata piu avanti.
-Non usare mai formattazione markdown — niente asterischi per il grassetto,
-niente cancelletti per i titoli, niente numeri o bullet point per gli elenchi.
-Scrivi sempre in prosa fluida e discorsiva, come faresti in un messaggio WhatsApp.
-I concetti si esprimono in modo naturale nel testo, non in liste.
-
-QUANDO RISPONDERE IN MODO MINIMO
-Se il messaggio e una conferma, una chiusura o qualcosa di breve senza una domanda reale:
-tipo "ok", "grazie", "ci penso", "va bene", "capito", "perfetto", "ci provo", "ok grazie",
-non aggiungere nulla di nuovo.
-Rispondi solo con qualcosa di brevissimo e naturale, adattato al contesto:
-In fase informativa prima dell'acquisto: "Certo, sono qui quando vuoi 🤍"
-Durante il percorso attivo: "Bene, fammi sapere come va 🤍"
-E poi basta. Non aggiungere frasi motivazionali, non ribadire il percorso, non ripetere cose gia dette.
-Se non c'e nulla di utile da aggiungere, non aggiungere nulla.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PRIMO MESSAGGIO VAGO
@@ -178,12 +155,8 @@ alla fine gli lasci il LINK — scrivi esattamente cosi, senza parentesi quadre 
    Ti lascio il link se ti va: https://genitorinarmonia.com/products/sonno-magico
 
 GESTIONE OBIEZIONI (solo se la mamma le esprime):
-   - "Inizierei fra una settimana" -> rassicurala che non c'e fretta, puo acquistare adesso e iniziare quando vuole
-   - Dubbi sul prezzo -> spiega il valore: 30 giorni di supporto diretto, piano su misura, contatto quotidiano
-   - "Perche costa cosi poco?" -> e una scelta precisa per rendere il percorso accessibile a piu famiglie
-   - "Ho gia provato tutto" -> empatizza, poi fai capire che un piano su misura e diverso dai metodi generici
-   - "E troppo piccolo" -> non esiste eta troppo presto, il piano rispetta sempre eta e bisogni del bambino
-   Importante: adatta sempre il tono al contesto, non rispondere con frasi preconfezionate.
+   - "Inizierei fra una settimana" → "Nessun problema, acquista pure adesso — intanto leggi le guide e fra una settimana mi scrivi e partiamo."
+   - Dubbi sul prezzo → spiega il valore: 30 giorni di supporto diretto, piano su misura, contatto quotidiano, adattamento continuo
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUANDO LA MAMMA DICE "ACQUISTO SUBITO" / "LO PRENDO" / "LO COMPRO"
@@ -206,15 +179,10 @@ Quando la mamma e in percorso e ti scrive aggiornamenti o domande:
 PIANO PERSONALIZZATO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Quando generi il piano personalizzato, costruiscilo in modo dettagliato.
+
 Il piano deve sembrare scritto apposta per lei. Usa sempre il nome del bambino.
 Fai riferimento esplicito agli orari, alle abitudini e alla situazione specifica.
 Non usare mai frasi generiche o template standard.
-Il piano deve essere scritto interamente in prosa discorsiva,
-come se Paola lo stesse scrivendo su WhatsApp.
-Niente titoli, niente grassetti, niente bullet point, niente numerazioni.
-Le fasi si distinguono per il contenuto e per il filo logico del testo,
-non per la formattazione. Scrivi come parleresti a una mamma in una conversazione
-vera — caldo, diretto, concreto.
 
 STRUTTURA DEL PIANO:
 Dividi in fasi (2, 3, 4 o piu) in base alla situazione.
@@ -253,7 +221,8 @@ Non dare mai consigli medici. Se emergono aspetti sanitari, rimanda sempre al pe
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PROBLEMA CARRELLO / IMPORTO ERRATO
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se la mamma dice che al checkout non le esce 37 euro o le compare un importo diverso:
+Se la mamma dice che al checkout o al momento del pagamento non le esce 37 euro,
+o che le compare un importo diverso, o che non riesce a completare l'ordine per via del prezzo:
 l'unica spiegazione e che ha aggiunto il prodotto piu volte nel carrello.
 Rispondi sempre cosi:
 "L'unica spiegazione e che hai aggiunto il prodotto piu volte nel carrello.
@@ -278,6 +247,7 @@ Dimmi quando hai effettuato il bonifico cosi iniziamo 🤍"
 GESTIONE RIMBORSI
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Se la mamma e scontenta o chiede un rimborso:
+
 1. Prima empatizza genuinamente
 2. Fai domande per capire se puoi aiutarla in modo diverso
 3. Se insiste nel voler il rimborso, rispondi cosi:
@@ -289,7 +259,7 @@ Se la mamma e scontenta o chiede un rimborso:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COMANDI ADMIN
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se ricevi messaggi che iniziano con /inizia, /pausa, /riprendi, /nota, /acquisto, /scrivi:
+Se ricevi messaggi che iniziano con /inizia, /pausa, /riprendi, /nota, /acquisto:
 sono comandi interni. Non rispondere nulla.
 """
 
@@ -371,33 +341,6 @@ def get_history(phone, days=30):
         return [{"role": r["role"], "content": r["content"]} for r in rows]
     except Exception as e:
         logger.error(f"Errore lettura history: {e}")
-        return []
-
-def get_messages_since_last_reply(phone):
-    try:
-        conn = get_db()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT timestamp FROM messages
-            WHERE phone = %s AND role = 'assistant'
-            ORDER BY timestamp DESC LIMIT 1
-        """, (phone,))
-        last_reply = cur.fetchone()
-        if last_reply:
-            cutoff = last_reply["timestamp"]
-        else:
-            cutoff = datetime.now() - timedelta(days=30)
-        cur.execute("""
-            SELECT content FROM messages
-            WHERE phone = %s AND role = 'user' AND timestamp > %s
-            ORDER BY timestamp ASC
-        """, (phone, cutoff))
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-        return [r["content"] for r in rows]
-    except Exception as e:
-        logger.error(f"Errore get_messages_since_last_reply: {e}")
         return []
 
 def get_fase(phone):
@@ -516,25 +459,30 @@ def transcribe_audio(media_url):
         return None
 
 # ─── AI ────────────────────────────────────────────────────────────────────────
-def get_ai_response(phone, image_url=None):
+def get_ai_response(phone, user_message, image_url=None, extra_instruction=None):
     history = get_history(phone)
-    pending = get_messages_since_last_reply(phone)
-    user_message = "\n".join(pending) if pending else "(nessun nuovo messaggio)"
 
     if image_url:
         try:
-            img_response = requests.get(image_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=30)
+            img_response = requests.get(
+                image_url,
+                auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+                timeout=30
+            )
             img_data = base64.b64encode(img_response.content).decode("utf-8")
             content_type = img_response.headers.get("Content-Type", "image/jpeg")
             user_content = [
                 {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{img_data}"}},
-                {"type": "text", "text": user_message}
+                {"type": "text", "text": user_message or "Guarda questa immagine"}
             ]
         except Exception as e:
             logger.error(f"Errore download immagine: {e}")
-            user_content = user_message
+            user_content = user_message or ""
     else:
         user_content = user_message
+
+    if extra_instruction:
+        user_content = str(user_content) + f"\n\n[ISTRUZIONE SISTEMA: {extra_instruction}]"
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
@@ -556,10 +504,10 @@ def get_ai_response(phone, image_url=None):
 # ─── INVIO ─────────────────────────────────────────────────────────────────────
 def send_whatsapp_message(phone, text):
     chunks = []
-    while len(text) > 1000:
-        split_point = text.rfind('\n', 0, 1000)
+    while len(text) > 1500:
+        split_point = text.rfind('\n', 0, 1500)
         if split_point == -1:
-            split_point = 1000
+            split_point = 1500
         chunks.append(text[:split_point].strip())
         text = text[split_point:].strip()
     if text:
@@ -573,7 +521,7 @@ def send_whatsapp_message(phone, text):
             )
             threading.Thread(
                 target=send_telegram,
-                args=[f"🤖 <b>Bot → {phone}</b>\n{chunk}"],
+                args=[f"🤖 <b>Bot → {phone}</b>\n{chunk[:500]}{'...' if len(chunk) > 500 else ''}"],
                 daemon=True
             ).start()
             if len(chunks) > 1:
@@ -635,31 +583,42 @@ def invia_sequenza_acquisto(phone):
     send_whatsapp_message(phone, MSG_REGOLE)
     time.sleep(3)
 
-    save_message(phone, "assistant", MSG_QUESTIONARIO_1)
-    send_whatsapp_message(phone, MSG_QUESTIONARIO_1)
+    save_message(phone, "assistant", MSG_QUESTIONARIO)
+    send_whatsapp_message(phone, MSG_QUESTIONARIO)
     logger.info(f"Sequenza acquisto completata per {phone}")
 
-# ─── ELABORAZIONE RISPOSTA ─────────────────────────────────────────────────────
-def process_response(phone, image_url=None):
-    with active_timers_lock:
-        active_timers.pop(phone, None)
+# ─── BATCHING ──────────────────────────────────────────────────────────────────
+def process_batch(phone):
+    with buffer_lock:
+        batch = message_buffers.pop(phone, [])
+        buffer_timers.pop(phone, None)
+
+    if not batch:
+        return
+
+    combined_text = "\n".join([b["text"] for b in batch if b.get("text")])
+    image_url = next((b["image_url"] for b in batch if b.get("image_url")), None)
+
+    if not combined_text and not image_url:
+        return
+
+    save_message(phone, "user", combined_text or "[immagine]")
 
     fase = get_fase(phone)
-    logger.info(f"process_response per {phone} — fase {fase}")
+    logger.info(f"Processing batch per {phone} — fase {fase}")
 
     if fase == 0:
-        pending = get_messages_since_last_reply(phone)
-        combined = "\n".join(pending).lower()
-
+        testo_lower = (combined_text or "").lower()
         parole_acquisto = [
             "ho acquistato", "ho comprato", "ho fatto l'ordine", "ho effettuato l'ordine",
             "ho preso il pacchetto", "ho preso il percorso", "ho pagato", "ho fatto il pagamento",
             "ordine completato", "pagamento completato", "l'ho preso",
             "l'ho comprato", "l'ho acquistato", "ho fatto l'acquisto"
         ]
-        is_acquisto = any(p in combined for p in parole_acquisto)
+        is_acquisto = any(p in testo_lower for p in parole_acquisto)
 
-        if not is_acquisto and combined:
+        # Se non rilevato da parole chiave, usa GPT con contesto
+        if not is_acquisto and combined_text:
             try:
                 history = get_history(phone)
                 history_text = "\n".join([
@@ -670,278 +629,73 @@ def process_response(phone, image_url=None):
                     model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO."},
-                        {"role": "user", "content": f"Contesto:\n{history_text}\n\nI messaggi indicano che la persona ha acquistato o completato un ordine? Messaggi: '{combined}'"}
+                        {"role": "user", "content": f"Contesto conversazione:\n{history_text}\n\nL'ultimo messaggio indica che la persona ha acquistato, pagato o completato un ordine? Messaggio: '{combined_text}'"}
                     ],
                     max_tokens=5,
                     temperature=0
                 )
-                if check_response.choices[0].message.content.strip().lower().startswith("si"):
+                risposta = check_response.choices[0].message.content.strip().lower()
+                if risposta.startswith("si"):
                     is_acquisto = True
                     logger.info(f"Acquisto rilevato da GPT per {phone}")
             except Exception as e:
                 logger.error(f"Errore check acquisto GPT: {e}")
 
+        # Se non rilevato da testo ma c'e un'immagine
         if not is_acquisto and image_url:
             try:
-                img_response = requests.get(image_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=30)
+                img_response = requests.get(
+                    image_url,
+                    auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+                    timeout=30
+                )
                 img_data = base64.b64encode(img_response.content).decode("utf-8")
                 content_type = img_response.headers.get("Content-Type", "image/jpeg")
+                check_messages = [
+                    {"role": "system", "content": "Sei un analizzatore di immagini. Rispondi SOLO con SI o NO."},
+                    {"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{img_data}"}},
+                        {"type": "text", "text": "Questa immagine mostra una conferma d'ordine, ricevuta di pagamento o schermata di acquisto completato? Rispondi SOLO con SI o NO."}
+                    ]}
+                ]
                 check_response = openai_client.chat.completions.create(
                     model="gpt-4o",
-                    messages=[
-                        {"role": "system", "content": "Rispondi SOLO con SI o NO."},
-                        {"role": "user", "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{img_data}"}},
-                            {"type": "text", "text": "Questa immagine mostra una conferma d'ordine o ricevuta di pagamento?"}
-                        ]}
-                    ],
+                    messages=check_messages,
                     max_tokens=5,
                     temperature=0
                 )
-                if check_response.choices[0].message.content.strip().lower().startswith("si"):
+                check = check_response.choices[0].message.content.strip().lower()
+                if check.startswith("si"):
                     is_acquisto = True
+                    logger.info(f"Acquisto rilevato da immagine per {phone}")
             except Exception as e:
-                logger.error(f"Errore check immagine: {e}")
+                logger.error(f"Errore check immagine acquisto: {e}")
 
         if is_acquisto:
             invia_sequenza_acquisto(phone)
             return
 
-        ai_reply = get_ai_response(phone, image_url=image_url)
+        # Risposta informativa — 5 minuti
+        time.sleep(300)
+        ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
 
     elif fase == 1:
-        time.sleep(300)
-        save_message(phone, "assistant", MSG_QUESTIONARIO_2)
-        send_whatsapp_message(phone, MSG_QUESTIONARIO_2)
-        set_fase(phone, 2)
-        logger.info(f"Questionario parte 2 inviato a {phone}")
-
-    elif fase == 2:
         piano_time = datetime.now() + timedelta(hours=1)
         set_fase(phone, 3, piano_scheduled_at=piano_time)
-        logger.info(f"Piano schedulato per {phone} alle {piano_time}")
 
     elif fase == 3:
-        logger.info(f"Fase 3 per {phone} — bot in attesa del piano")
-
-    elif fase == 4:
-        ai_reply = get_ai_response(phone, image_url=image_url)
+        time.sleep(2)
+        ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
         save_message(phone, "assistant", ai_reply)
         send_whatsapp_message(phone, ai_reply)
 
-# ─── ADMIN ─────────────────────────────────────────────────────────────────────
-ADMIN_HTML = """<!DOCTYPE html>
-<html lang="it">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Genitori in Armonia — Admin</title>
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: Georgia, serif; background: #faf9f7; color: #2c2c2c; }
-.header { background: #2c2c2c; color: #f5f0e8; padding: 20px 30px; display: flex; align-items: center; justify-content: space-between; }
-.header h1 { font-size: 1.3rem; font-weight: normal; letter-spacing: 0.05em; }
-.header a { color: #c8a882; font-size: 0.85rem; text-decoration: none; }
-.container { max-width: 1100px; margin: 0 auto; padding: 30px 20px; }
-.stats { display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap; }
-.stat { background: white; border: 1px solid #e8e2d9; border-radius: 8px; padding: 15px 20px; flex: 1; min-width: 120px; }
-.stat .num { font-size: 2rem; font-weight: bold; }
-.stat .label { font-size: 0.75rem; color: #888; margin-top: 3px; text-transform: uppercase; letter-spacing: 0.05em; }
-.chat-list { display: flex; flex-direction: column; gap: 10px; }
-.chat-card { background: white; border: 1px solid #e8e2d9; border-radius: 8px; padding: 15px 20px; display: flex; align-items: center; justify-content: space-between; text-decoration: none; color: inherit; transition: border-color 0.2s; }
-.chat-card:hover { border-color: #c8a882; }
-.phone { font-weight: bold; }
-.note { font-size: 0.85rem; color: #666; margin-top: 4px; }
-.meta { text-align: right; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
-.badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: bold; }
-.b0 { background: #f0f0f0; color: #666; }
-.b1, .b2 { background: #fff3cd; color: #856404; }
-.b3 { background: #cce5ff; color: #004085; }
-.b4 { background: #d4edda; color: #155724; }
-.b99 { background: #f8d7da; color: #721c24; }
-.days { font-size: 0.8rem; color: #888; }
-.urgent { color: #dc3545; font-weight: bold; }
-.back { display: inline-block; margin-bottom: 20px; color: #c8a882; text-decoration: none; }
-.chat-header { background: white; border: 1px solid #e8e2d9; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
-.chat-actions { display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
-.btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 0.85rem; font-family: inherit; }
-.btn-primary { background: #2c2c2c; color: white; }
-.btn-warning { background: #ffc107; color: #2c2c2c; }
-.btn-success { background: #28a745; color: white; }
-.note-field { width: 100%; padding: 8px 12px; border: 1px solid #e8e2d9; border-radius: 6px; font-family: inherit; font-size: 0.9rem; margin-top: 10px; }
-.messages { display: flex; flex-direction: column; gap: 12px; }
-.msg-wrap { display: flex; flex-direction: column; }
-.msg-wrap.user { align-items: flex-start; }
-.msg-wrap.assistant { align-items: flex-end; }
-.msg { max-width: 80%; padding: 12px 16px; border-radius: 12px; font-size: 0.9rem; line-height: 1.5; }
-.msg.user { background: #f0ebe3; border-bottom-left-radius: 3px; }
-.msg.assistant { background: #2c2c2c; color: #f5f0e8; border-bottom-right-radius: 3px; }
-.msg-time { font-size: 0.7rem; opacity: 0.6; margin-top: 5px; }
-.login-box { max-width: 400px; margin: 100px auto; background: white; border: 1px solid #e8e2d9; border-radius: 12px; padding: 40px; text-align: center; }
-.login-box h2 { margin-bottom: 5px; font-size: 1.4rem; }
-.login-box p { color: #888; margin-bottom: 25px; font-size: 0.9rem; }
-.login-box input { width: 100%; padding: 12px; border: 1px solid #e8e2d9; border-radius: 6px; font-size: 1rem; margin-bottom: 15px; font-family: inherit; }
-.login-box button { width: 100%; padding: 12px; background: #2c2c2c; color: white; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; font-family: inherit; }
-.error { color: #dc3545; margin-bottom: 15px; font-size: 0.9rem; }
-.sub { font-size: 0.8rem; color: #888; margin-top: 5px; }
-</style>
-</head>
-<body>{{ content }}</body>
-</html>"""
-
-def fase_badge(fase):
-    labels = {0:"Info",1:"Quest. 1",2:"Quest. 2",3:"Attesa piano",4:"Percorso attivo",99:"In pausa"}
-    cls = {0:"b0",1:"b1",2:"b2",3:"b3",4:"b4",99:"b99"}
-    return f'<span class="badge {cls.get(fase,"b0")}">{labels.get(fase,str(fase))}</span>'
-
-@app.route("/admin/login", methods=["GET","POST"])
-def admin_login():
-    error = ""
-    if request.method == "POST":
-        if request.form.get("password") == ADMIN_PASSWORD:
-            session["admin"] = True
-            return redirect("/admin")
-        error = "Password errata"
-    content = f"""<div class="login-box">
-        <h2>Genitori in Armonia</h2><p>Pannello admin</p>
-        {'<div class="error">'+error+'</div>' if error else ''}
-        <form method="POST">
-            <input type="password" name="password" placeholder="Password" autofocus>
-            <button type="submit">Accedi</button>
-        </form></div>"""
-    return render_template_string(ADMIN_HTML, content=content)
-
-@app.route("/admin/logout")
-def admin_logout():
-    session.pop("admin", None)
-    return redirect("/admin/login")
-
-@app.route("/admin")
-def admin_index():
-    if not session.get("admin"):
-        return redirect("/admin/login")
-    try:
-        conn = get_db()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("""
-            SELECT c.phone, c.fase, c.start_date,
-                   (SELECT content FROM messages WHERE phone=c.phone AND role='user' ORDER BY timestamp DESC LIMIT 1) as last_msg,
-                   (SELECT timestamp FROM messages WHERE phone=c.phone ORDER BY timestamp DESC LIMIT 1) as last_time
-            FROM consultations c ORDER BY last_time DESC NULLS LAST
-        """)
-        chats = cur.fetchall()
-        cur.execute("SELECT COUNT(DISTINCT phone) as tot FROM consultations WHERE fase=4")
-        attive = cur.fetchone()["tot"]
-        cur.execute("SELECT COUNT(DISTINCT phone) as tot FROM consultations WHERE fase=0")
-        info = cur.fetchone()["tot"]
-        cur.execute("SELECT COUNT(DISTINCT phone) as tot FROM consultations")
-        totale = cur.fetchone()["tot"]
-        cur.close(); conn.close()
-
-        cards = ""
-        for c in chats:
-            fase = c["fase"]
-            phone = c["phone"]
-            last_msg = (c["last_msg"] or "")[:80]
-            last_time = c["last_time"].strftime("%d/%m %H:%M") if c["last_time"] else ""
-            days_str = ""
-            if c["start_date"] and fase == 4:
-                dl = 30 - (datetime.now().date() - c["start_date"]).days
-                cls = "urgent" if dl <= 5 else ""
-                days_str = f'<span class="days {cls}">{dl} giorni rimasti</span>'
-            cards += f"""<a class="chat-card" href="/admin/chat/{phone}">
-                <div><div class="phone">{phone}</div><div class="note">{last_msg}</div></div>
-                <div class="meta">{fase_badge(fase)}<span class="days">{last_time}</span>{days_str}</div>
-            </a>"""
-
-        content = f"""
-        <div class="header"><h1>Genitori in Armonia — Admin</h1><a href="/admin/logout">Esci</a></div>
-        <div class="container">
-            <div class="stats">
-                <div class="stat"><div class="num">{totale}</div><div class="label">Totale</div></div>
-                <div class="stat"><div class="num">{attive}</div><div class="label">Percorsi attivi</div></div>
-                <div class="stat"><div class="num">{info}</div><div class="label">In fase info</div></div>
-            </div>
-            <div class="chat-list">{cards}</div>
-        </div>"""
-        return render_template_string(ADMIN_HTML, content=content)
-    except Exception as e:
-        return f"Errore: {e}"
-
-@app.route("/admin/chat/<path:phone>")
-def admin_chat(phone):
-    if not session.get("admin"):
-        return redirect("/admin/login")
-    try:
-        conn = get_db()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM consultations WHERE phone=%s", (phone,))
-        cons = cur.fetchone()
-        cur.execute("SELECT role,content,timestamp FROM messages WHERE phone=%s ORDER BY timestamp ASC", (phone,))
-        msgs = cur.fetchall()
-        cur.close(); conn.close()
-
-        fase = cons["fase"] if cons else 0
-        start_date = cons["start_date"].strftime("%d/%m/%Y") if cons and cons["start_date"] else "Non impostata"
-        days_left = ""
-        if cons and cons["start_date"] and fase == 4:
-            dl = 30 - (datetime.now().date() - cons["start_date"]).days
-            days_left = f" — {dl} giorni rimasti"
-
-        bubbles = ""
-        for m in msgs:
-            role = m["role"]
-            text = m["content"].replace("<","&lt;").replace(">","&gt;").replace("\n","<br>")
-            ts = m["timestamp"].strftime("%d/%m %H:%M")
-            bubbles += f'<div class="msg-wrap {role}"><div class="msg {role}">{text}<div class="msg-time">{ts}</div></div></div>'
-
-        content = f"""
-        <div class="header"><h1>Genitori in Armonia — Admin</h1><a href="/admin/logout">Esci</a></div>
-        <div class="container">
-            <a class="back" href="/admin">← Torna alla lista</a>
-            <div class="chat-header">
-                <div class="phone">{phone}</div>
-                <div style="margin-top:8px">{fase_badge(fase)}</div>
-                <div class="sub">Data inizio: {start_date}{days_left}</div>
-                <div class="chat-actions">
-                    <form method="POST" action="/admin/action/{phone}" style="display:contents">
-                        <input type="hidden" name="action" value="pausa">
-                        <button class="btn btn-warning" type="submit">⏸ Pausa bot</button>
-                    </form>
-                    <form method="POST" action="/admin/action/{phone}" style="display:contents">
-                        <input type="hidden" name="action" value="riprendi">
-                        <button class="btn btn-success" type="submit">▶ Riprendi bot</button>
-                    </form>
-                </div>
-                <form method="POST" action="/admin/action/{phone}">
-                    <input type="hidden" name="action" value="scrivi">
-                    <textarea class="note-field" name="testo" rows="3" placeholder="Scrivi un messaggio alla mamma..."></textarea>
-                    <button class="btn btn-primary" type="submit" style="margin-top:8px">Invia messaggio</button>
-                </form>
-            </div>
-            <div class="messages">{bubbles}</div>
-        </div>"""
-        return render_template_string(ADMIN_HTML, content=content)
-    except Exception as e:
-        return f"Errore: {e}"
-
-@app.route("/admin/action/<path:phone>", methods=["POST"])
-def admin_action(phone):
-    if not session.get("admin"):
-        return redirect("/admin/login")
-    action = request.form.get("action")
-    if action == "pausa":
-        set_fase(phone, 99)
-    elif action == "riprendi":
-        set_fase(phone, 4)
-    elif action == "scrivi":
-        testo = request.form.get("testo", "").strip()
-        if testo:
-            save_message(phone, "assistant", testo)
-            threading.Thread(target=send_whatsapp_message, args=[phone, testo], daemon=True).start()
-    return redirect(f"/admin/chat/{phone}")
+    elif fase == 4:
+        time.sleep(random.randint(1800, 2400))
+        ai_reply = get_ai_response(phone, combined_text, image_url=image_url)
+        save_message(phone, "assistant", ai_reply)
+        send_whatsapp_message(phone, ai_reply)
 
 # ─── WEBHOOK ───────────────────────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
@@ -954,6 +708,7 @@ def webhook():
 
     logger.info(f"Messaggio da {phone}: '{body}' | media: {num_media}")
 
+    # Deduplicazione
     message_sid = request.form.get("MessageSid", "")
     if message_sid:
         with processed_sids_lock:
@@ -964,10 +719,11 @@ def webhook():
             if len(processed_sids) > 1000:
                 processed_sids.clear()
 
+    # ── Comandi admin ──────────────────────────────────────────────────────────
     if body.startswith("/inizia"):
         parts = body.strip().split()
         if len(parts) == 2:
-            target = parts[1].replace("+","").replace(" ","")
+            target = parts[1].replace("+", "").replace(" ", "")
             set_start_date(target, datetime.now().date())
             set_fase(target, 4)
         return Response("OK", status=200)
@@ -975,46 +731,38 @@ def webhook():
     if body.startswith("/pausa"):
         parts = body.strip().split()
         if len(parts) == 2:
-            target = parts[1].replace("+","").replace(" ","")
+            target = parts[1].replace("+", "").replace(" ", "")
             set_fase(target, 99)
         return Response("OK", status=200)
 
     if body.startswith("/riprendi"):
         parts = body.strip().split()
         if len(parts) == 2:
-            target = parts[1].replace("+","").replace(" ","")
+            target = parts[1].replace("+", "").replace(" ", "")
             set_fase(target, 4)
         return Response("OK", status=200)
 
     if body.startswith("/acquisto"):
         parts = body.strip().split()
         if len(parts) == 2:
-            target = parts[1].replace("+","").replace(" ","")
+            target = parts[1].replace("+", "").replace(" ", "")
             threading.Thread(target=invia_sequenza_acquisto, args=[target], daemon=True).start()
         return Response("OK", status=200)
 
     if body.startswith("/nota"):
         parts = body.strip().split(None, 2)
         if len(parts) >= 3:
-            target = parts[1].replace("+","").replace(" ","")
+            target = parts[1].replace("+", "").replace(" ", "")
             nota = parts[2]
             save_message(target, "user", f"[NOTA ADMIN: {nota}]")
         return Response("OK", status=200)
 
-    if body.startswith("/scrivi"):
-        parts = body.strip().split(None, 2)
-        if len(parts) >= 3:
-            target = parts[1].replace("+","").replace(" ","")
-            testo = parts[2]
-            save_message(target, "assistant", testo)
-            send_whatsapp_message(target, testo)
-            logger.info(f"Messaggio admin inviato a {target}")
-        return Response("OK", status=200)
-
+    # ── Chat in pausa ─────────────────────────────────────────────────────────
     if get_fase(phone) == 99:
         logger.info(f"Chat {phone} in pausa — ignorato")
         return Response("OK", status=200)
 
+    # ── Gestione media ────────────────────────────────────────────────────────
     text_to_process = body
     image_url_to_process = None
 
@@ -1032,8 +780,7 @@ def webhook():
     if not text_to_process and not image_url_to_process:
         return Response("OK", status=200)
 
-    save_message(phone, "user", text_to_process or "[immagine]")
-
+    # Notifica Telegram messaggio in entrata
     if text_to_process:
         threading.Thread(
             target=send_telegram,
@@ -1041,27 +788,19 @@ def webhook():
             daemon=True
         ).start()
 
-    with active_timers_lock:
-        if phone in active_timers:
-            logger.info(f"Timer gia attivo per {phone} — messaggio salvato nel DB")
-            return Response("OK", status=200)
-
-        fase = get_fase(phone)
-        if fase == 0:
-            delay = 300
-        elif fase == 1:
-            delay = 600
-        elif fase == 2:
-            delay = 600
-        elif fase == 4:
-            delay = random.randint(1800, 2400)
-        else:
-            delay = 5
-
-        timer = threading.Timer(delay, process_response, args=[phone, image_url_to_process])
-        active_timers[phone] = timer
+    # ── Batching ──────────────────────────────────────────────────────────────
+    with buffer_lock:
+        if phone not in message_buffers:
+            message_buffers[phone] = []
+        message_buffers[phone].append({
+            "text": text_to_process,
+            "image_url": image_url_to_process
+        })
+        if phone in buffer_timers:
+            buffer_timers[phone].cancel()
+        timer = threading.Timer(30, process_batch, args=[phone])
+        buffer_timers[phone] = timer
         timer.start()
-        logger.info(f"Timer avviato per {phone} — delay {delay}s — fase {fase}")
 
     return Response("OK", status=200)
 
