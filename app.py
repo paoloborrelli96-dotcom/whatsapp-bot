@@ -843,9 +843,13 @@ def webhook():
 
         fase = get_fase(phone)
         if fase == 0:
-            delay = 300
+            delay = 300                      # 5 minuti
+        elif fase == 1:
+            delay = 600                      # 10 minuti — raccoglie risposte parte 1
+        elif fase == 2:
+            delay = 600                      # 10 minuti — raccoglie risposte parte 2
         elif fase == 4:
-            delay = random.randint(1800, 2400)
+            delay = random.randint(1800, 2400)  # 30-40 minuti
         else:
             delay = 5
 
@@ -880,3 +884,4 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
+
