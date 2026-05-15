@@ -423,6 +423,13 @@ def telegram_webhook():
         phone = row[0]
         logger.info(f"Risposta Paola via Telegram topic per {phone}: {text[:50]}")
 
+        # Cancella il timer attivo — Paola ha già risposto
+        with active_timers_lock:
+            if phone in active_timers:
+                active_timers[phone].cancel()
+                active_timers.pop(phone, None)
+                logger.info(f"Timer cancellato per {phone} — risposta manuale Paola")
+
         # Salva e manda su WhatsApp
         save_message(phone, "assistant", text)
         send_whatsapp_message(phone, text)
