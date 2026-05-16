@@ -49,6 +49,7 @@ topic_cache_lock = threading.Lock()
 # 2  = mamma ha risposto parte 1, questionario parte 2 inviato
 # 3  = questionario completo, piano schedulato (1 ora)
 # 4  = piano inviato, percorso attivo
+# 5  = attesa conferma completamento questionario
 # 99 = chat in pausa
 
 # ─── TESTI FISSI ───────────────────────────────────────────────────────────────
@@ -98,6 +99,10 @@ MSG_QUESTIONARIO_2 = (
     "12. Il tuo partner ti aiuta di notte?\n"
     "13. Qual e la difficolta principale che vuoi risolvere?\n"
     "14. C'e altro che vuoi dirmi che per te e importante che io sappia?"
+)
+
+MSG_CONFERMA_QUESTIONARIO = (
+    "Hai risposto a tutto? Dimmi quando hai finito cosi inizio subito a prepararti il piano 🤍"
 )
 
 # ─── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
@@ -858,9 +863,39 @@ def process_response(phone, image_url=None):
         logger.info(f"Questionario parte 2 inviato a {phone}")
 
     elif fase == 2:
-        piano_time = datetime.now() + timedelta(hours=1)
-        set_fase(phone, 3, piano_scheduled_at=piano_time)
-        logger.info(f"Piano schedulato per {phone} alle {piano_time}")
+        # Manda messaggio di conferma e aspetta che la mamma dica di aver finito
+        save_message(phone, "assistant", MSG_CONFERMA_QUESTIONARIO)
+        send_whatsapp_message(phone, MSG_CONFERMA_QUESTIONARIO)
+        set_fase(phone, 5)
+        logger.info(f"Attesa conferma completamento questionario per {phone}")
+
+    elif fase == 5:
+        # Mamma ha risposto — classifica se ha finito il questionario
+        pending = get_messages_since_last_reply(phone)
+        combined = "\n".join(pending)
+        try:
+            check_response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO."},
+                    {"role": "user", "content": f"La persona sta dicendo che ha finito di rispondere alle domande o che e pronta per il piano? Messaggio: '{combined}'"}
+                ],
+                max_tokens=5,
+                temperature=0
+            )
+            ha_finito = check_response.choices[0].message.content.strip().lower().startswith("si")
+        except Exception as e:
+            logger.error(f"Errore check conferma: {e}")
+            ha_finito = False
+
+        if ha_finito:
+            piano_time = datetime.now() + timedelta(hours=1)
+            set_fase(phone, 3, piano_scheduled_at=piano_time)
+            logger.info(f"Piano schedulato per {phone} alle {piano_time}")
+        else:
+            risposta = "Ok, prenditi il tempo che ti serve. Dimmi quando hai finito cosi inizio a preparare il tuo piano 🤍"
+            save_message(phone, "assistant", risposta)
+            send_whatsapp_message(phone, risposta)
 
     elif fase == 3:
         logger.info(f"Fase 3 per {phone} — bot in attesa del piano")
@@ -983,6 +1018,8 @@ def webhook():
             delay = 600
         elif fase == 2:
             delay = 600
+        elif fase == 5:
+            delay = 30   # quasi subito — aspetta la conferma della mamma
         elif fase == 4:
             delay = random.randint(1800, 2400)
         else:
