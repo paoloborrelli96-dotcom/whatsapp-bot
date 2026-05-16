@@ -54,7 +54,7 @@ topic_cache_lock = threading.Lock()
 
 # ─── TESTI FISSI ───────────────────────────────────────────────────────────────
 MSG_BENVENUTO = (
-    "Ciao grazie per la fiducia, molto piacere 😇\n\n"
+    "Grazie per la fiducia, molto piacere 😇\n\n"
     "Facciamo cosi: per capire bene la vostra situazione, ti mando un questionario dettagliato "
     "e da li ti preparo un piano personalizzato.\n"
     "Ti mando anche un messaggio che invio a tutti con delle semplici regole per la chat e le consulenze."
