@@ -90,7 +90,7 @@ MSG_QUESTIONARIO_1 = (
 )
 
 MSG_QUESTIONARIO_2 = (
-    "Grazie, quasi finita:\n\n"
+    "Rispondi anche a queste, grazie:\n\n"
     "8. Quante volte si sveglia di notte e come lo riaddormenti?\n"
     "9. Allatti al seno, biberon o entrambi?\n"
     "10. Hai gia provato qualcosa per migliorare il sonno? Com'e andata?\n"
