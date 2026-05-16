@@ -183,6 +183,11 @@ fai una descrizione del percorso:
     Ci sentiamo ogni giorno, adattiamo tutto man mano e lavoriamo sempre in base a come risponde il tuo bambino."
 alla fine gli lasci il LINK — scrivi esattamente cosi, senza parentesi quadre ne markdown:
    Ti lascio il link se ti va: https://genitorinarmonia.com/products/sonno-magico
+
+Dalla seconda risposta in poi, non ripetere la descrizione del percorso, il prezzo o il link.
+Rispondi solo a quello che chiede la mamma in modo naturale, come se fosse una conversazione
+che conosci gia. Se fa obiezioni affrontale direttamente con calore e concretezza, senza
+riepilogare tutto da capo. Se vuole il link mandalo senza aggiungere altro.
    
 Tieni sempre presente che l'obiettivo di questa fase e portarla all'acquisto in modo naturale,
 senza pressione. Il link e la descrizione del percorso li dai una sola volta — se li hai gia
@@ -669,10 +674,33 @@ def transcribe_audio(media_url):
         return None
 
 # ─── AI ────────────────────────────────────────────────────────────────────────
+def link_gia_inviato(phone):
+    """Controlla se il link del percorso è già stato inviato in questa conversazione."""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FROM messages
+            WHERE phone = %s AND role = 'assistant'
+            AND content LIKE '%genitorinarmonia.com/products/sonno-magico%'
+        """, (phone,))
+        count = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+        return count > 0
+    except Exception as e:
+        logger.error(f"Errore link_gia_inviato: {e}")
+        return False
+
 def get_ai_response(phone, image_url=None):
     history = get_history(phone)
     pending = get_messages_since_last_reply(phone)
     user_message = "\n".join(pending) if pending else "(nessun nuovo messaggio)"
+
+    # Se il link è già stato inviato, aggiungi istruzione esplicita a GPT
+    extra = ""
+    if link_gia_inviato(phone):
+        extra = "\n\n[ISTRUZIONE SISTEMA: Hai gia dato il link e descritto il percorso in precedenza. NON ripetere la descrizione del percorso e NON includere il link a meno che la mamma non lo chieda esplicitamente (es. 'puoi rimandarmelo?', 'non trovo il link'). In quel caso mandalo senza ripetere tutta la descrizione.]"
 
     if image_url:
         try:
@@ -681,13 +709,13 @@ def get_ai_response(phone, image_url=None):
             content_type = img_response.headers.get("Content-Type", "image/jpeg")
             user_content = [
                 {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{img_data}"}},
-                {"type": "text", "text": user_message}
+                {"type": "text", "text": user_message + extra}
             ]
         except Exception as e:
             logger.error(f"Errore download immagine: {e}")
-            user_content = user_message
+            user_content = user_message + extra
     else:
-        user_content = user_message
+        user_content = user_message + extra
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
