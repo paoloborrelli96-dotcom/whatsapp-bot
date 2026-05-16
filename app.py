@@ -906,21 +906,32 @@ def process_response(phone, image_url=None):
     elif fase == 5:
         # Mamma ha risposto — classifica se ha finito il questionario
         pending = get_messages_since_last_reply(phone)
-        combined = "\n".join(pending)
-        try:
-            check_response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO."},
-                    {"role": "user", "content": f"La persona sta dicendo che ha finito di rispondere alle domande o che e pronta per il piano? Messaggio: '{combined}'"}
-                ],
-                max_tokens=5,
-                temperature=0
-            )
-            ha_finito = check_response.choices[0].message.content.strip().lower().startswith("si")
-        except Exception as e:
-            logger.error(f"Errore check conferma: {e}")
-            ha_finito = False
+        combined = "\n".join(pending).lower().strip()
+
+        # Controlla prima con parole chiave dirette
+        parole_finito = [
+            "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto",
+            "risposto", "ok", "fatto", "ho fatto", "ecco tutto", "tutto",
+            "completato", "ho completato", "pronta", "sono pronta", "yes"
+        ]
+        ha_finito = any(combined == p or combined.startswith(p + " ") or combined.startswith(p + ",") for p in parole_finito)
+
+        # Se non trovato con parole chiave, usa GPT
+        if not ha_finito:
+            try:
+                check_response = openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO. SI se la persona indica in qualsiasi modo che ha finito, completato, risposto a tutto, o e pronta. NO solo se chiede altro tempo o dice esplicitamente che non ha ancora finito."},
+                        {"role": "user", "content": f"Messaggio: '{combined}'"}
+                    ],
+                    max_tokens=5,
+                    temperature=0
+                )
+                ha_finito = check_response.choices[0].message.content.strip().lower().startswith("si")
+            except Exception as e:
+                logger.error(f"Errore check conferma: {e}")
+                ha_finito = False
 
         if ha_finito:
             piano_time = datetime.now() + timedelta(hours=1)
@@ -1011,6 +1022,51 @@ def webhook():
             save_message(target, "assistant", testo)
             send_whatsapp_message(target, testo)
             logger.info(f"Messaggio admin inviato a {target}")
+        return Response("OK", status=200)
+
+    if body.startswith("/piano"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            with active_timers_lock:
+                if target in active_timers:
+                    active_timers[target].cancel()
+                    active_timers.pop(target, None)
+            threading.Thread(target=send_piano, args=[target], daemon=True).start()
+        return Response("OK", status=200)
+
+    if body.startswith("/q1"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            set_fase(target, 1)
+            save_message(target, "assistant", MSG_QUESTIONARIO_1)
+            send_whatsapp_message(target, MSG_QUESTIONARIO_1)
+        return Response("OK", status=200)
+
+    if body.startswith("/q2"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            set_fase(target, 2)
+            save_message(target, "assistant", MSG_QUESTIONARIO_2)
+            send_whatsapp_message(target, MSG_QUESTIONARIO_2)
+        return Response("OK", status=200)
+
+    if body.startswith("/fase"):
+        parts = body.strip().split()
+        if len(parts) == 3:
+            target = parts[1].replace("+", "").replace(" ", "")
+            try:
+                nuova_fase = int(parts[2])
+                set_fase(target, nuova_fase)
+                with active_timers_lock:
+                    if target in active_timers:
+                        active_timers[target].cancel()
+                        active_timers.pop(target, None)
+                logger.info(f"Fase {nuova_fase} impostata per {target}")
+            except ValueError:
+                pass
         return Response("OK", status=200)
 
     if get_fase(phone) == 99:
