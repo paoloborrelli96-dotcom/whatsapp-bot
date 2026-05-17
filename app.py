@@ -12,6 +12,7 @@ from psycopg2.extras import RealDictCursor
 import requests
 import base64
 import io
+import pytz
 
 # ─── CONFIGURAZIONE ────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +28,18 @@ DATABASE_URL           = os.environ["DATABASE_URL"]
 TELEGRAM_BOT_TOKEN     = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID       = os.environ.get("TELEGRAM_CHAT_ID", "")
 TELEGRAM_GROUP_ID      = os.environ.get("TELEGRAM_GROUP_ID", "")
+TIMEZONE               = os.environ.get("TIMEZONE", "Europe/Rome")
+
+def in_orario_silenzio():
+    """Controlla se siamo nell'orario di silenzio (23:00 - 07:00 ora italiana)."""
+    try:
+        tz = pytz.timezone(TIMEZONE)
+        ora_locale = datetime.now(tz)
+        ora = ora_locale.hour
+        return ora >= 23 or ora < 7
+    except Exception as e:
+        logger.error(f"Errore orario silenzio: {e}")
+        return False
 
 openai_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -1143,6 +1156,11 @@ def webhook():
     if text_to_process:
         threading.Thread(target=send_to_topic, args=[phone, text_to_process, False], daemon=True).start()
 
+    # ── Orario silenzio (23:00 - 07:00 ora italiana) ──────────────────────────
+    if in_orario_silenzio():
+        logger.info(f"Orario silenzio — messaggio di {phone} salvato nel DB, nessun timer")
+        return Response("OK", status=200)
+
     with active_timers_lock:
         if phone in active_timers:
             logger.info(f"Timer gia attivo per {phone} — messaggio salvato nel DB")
@@ -1171,13 +1189,61 @@ def webhook():
 
 # ─── JOB BACKGROUND ────────────────────────────────────────────────────────────
 def background_job():
+    risveglio_fatto = False
     while True:
         try:
-            for phone in get_pianos_to_send():
-                send_piano(phone)
-            for phone in get_consultations_due_for_renewal():
-                send_renewal_message(phone)
-                mark_renewal_sent(phone)
+            # Invia piani schedulati solo fuori orario silenzio
+            if not in_orario_silenzio():
+                for phone in get_pianos_to_send():
+                    send_piano(phone)
+                for phone in get_consultations_due_for_renewal():
+                    send_renewal_message(phone)
+                    mark_renewal_sent(phone)
+
+            # Risveglio mattutino — alle 07:00 crea timer per messaggi notturni
+            try:
+                tz = pytz.timezone(TIMEZONE)
+                ora_locale = datetime.now(tz)
+                ora = ora_locale.hour
+                if ora >= 7 and not risveglio_fatto:
+                    risveglio_fatto = True
+                    logger.info("Risveglio mattutino — controllo messaggi notturni")
+                    conn = get_db()
+                    cur = conn.cursor()
+                    cur.execute("""
+                        SELECT DISTINCT m.phone FROM messages m
+                        JOIN consultations c ON c.phone = m.phone
+                        WHERE m.role = 'user'
+                        AND c.fase NOT IN (3, 99)
+                        AND m.timestamp > NOW() - INTERVAL '12 hours'
+                        AND m.timestamp > COALESCE(
+                            (SELECT MAX(timestamp) FROM messages
+                             WHERE phone = m.phone AND role = 'assistant'),
+                            NOW() - INTERVAL '30 days'
+                        )
+                    """)
+                    phones_da_rispondere = [r[0] for r in cur.fetchall()]
+                    cur.close()
+                    conn.close()
+                    for p in phones_da_rispondere:
+                        with active_timers_lock:
+                            if p not in active_timers:
+                                fase = get_fase(p)
+                                if fase == 0:
+                                    delay = 60
+                                elif fase == 4:
+                                    delay = random.randint(300, 600)
+                                else:
+                                    delay = 30
+                                timer = threading.Timer(delay, process_response, args=[p, None])
+                                active_timers[p] = timer
+                                timer.start()
+                                logger.info(f"Timer risveglio mattutino per {p} — delay {delay}s")
+                elif ora < 7:
+                    risveglio_fatto = False
+            except Exception as e:
+                logger.error(f"Errore risveglio mattutino: {e}")
+
         except Exception as e:
             logger.error(f"Errore background job: {e}")
         time.sleep(300)
