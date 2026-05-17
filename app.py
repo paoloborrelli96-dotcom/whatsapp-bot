@@ -890,18 +890,65 @@ def process_response(phone, image_url=None):
         send_whatsapp_message(phone, ai_reply)
 
     elif fase == 1:
-        time.sleep(300)
-        save_message(phone, "assistant", MSG_QUESTIONARIO_2)
-        send_whatsapp_message(phone, MSG_QUESTIONARIO_2)
-        set_fase(phone, 2)
-        logger.info(f"Questionario parte 2 inviato a {phone}")
+        # Controlla se la mamma ha risposto concretamente o solo messaggi di cortesia
+        pending = get_messages_since_last_reply(phone)
+        combined = "\n".join(pending)
+        ha_risposto = False
+        try:
+            check_response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO se la mamma ha scritto informazioni concrete su se stessa o sul bambino (nome, eta, routine, sonno, orari, ecc.). NON_HA_RISPOSTO se ha scritto solo messaggi generici di cortesia o rinvio (ok, grazie, ci penso, ti rispondo domani, dopo, perfetto, ecc.)."},
+                    {"role": "user", "content": f"Messaggi della mamma: '{combined}'"}
+                ],
+                max_tokens=10,
+                temperature=0
+            )
+            risposta = check_response.choices[0].message.content.strip().upper()
+            ha_risposto = "HA_RISPOSTO" in risposta
+            logger.info(f"Classificatore fase 1 per {phone}: {risposta}")
+        except Exception as e:
+            logger.error(f"Errore classificatore fase 1: {e}")
+            ha_risposto = True  # in caso di errore procede normalmente
+
+        if ha_risposto:
+            time.sleep(300)
+            save_message(phone, "assistant", MSG_QUESTIONARIO_2)
+            send_whatsapp_message(phone, MSG_QUESTIONARIO_2)
+            set_fase(phone, 2)
+            logger.info(f"Questionario parte 2 inviato a {phone}")
+        else:
+            logger.info(f"Fase 1 per {phone} — mamma non ha risposto concretamente, bot in attesa")
 
     elif fase == 2:
-        # Manda messaggio di conferma e aspetta che la mamma dica di aver finito
-        save_message(phone, "assistant", MSG_CONFERMA_QUESTIONARIO)
-        send_whatsapp_message(phone, MSG_CONFERMA_QUESTIONARIO)
-        set_fase(phone, 5)
-        logger.info(f"Attesa conferma completamento questionario per {phone}")
+        # Controlla se la mamma ha risposto concretamente alla parte 2
+        pending = get_messages_since_last_reply(phone)
+        combined = "\n".join(pending)
+        ha_risposto = False
+        try:
+            check_response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO se la mamma ha scritto informazioni concrete su se stessa o sul bambino (nome, eta, routine, sonno, orari, ecc.). NON_HA_RISPOSTO se ha scritto solo messaggi generici di cortesia o rinvio (ok, grazie, ci penso, ti rispondo domani, dopo, perfetto, ecc.)."},
+                    {"role": "user", "content": f"Messaggi della mamma: '{combined}'"}
+                ],
+                max_tokens=10,
+                temperature=0
+            )
+            risposta = check_response.choices[0].message.content.strip().upper()
+            ha_risposto = "HA_RISPOSTO" in risposta
+            logger.info(f"Classificatore fase 2 per {phone}: {risposta}")
+        except Exception as e:
+            logger.error(f"Errore classificatore fase 2: {e}")
+            ha_risposto = True  # in caso di errore procede normalmente
+
+        if ha_risposto:
+            save_message(phone, "assistant", MSG_CONFERMA_QUESTIONARIO)
+            send_whatsapp_message(phone, MSG_CONFERMA_QUESTIONARIO)
+            set_fase(phone, 5)
+            logger.info(f"Attesa conferma completamento questionario per {phone}")
+        else:
+            logger.info(f"Fase 2 per {phone} — mamma non ha risposto concretamente, bot in attesa")
 
     elif fase == 5:
         # Mamma ha risposto — classifica se ha finito il questionario
@@ -1162,3 +1209,4 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
+
