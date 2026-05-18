@@ -63,6 +63,7 @@ topic_cache_lock = threading.Lock()
 # 3  = questionario completo, piano schedulato (1 ora)
 # 4  = piano inviato, percorso attivo
 # 5  = attesa conferma completamento questionario
+# 6  = silenzio totale — aspetta solo "ho finito"
 # 99 = chat in pausa
 
 # ─── TESTI FISSI ───────────────────────────────────────────────────────────────
@@ -253,6 +254,12 @@ non per la formattazione. Scrivi come parleresti a una mamma in una conversazion
 vera — caldo, diretto, concreto.
 
 STRUTTURA DEL PIANO:
+Inizia sempre con una lettura personalizzata della situazione — mostra che hai letto
+e capito tutto quello che la mamma ha raccontato. Usa il nome del bambino, fai riferimento
+agli orari, alle abitudini e alle difficolta specifiche che ha descritto. Poi spiega
+brevemente come lavorerete insieme nei prossimi giorni. Solo dopo entra nelle indicazioni
+pratiche divise in fasi.
+
 Dividi in fasi (2, 3, 4 o piu) in base alla situazione.
 Le fasi spiegano cosa fare ora e come mantenere una linea chiara nei primi giorni.
 L'evoluzione si adatta strada facendo via WhatsApp.
@@ -276,6 +283,10 @@ IL PIANO DEVE SEMPRE INCLUDERE:
 - Distinzione tra fame, stanchezza e bisogno di contatto
 - Come monitorare i progressi
 
+Il piano deve fluire come un unico discorso continuo, senza interruzioni visive.
+Non separare le sezioni con righe vuote eccessive o simboli. Ogni concetto si
+collega al successivo in modo naturale, come in una lettera scritta a mano.
+
 LINGUAGGIO:
 Usa "io ti propongo", "potresti provare", "vediamo insieme".
 Mai regole assolute. Accompagna con esempi concreti e flessibili.
@@ -285,9 +296,6 @@ CHIUDI SEMPRE IL PIANO CON:
 "Aggiornami fra qualche giorno e fammi sapere come va 🤍"
 
 Non dare mai consigli medici. Se emergono aspetti sanitari, rimanda sempre al pediatra.
-Il piano deve fluire come un unico discorso continuo, senza interruzioni visive.
-Non separare le sezioni con righe vuote eccessive o simboli. Ogni concetto si
-collega al successivo in modo naturale, come in una lettera scritta a mano.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PROBLEMA CARRELLO / IMPORTO ERRATO
@@ -967,25 +975,22 @@ def process_response(phone, image_url=None):
             logger.info(f"Fase 2 per {phone} — mamma non ha risposto concretamente, bot in attesa")
 
     elif fase == 5:
-        # Mamma ha risposto — classifica se ha finito il questionario
         pending = get_messages_since_last_reply(phone)
         combined = "\n".join(pending).lower().strip()
 
-        # Controlla prima con parole chiave dirette
         parole_finito = [
             "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto",
-            "risposto", "ok", "fatto", "ho fatto", "ecco tutto", "tutto",
+            "risposto", "fatto", "ho fatto", "ecco tutto", "tutto",
             "completato", "ho completato", "pronta", "sono pronta", "yes"
         ]
         ha_finito = any(combined == p or combined.startswith(p + " ") or combined.startswith(p + ",") for p in parole_finito)
 
-        # Se non trovato con parole chiave, usa GPT
         if not ha_finito:
             try:
                 check_response = openai_client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO. SI se la persona indica in qualsiasi modo che ha finito, completato, risposto a tutto, o e pronta. NO solo se chiede altro tempo o dice esplicitamente che non ha ancora finito."},
+                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO. SI se la persona indica in qualsiasi modo che ha finito, completato, risposto a tutto, o e pronta. NO in tutti gli altri casi."},
                         {"role": "user", "content": f"Messaggio: '{combined}'"}
                     ],
                     max_tokens=5,
@@ -1001,9 +1006,46 @@ def process_response(phone, image_url=None):
             set_fase(phone, 3, piano_scheduled_at=piano_time)
             logger.info(f"Piano schedulato per {phone} alle {piano_time}")
         else:
-            risposta = "Ok, prenditi il tempo che ti serve. Dimmi quando hai finito cosi inizio a preparare il tuo piano 🤍"
+            risposta = "Ok, tranquilla. Quando hai finito scrivimi 'ho finito' cosi so che posso iniziare a prepararti il piano 🤍"
             save_message(phone, "assistant", risposta)
             send_whatsapp_message(phone, risposta)
+            set_fase(phone, 6)
+            logger.info(f"Fase 6 per {phone} — silenzio totale")
+
+    elif fase == 6:
+        # Silenzio totale — aspetta solo la conferma che ha finito
+        pending = get_messages_since_last_reply(phone)
+        combined = "\n".join(pending).lower().strip()
+
+        parole_finito = [
+            "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto",
+            "risposto", "fatto", "ho fatto", "ecco tutto", "tutto",
+            "completato", "ho completato", "pronta", "sono pronta", "yes"
+        ]
+        ha_finito = any(combined == p or combined.startswith(p + " ") or combined.startswith(p + ",") for p in parole_finito)
+
+        if not ha_finito:
+            try:
+                check_response = openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO. SI se la persona indica in qualsiasi modo che ha finito, completato, risposto a tutto, o e pronta. NO in tutti gli altri casi."},
+                        {"role": "user", "content": f"Messaggio: '{combined}'"}
+                    ],
+                    max_tokens=5,
+                    temperature=0
+                )
+                ha_finito = check_response.choices[0].message.content.strip().lower().startswith("si")
+            except Exception as e:
+                logger.error(f"Errore check conferma fase 6: {e}")
+                ha_finito = False
+
+        if ha_finito:
+            piano_time = datetime.now() + timedelta(hours=1)
+            set_fase(phone, 3, piano_scheduled_at=piano_time)
+            logger.info(f"Piano schedulato per {phone} alle {piano_time}")
+        else:
+            logger.info(f"Fase 6 per {phone} — silenzio totale, mamma non ha ancora finito")
 
     elif fase == 3:
         logger.info(f"Fase 3 per {phone} — bot in attesa del piano")
@@ -1175,9 +1217,11 @@ def webhook():
         elif fase == 1:
             delay = 600
         elif fase == 2:
-            delay = 600
+            delay = 1800
         elif fase == 5:
-            delay = 30   # quasi subito — aspetta la conferma della mamma
+            delay = 1800   # 30 minuti — aspetta la conferma della mamma
+        elif fase == 6:
+            delay = 1800   # 30 minuti — silenzio totale, aspetta solo conferma
         elif fase == 4:
             delay = random.randint(1800, 2400)
         else:
@@ -1278,4 +1322,5 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
+
 
