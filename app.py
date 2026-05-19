@@ -789,6 +789,11 @@ def get_ai_response(phone, image_url=None):
     extra = ""
     if link_gia_inviato(phone):
         extra = "\n\n[ISTRUZIONE SISTEMA: Hai gia dato il link e descritto il percorso in precedenza. NON ripetere la descrizione del percorso e NON includere il link a meno che la mamma non lo chieda esplicitamente (es. 'puoi rimandarmelo?', 'non trovo il link'). In quel caso mandalo senza ripetere tutta la descrizione.]"
+    else:
+        # Fase 0 — mamma non ha ancora acquistato
+        fase_attuale = get_fase(phone)
+        if fase_attuale == 0:
+            extra = "\n\n[ISTRUZIONE SISTEMA: Questa persona NON ha ancora acquistato. Sei nella fase informativa. Dopo aver risposto alle sue domande o obiezioni, descrivi il percorso e lascia il link. Non dare un piano completo, non dare consigli come se fosse già in percorso. L'obiettivo e portarla all'acquisto.]"
 
     if image_url:
         try:
@@ -1386,5 +1391,6 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
+
 
 
