@@ -477,7 +477,62 @@ def telegram_webhook():
         phone = row[0]
         logger.info(f"Risposta Paola via Telegram topic per {phone}: {text[:50]}")
 
-        # Cancella il timer attivo — Paola ha già risposto
+        # ── Comandi dal topic Telegram ─────────────────────────────────────────
+        if text.startswith("/"):
+            cmd = text.strip().lower().split()[0]
+
+            if cmd == "/acquisto":
+                threading.Thread(target=invia_sequenza_acquisto, args=[phone], daemon=True).start()
+            elif cmd == "/q1":
+                set_fase(phone, 1)
+                save_message(phone, "assistant", MSG_QUESTIONARIO_1)
+                send_whatsapp_message(phone, MSG_QUESTIONARIO_1)
+            elif cmd == "/q2":
+                set_fase(phone, 2)
+                save_message(phone, "assistant", MSG_QUESTIONARIO_2)
+                send_whatsapp_message(phone, MSG_QUESTIONARIO_2)
+            elif cmd == "/piano":
+                with active_timers_lock:
+                    if phone in active_timers:
+                        active_timers[phone].cancel()
+                        active_timers.pop(phone, None)
+                threading.Thread(target=send_piano, args=[phone], daemon=True).start()
+            elif cmd == "/inizia":
+                set_start_date(phone, datetime.now().date())
+                set_fase(phone, 4)
+                with active_timers_lock:
+                    if phone in active_timers:
+                        active_timers[phone].cancel()
+                        active_timers.pop(phone, None)
+            elif cmd == "/pausa":
+                set_fase(phone, 99)
+                with active_timers_lock:
+                    if phone in active_timers:
+                        active_timers[phone].cancel()
+                        active_timers.pop(phone, None)
+            elif cmd == "/riprendi":
+                set_fase(phone, 4)
+            elif cmd == "/fase":
+                parts = text.strip().split()
+                if len(parts) == 2:
+                    try:
+                        nuova_fase = int(parts[1])
+                        set_fase(phone, nuova_fase)
+                        with active_timers_lock:
+                            if phone in active_timers:
+                                active_timers[phone].cancel()
+                                active_timers.pop(phone, None)
+                        logger.info(f"Fase {nuova_fase} impostata per {phone} via Telegram")
+                    except ValueError:
+                        pass
+            elif cmd == "/nota":
+                nota = text.strip()[6:].strip()
+                if nota:
+                    save_message(phone, "user", f"[NOTA ADMIN: {nota}]")
+            logger.info(f"Comando Telegram {cmd} eseguito per {phone}")
+            return Response("OK", status=200)
+
+        # ── Messaggio normale — cancella timer e manda su WhatsApp ────────────
         with active_timers_lock:
             if phone in active_timers:
                 active_timers[phone].cancel()
