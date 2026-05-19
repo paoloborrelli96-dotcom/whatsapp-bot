@@ -1268,13 +1268,13 @@ def background_job():
                     cur = conn.cursor()
                     cur.execute("""
                         SELECT DISTINCT m.phone FROM messages m
-                        JOIN consultations c ON c.phone = m.phone
+                        LEFT JOIN consultations c ON c.phone = m.phone
                         WHERE m.role = 'user'
-                        AND c.fase NOT IN (3, 99)
+                        AND (c.fase IS NULL OR c.fase NOT IN (3, 99))
                         AND m.timestamp > NOW() - INTERVAL '12 hours'
                         AND m.timestamp > COALESCE(
-                            (SELECT MAX(timestamp) FROM messages
-                             WHERE phone = m.phone AND role = 'assistant'),
+                            (SELECT MAX(timestamp) FROM messages m2
+                             WHERE m2.phone = m.phone AND m2.role = 'assistant'),
                             NOW() - INTERVAL '30 days'
                         )
                     """)
