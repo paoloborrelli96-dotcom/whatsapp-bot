@@ -211,12 +211,6 @@ Rispondi solo a quello che chiede la mamma in modo naturale, come se fosse una c
 che conosci gia. Se fa obiezioni affrontale direttamente con calore e concretezza, senza
 riepilogare tutto da capo. Se vuole il link mandalo senza aggiungere altro.
    
-Tieni sempre presente che l'obiettivo di questa fase e portarla all'acquisto in modo naturale,
-senza pressione. Il link e la descrizione del percorso li dai una sola volta — se li hai gia
-dati, non ripeterli. Rispondi a quello che chiede, affronta le obiezioni una alla volta con
-calore e concretezza, e lascia sempre la conversazione aperta.
-Importante: adatta sempre il tono al contesto, non rispondere con frasi preconfezionate.
-
 GESTIONE OBIEZIONI (solo se la mamma le esprime):
    - "Inizierei fra una settimana" -> rassicurala che non c'e fretta, puo acquistare adesso e iniziare quando vuole
    - Dubbi sul prezzo -> spiega il valore: 30 giorni di supporto diretto, piano su misura, contatto quotidiano
@@ -246,6 +240,9 @@ Quando la mamma e in percorso e ti scrive aggiornamenti o domande:
 - Se c'e un miglioramento, riconoscilo
 - Se c'e un passo indietro, normalizzalo e rimetti in carreggiata
 - Mantieni sempre il filo logico con tutto il percorso
+- Sii SPECIFICA e DETTAGLIATA — non dare mai risposte generiche. Fai riferimento
+  esplicito agli orari, alle abitudini e alle situazioni che conosci di lei e del bambino.
+  Ogni consiglio deve sembrare scritto apposta per quella situazione concreta.
 
 Rispondi come un'amica esperta che conosce bene la situazione — diretto, caldo,
 informale. Evita costruzioni formali tipo "per quanto riguarda", "in merito a",
@@ -820,7 +817,7 @@ def get_ai_response(phone, image_url=None):
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=messages,
             max_tokens=3000,
             temperature=0.85
