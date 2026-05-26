@@ -827,13 +827,14 @@ def get_ai_response(phone, image_url=None):
             model="gpt-4o",
             messages=messages,
             max_tokens=3000,
-            temperature=0.85
+            temperature=0.85,
+            timeout=60
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"Errore OpenAI: {e}")
         threading.Thread(target=send_telegram, args=[f"⚠️ Errore OpenAI per {phone}: {e}"], daemon=True).start()
-        return "Scusa, ho avuto un piccolo problema tecnico. Riprova tra qualche minuto 🙏"
+        return None
 
 # ─── INVIO ─────────────────────────────────────────────────────────────────────
 def send_whatsapp_message(phone, text):
@@ -987,8 +988,9 @@ def process_response(phone, image_url=None):
             return
 
         ai_reply = get_ai_response(phone, image_url=image_url)
-        save_message(phone, "assistant", ai_reply)
-        send_whatsapp_message(phone, ai_reply)
+        if ai_reply:
+            save_message(phone, "assistant", ai_reply)
+            send_whatsapp_message(phone, ai_reply)
 
     elif fase == 1:
         # Controlla se la mamma ha risposto concretamente o solo messaggi di cortesia
@@ -1129,8 +1131,9 @@ def process_response(phone, image_url=None):
 
     elif fase == 4:
         ai_reply = get_ai_response(phone, image_url=image_url)
-        save_message(phone, "assistant", ai_reply)
-        send_whatsapp_message(phone, ai_reply)
+        if ai_reply:
+            save_message(phone, "assistant", ai_reply)
+            send_whatsapp_message(phone, ai_reply)
 
 # ─── WEBHOOK WHATSAPP ──────────────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
