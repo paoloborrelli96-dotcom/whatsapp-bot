@@ -860,6 +860,7 @@ def send_whatsapp_message(phone, text):
                 time.sleep(1)
         except Exception as e:
             logger.error(f"Errore invio a {phone}: {e}")
+            threading.Thread(target=send_telegram, args=[f"⚠️ Errore Twilio per {phone}: {e}"], daemon=True).start()
 
 def send_renewal_message(phone):
     text = (
@@ -887,12 +888,14 @@ def send_piano(phone):
             model="gpt-4o",
             messages=messages,
             max_tokens=4000,
-            temperature=0.85
+            temperature=0.85,
+            timeout=60
         )
         piano = response.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"Errore generazione piano: {e}")
-        piano = "Scusa, ho avuto un problema tecnico nel generare il piano. Riprovo a breve 🙏"
+        threading.Thread(target=send_telegram, args=[f"⚠️ Errore piano per {phone}: {e}"], daemon=True).start()
+        return
     save_message(phone, "assistant", piano)
     send_whatsapp_message(phone, piano)
     set_fase(phone, 4)
@@ -953,13 +956,15 @@ def process_response(phone, image_url=None):
                         {"role": "user", "content": f"Contesto:\n{history_text}\n\nI messaggi indicano che la persona ha acquistato o completato un ordine? Messaggi: '{combined}'"}
                     ],
                     max_tokens=5,
-                    temperature=0
+                    temperature=0,
+                    timeout=60
                 )
                 if check_response.choices[0].message.content.strip().lower().startswith("si"):
                     is_acquisto = True
                     logger.info(f"Acquisto rilevato da GPT per {phone}")
             except Exception as e:
                 logger.error(f"Errore check acquisto GPT: {e}")
+                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore acquisto per {phone}: {e}"], daemon=True).start()
 
         if not is_acquisto and image_url:
             try:
@@ -976,12 +981,14 @@ def process_response(phone, image_url=None):
                         ]}
                     ],
                     max_tokens=5,
-                    temperature=0
+                    temperature=0,
+                    timeout=60
                 )
                 if check_response.choices[0].message.content.strip().lower().startswith("si"):
                     is_acquisto = True
             except Exception as e:
                 logger.error(f"Errore check immagine: {e}")
+                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore immagine per {phone}: {e}"], daemon=True).start()
 
         if is_acquisto:
             invia_sequenza_acquisto(phone)
@@ -1005,14 +1012,16 @@ def process_response(phone, image_url=None):
                     {"role": "user", "content": f"Messaggi della mamma: '{combined}'"}
                 ],
                 max_tokens=10,
-                temperature=0
+                temperature=0,
+                timeout=60
             )
             risposta = check_response.choices[0].message.content.strip().upper()
             ha_risposto = "HA_RISPOSTO" in risposta
             logger.info(f"Classificatore fase 1 per {phone}: {risposta}")
         except Exception as e:
             logger.error(f"Errore classificatore fase 1: {e}")
-            ha_risposto = True  # in caso di errore procede normalmente
+            threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 1 per {phone}: {e}"], daemon=True).start()
+            ha_risposto = True
 
         if ha_risposto:
             time.sleep(300)
@@ -1036,14 +1045,16 @@ def process_response(phone, image_url=None):
                     {"role": "user", "content": f"Messaggi della mamma: '{combined}'"}
                 ],
                 max_tokens=10,
-                temperature=0
+                temperature=0,
+                timeout=60
             )
             risposta = check_response.choices[0].message.content.strip().upper()
             ha_risposto = "HA_RISPOSTO" in risposta
             logger.info(f"Classificatore fase 2 per {phone}: {risposta}")
         except Exception as e:
             logger.error(f"Errore classificatore fase 2: {e}")
-            ha_risposto = True  # in caso di errore procede normalmente
+            threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 2 per {phone}: {e}"], daemon=True).start()
+            ha_risposto = True
 
         if ha_risposto:
             save_message(phone, "assistant", MSG_CONFERMA_QUESTIONARIO)
@@ -1073,11 +1084,13 @@ def process_response(phone, image_url=None):
                         {"role": "user", "content": f"Messaggio: '{combined}'"}
                     ],
                     max_tokens=5,
-                    temperature=0
+                    temperature=0,
+                    timeout=60
                 )
                 ha_finito = check_response.choices[0].message.content.strip().lower().startswith("si")
             except Exception as e:
                 logger.error(f"Errore check conferma: {e}")
+                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 5 per {phone}: {e}"], daemon=True).start()
                 ha_finito = False
 
         if ha_finito:
@@ -1112,11 +1125,13 @@ def process_response(phone, image_url=None):
                         {"role": "user", "content": f"Messaggio: '{combined}'"}
                     ],
                     max_tokens=5,
-                    temperature=0
+                    temperature=0,
+                    timeout=60
                 )
                 ha_finito = check_response.choices[0].message.content.strip().lower().startswith("si")
             except Exception as e:
                 logger.error(f"Errore check conferma fase 6: {e}")
+                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 6 per {phone}: {e}"], daemon=True).start()
                 ha_finito = False
 
         if ha_finito:
@@ -1402,6 +1417,7 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
+
 
 
 
