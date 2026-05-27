@@ -780,10 +780,12 @@ def link_gia_inviato(phone):
             WHERE phone = %s AND role = 'assistant'
             AND content LIKE '%genitorinarmonia.com/products/sonno-magico%'
         """, (phone,))
-        count = cur.fetchone()[0]
+        row = cur.fetchone()
         cur.close()
         conn.close()
-        return count > 0
+        if row is None:
+            return False
+        return int(row[0]) > 0
     except Exception as e:
         logger.error(f"Errore link_gia_inviato: {e}")
         return False
@@ -796,7 +798,7 @@ def get_ai_response(phone, image_url=None):
     # Se il link è già stato inviato, aggiungi istruzione esplicita a GPT
     extra = ""
     if link_gia_inviato(phone):
-        extra = "\n\n[ISTRUZIONE SISTEMA: Hai gia dato il link e descritto il percorso in precedenza. NON ripetere la descrizione del percorso e NON includere il link a meno che la mamma non lo chieda esplicitamente (es. 'puoi rimandarmelo?', 'non trovo il link'). In quel caso mandalo senza ripetere tutta la descrizione.]"
+        extra = "\n\n[ISTRUZIONE SISTEMA: Hai gia dato il link e descritto il percorso in precedenza. NON ripetere la descrizione del percorso e NON includere il link a meno che la mamma non lo chieda esplicitamente. Rispondi solo a quello che dice la mamma in modo empatico e naturale, come un'amica. Se fa domande, rispondile. Se esprime dubbi o obiezioni, affrontali con calore. Non aggiungere nulla che non sia stato chiesto.]"
     else:
         # Fase 0 — mamma non ha ancora acquistato
         fase_attuale = get_fase(phone)
