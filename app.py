@@ -75,16 +75,16 @@ MSG_BENVENUTO = (
 )
 
 MSG_REGOLE = (
-    ""Il percorso, le indicazioni e l’eventuale piano personalizzato che verranno proposti 
-    si basano esclusivamente sulla mia esperienza nel supporto al sonno infantile.
-    Non sostituiscono in alcun modo il parere di medici, pediatri o altri professionisti sanitari, 
-    che restano sempre il riferimento principale in presenza di dubbi clinici o problematiche di salute.
-    Ogni genitore è libera/o di decidere se applicarli, modificarli o non seguirli, in totale autonomia, consapevolezza e tranquillità
-    Per rendere la comunicazione più chiara, ordinata e veloce, alcuni messaggi possono essere gestiti tramite un'app esterna
-    che utilizza strumenti di Intelligenza Artificiale a supporto della scrittura.
-    Tutti i contenuti inviati restano comunque sotto la mia supervisione e responsabilità professionale.
-    Ti chiedo inoltre, quando possibile, di evitare messaggi eccessivamente lunghi e di suddividerli in più messaggi brevi.
-    L'app utilizzata potrebbe infatti avere difficoltà a ricevere correttamente testi molto lunghi inviati in un unico messaggio.\n\n"
+    "Il percorso, le indicazioni e l'eventuale piano personalizzato che verranno proposti "
+    "si basano esclusivamente sulla mia esperienza nel supporto al sonno infantile. "
+    "Non sostituiscono in alcun modo il parere di medici, pediatri o altri professionisti sanitari, "
+    "che restano sempre il riferimento principale in presenza di dubbi clinici o problematiche di salute. "
+    "Ogni genitore e libera/o di decidere se applicarli, modificarli o non seguirli, in totale autonomia, consapevolezza e tranquillita. "
+    "Per rendere la comunicazione piu chiara, ordinata e veloce, alcuni messaggi possono essere gestiti tramite un'app esterna "
+    "che utilizza strumenti di Intelligenza Artificiale a supporto della scrittura. "
+    "Tutti i contenuti inviati restano comunque sotto la mia supervisione e responsabilita professionale. "
+    "Ti chiedo inoltre, quando possibile, di evitare messaggi eccessivamente lunghi e di suddividerli in piu messaggi brevi. "
+    "L'app utilizzata potrebbe infatti avere difficolta a ricevere correttamente testi molto lunghi inviati in un unico messaggio.\n\n"
     "Rispondo dal lunedi al venerdi, dalle 9 alle 17. "
     "Il weekend mi fermo — se mi scrivi sabato o domenica ti rispondo lunedi.\n\n"
     "Scrivimi liberamente ogni volta che ne hai bisogno 🤍"
