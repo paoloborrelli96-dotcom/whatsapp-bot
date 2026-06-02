@@ -75,17 +75,16 @@ MSG_BENVENUTO = (
 )
 
 MSG_REGOLE = (
-    "Prima di iniziare, voglio essere trasparente su come lavoro: uso un'applicazione che mi aiuta "
-    "a gestire tutta la messaggistica e a tenerla in ordine, e uno strumento digitale che mi supporta "
-    "nella scrittura e mi permette di essere piu precisa e veloce nelle risposte. "
-    "Ma dietro ci sono sempre io, Paola — leggo tutto personalmente e costruisco ogni risposta "
-    "in base a quello che mi hai raccontato.\n\n"
-    "Ti potrebbe sembrare a volte che le risposte abbiano un tono un po' strutturato — e normale, "
-    "ed e proprio per via di questi strumenti. Ma non e un sistema automatico che risponde da solo: ci sono io.\n\n"
-    "Una cosa pratica: per comodita mia e tua, ti chiedo di scrivermi invece di mandarmi messaggi vocali. "
-    "Cosi ho tutto il testo salvato e riesco a seguirti meglio e ad avere sempre tutto sotto mano. "
-    "Se in qualche momento proprio non puoi, mandami pure il vocale — riesco comunque ad ascoltarlo — "
-    "ma quando possibile il testo e molto meglio.\n\n"
+    ""Il percorso, le indicazioni e l’eventuale piano personalizzato che verranno proposti 
+    si basano esclusivamente sulla mia esperienza nel supporto al sonno infantile.
+    Non sostituiscono in alcun modo il parere di medici, pediatri o altri professionisti sanitari, 
+    che restano sempre il riferimento principale in presenza di dubbi clinici o problematiche di salute.
+    Ogni genitore è libera/o di decidere se applicarli, modificarli o non seguirli, in totale autonomia, consapevolezza e tranquillità
+    Per rendere la comunicazione più chiara, ordinata e veloce, alcuni messaggi possono essere gestiti tramite un'app esterna
+    che utilizza strumenti di Intelligenza Artificiale a supporto della scrittura.
+    Tutti i contenuti inviati restano comunque sotto la mia supervisione e responsabilità professionale.
+    Ti chiedo inoltre, quando possibile, di evitare messaggi eccessivamente lunghi e di suddividerli in più messaggi brevi.
+    L'app utilizzata potrebbe infatti avere difficoltà a ricevere correttamente testi molto lunghi inviati in un unico messaggio.\n\n"
     "Rispondo dal lunedi al venerdi, dalle 9 alle 17. "
     "Il weekend mi fermo — se mi scrivi sabato o domenica ti rispondo lunedi.\n\n"
     "Scrivimi liberamente ogni volta che ne hai bisogno 🤍"
