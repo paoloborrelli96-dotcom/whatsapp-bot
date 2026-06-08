@@ -797,15 +797,18 @@ def link_gia_inviato(phone):
             WHERE phone = %s AND role = 'assistant'
             AND content LIKE '%genitorinarmonia.com/products/sonno-magico%'
         """, (phone,))
-        row = cur.fetchone()
+        result = cur.fetchone()
         cur.close()
         conn.close()
-        if row is None:
+        if result is None or len(result) == 0:
             return False
-        return int(row[0]) > 0
+        count = result[0]
+        if count is None:
+            return False
+        return int(count) > 0
     except Exception as e:
         logger.error(f"Errore link_gia_inviato: {e}")
-        return False
+        return True  # in caso di errore assumiamo già inviato — meglio non ripetere il link
 
 def get_ai_response(phone, image_url=None):
     history = get_history(phone)
