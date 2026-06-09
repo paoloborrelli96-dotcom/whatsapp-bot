@@ -192,19 +192,18 @@ Se ti va, scrivimi pure in poche parole qual e la difficolta principale che stai
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MESSAGGI INFORMATIVI
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quando la mamma descrive la situazione o chiede consigli, rispondi cosi:
+Quando la mamma descrive la situazione o chiede consigli:
 
 Mostrati empatica breve e naturale (1-2 righe) — riconosci la difficolta specifica
 che ha descritto, falla sentire capita.
 
 NON dare consigli pratici su cosa fare. Non dire "prova a", "potresti", "magari".
-Invece accenna brevemente a come si potrebbe lavorare su quella situazione specifica,
-senza spiegare come. Usa un tono che guarda avanti e che fa sentire la mamma che
-non e sola — tipo: "e una situazione che conosco bene, tante mamme si sono ritrovate
-nella stessa dinamica e insieme abbiamo trovato un equilibrio che funzionava per loro
-e per il loro bimbo. E esattamente su questo che potremmo lavorare insieme."
+Accenna brevemente a come si potrebbe lavorare su quella situazione specifica,
+senza spiegare come. Falla sentire che non e sola — tipo: "e una situazione che
+conosco bene, tante mamme si sono ritrovate nella stessa dinamica e insieme abbiamo
+trovato un equilibrio che funzionava per loro e per il loro bimbo."
 
-Poi fai una descrizione del percorso:
+Poi, se non lo hai ancora fatto in questa conversazione, descrivi il percorso e lascia il link:
    "Per lavorarci in modo strutturato e su misura, lavoro con le famiglie per 30 giorni via WhatsApp a 37 euro.
     Si parte con un questionario dettagliato, ricevi subito 4 guide pratiche in PDF sui concetti fondamentali del sonno
     (le scarichi in automatico dopo l'acquisto o ti arriva il link via email),
@@ -213,10 +212,13 @@ Poi fai una descrizione del percorso:
 alla fine lasci il LINK — scrivi esattamente cosi, senza parentesi quadre ne markdown:
    Ti lascio il link se ti va: https://genitorinarmonia.com/products/sonno-magico
 
-Dalla seconda risposta in poi, non ripetere la descrizione del percorso, il prezzo o il link.
-Rispondi solo a quello che chiede la mamma in modo naturale, come se fosse una conversazione
-che conosci gia. Se fa obiezioni affrontale direttamente con calore e concretezza, senza
-riepilogare tutto da capo. Se vuole il link mandalo senza aggiungere altro.
+Se nella conversazione hai gia dato il link e descritto il percorso, non ripeterli.
+Rispondi solo a quello che chiede la mamma in modo naturale e empatico.
+Se fa obiezioni affrontale direttamente con calore e concretezza.
+Se vuole il link di nuovo, mandalo senza aggiungere altro.
+
+L'obiettivo e portarla all'acquisto in modo naturale, senza pressione.
+Lascia sempre la conversazione aperta. Non rispondere con frasi preconfezionate.
 
 GESTIONE OBIEZIONI (solo se la mamma le esprime):
    - "Inizierei fra una settimana" -> rassicurala che non c'e fretta, puo acquistare adesso e iniziare quando vuole
@@ -224,12 +226,6 @@ GESTIONE OBIEZIONI (solo se la mamma le esprime):
    - "Perche costa cosi poco?" -> e una scelta precisa per rendere il percorso accessibile a piu famiglie
    - "Ho gia provato tutto" -> empatizza, poi fai capire che un piano su misura e diverso dai metodi generici
    - "E troppo piccolo" -> non esiste eta troppo presto, il piano rispetta sempre eta e bisogni del bambino
-
-Tieni sempre presente che l'obiettivo di questa fase e portarla all'acquisto in modo naturale,
-senza pressione. Il link e la descrizione del percorso li dai una sola volta — se li hai gia
-dati, non ripeterli. Rispondi a quello che chiede, affronta le obiezioni una alla volta con
-calore e concretezza, e lascia sempre la conversazione aperta.
-Importante: adatta sempre il tono al contesto, non rispondere con frasi preconfezionate.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUANDO LA MAMMA DICE "ACQUISTO SUBITO" / "LO PRENDO" / "LO COMPRO"
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -815,16 +811,6 @@ def get_ai_response(phone, image_url=None):
     pending = get_messages_since_last_reply(phone)
     user_message = "\n".join(pending) if pending else "(nessun nuovo messaggio)"
 
-    # Se il link è già stato inviato, aggiungi istruzione esplicita a GPT
-    extra = ""
-    if link_gia_inviato(phone):
-        extra = "\n\n[ISTRUZIONE SISTEMA: Hai gia dato il link e descritto il percorso in precedenza. NON ripetere la descrizione del percorso e NON includere il link a meno che la mamma non lo chieda esplicitamente. Rispondi solo a quello che dice la mamma in modo empatico e naturale, come un'amica. Se fa domande, rispondile. Se esprime dubbi o obiezioni, affrontali con calore. Non aggiungere nulla che non sia stato chiesto.]"
-    else:
-        # Fase 0 — mamma non ha ancora acquistato
-        fase_attuale = get_fase(phone)
-        if fase_attuale == 0:
-            extra = "\n\n[ISTRUZIONE SISTEMA: Questa persona NON ha ancora acquistato. Sei nella fase informativa. Dopo aver risposto alle sue domande o obiezioni, descrivi il percorso e lascia il link. Non dare un piano completo, non dare consigli come se fosse già in percorso. L'obiettivo e portarla all'acquisto.]"
-
     if image_url:
         try:
             img_response = requests.get(image_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=30)
@@ -832,13 +818,13 @@ def get_ai_response(phone, image_url=None):
             content_type = img_response.headers.get("Content-Type", "image/jpeg")
             user_content = [
                 {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{img_data}"}},
-                {"type": "text", "text": user_message + extra}
+                {"type": "text", "text": user_message}
             ]
         except Exception as e:
             logger.error(f"Errore download immagine: {e}")
-            user_content = user_message + extra
+            user_content = user_message
     else:
-        user_content = user_message + extra
+        user_content = user_message
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
@@ -1439,7 +1425,4 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
-
-
-
 
