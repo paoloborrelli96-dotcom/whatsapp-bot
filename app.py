@@ -85,9 +85,13 @@ MSG_REGOLE = (
     "Tutti i contenuti inviati restano comunque sotto la mia supervisione e responsabilita professionale. "
     "Ti chiedo inoltre, quando possibile, di evitare messaggi eccessivamente lunghi e di suddividerli in piu messaggi brevi. "
     "L'app utilizzata potrebbe infatti avere difficolta a ricevere correttamente testi molto lunghi inviati in un unico messaggio.\n\n"
+    "Il servizio di consulenza e un servizio aggiuntivo ed esclusivo. "
+    "Una volta avviato, non sara' più previsto richiedere il rimborso. "
+    "Il rimborso e previsto esclusivamente per chi ha acquistato il pacchetto ma non ha ancora usufruito di alcuna consulenza, "
+    "limitatamente al metodo contenuto nelle guide in PDF.\n\n"
     "Rispondo dal lunedi al venerdi, dalle 9 alle 17. "
     "Il weekend mi fermo — se mi scrivi sabato o domenica ti rispondo lunedi.\n\n"
-    "Scrivimi liberamente ogni volta che ne hai bisogno 🤍"
+    "Se accetti queste condizioni, compila il questionario e iniziamo 🤍"
 )
 
 MSG_QUESTIONARIO_1 = (
