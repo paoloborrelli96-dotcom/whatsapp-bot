@@ -315,6 +315,13 @@ OGNI FASE DEVE CONTENERE:
 - Come capire se si va nella direzione giusta
 - Come rientrare dopo una giornata difficile
 
+Le indicazioni devono essere CONCRETE e OPERATIVE, mai generiche.
+NON scrivere "crea una routine rilassante" o "dagli piu coccole" o "prova a calmarlo".
+Scrivi COME farlo esattamente — orari precisi, sequenza di azioni passo per passo,
+cosa fare quando protesta, quanto aspettare, come capire se funziona.
+Ogni indicazione deve essere cosi specifica che la mamma sa esattamente cosa fare
+quella sera stessa, senza dover interpretare nulla.
+
 IL PIANO DEVE SEMPRE INCLUDERE:
 - Addormentamento serale
 - Risvegli notturni
