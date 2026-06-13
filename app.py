@@ -1364,9 +1364,6 @@ def background_job():
             if not in_orario_silenzio():
                 for phone in get_pianos_to_send():
                     send_piano(phone)
-                for phone in get_consultations_due_for_renewal():
-                    send_renewal_message(phone)
-                    mark_renewal_sent(phone)
 
             # Risveglio mattutino — alle 07:00 crea timer per messaggi notturni
             try:
@@ -1443,4 +1440,5 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
+
 
