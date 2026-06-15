@@ -725,39 +725,65 @@ def transcribe_audio(media_url):
         return None
 
 # ─── AI ────────────────────────────────────────────────────────────────────────
+def model_prefers_max_completion_tokens(model):
+    """I modelli GPT-5/reasoning usano max_completion_tokens al posto di max_tokens."""
+    m = (model or "").lower()
+    return m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4")
+
+
+def model_prefers_default_temperature(model):
+    """Alcuni modelli reasoning non accettano temperature personalizzate: meglio ometterla."""
+    m = (model or "").lower()
+    return m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4")
+
+
 def openai_chat_completion(model, messages, max_tokens=1000, temperature=None, response_format=None, timeout=60):
-    """Wrapper robusto per Chat Completions: prova fallback se un modello non supporta alcuni parametri."""
+    """
+    Wrapper robusto per Chat Completions.
+    Per i modelli GPT-5/reasoning usa direttamente max_completion_tokens
+    ed evita temperature personalizzate, così Railway non riempie i log di 400 Bad Request.
+    """
     base_kwargs = {
         "model": model,
         "messages": messages,
         "timeout": timeout
     }
+
     if max_tokens is not None:
-        base_kwargs["max_tokens"] = max_tokens
-    if temperature is not None:
+        if model_prefers_max_completion_tokens(model):
+            base_kwargs["max_completion_tokens"] = max_tokens
+        else:
+            base_kwargs["max_tokens"] = max_tokens
+
+    if temperature is not None and not model_prefers_default_temperature(model):
         base_kwargs["temperature"] = temperature
+
     if response_format is not None:
         base_kwargs["response_format"] = response_format
 
-    attempts = []
-    attempts.append(dict(base_kwargs))
+    attempts = [dict(base_kwargs)]
 
-    no_temp = dict(base_kwargs)
-    no_temp.pop("temperature", None)
-    attempts.append(no_temp)
+    # Fallback 1: se response_format non fosse accettato da qualche modello, riprova senza.
+    if "response_format" in base_kwargs:
+        no_format = dict(base_kwargs)
+        no_format.pop("response_format", None)
+        attempts.append(no_format)
 
+    # Fallback 2: compatibilità inversa tra max_tokens e max_completion_tokens.
     if "max_tokens" in base_kwargs:
-        max_completion = dict(base_kwargs)
-        max_completion["max_completion_tokens"] = max_completion.pop("max_tokens")
-        attempts.append(max_completion)
+        alt = dict(base_kwargs)
+        alt["max_completion_tokens"] = alt.pop("max_tokens")
+        attempts.append(alt)
+    elif "max_completion_tokens" in base_kwargs:
+        alt = dict(base_kwargs)
+        alt["max_tokens"] = alt.pop("max_completion_tokens")
+        attempts.append(alt)
 
-        max_completion_no_temp = dict(max_completion)
-        max_completion_no_temp.pop("temperature", None)
-        attempts.append(max_completion_no_temp)
-
-    no_format = dict(base_kwargs)
-    no_format.pop("response_format", None)
-    attempts.append(no_format)
+    # Fallback 3: elimina temperature se un modello la rifiuta.
+    if "temperature" in base_kwargs:
+        no_temp = dict(base_kwargs)
+        no_temp.pop("temperature", None)
+        attempts.append(no_temp)
 
     last_error = None
     seen = set()
