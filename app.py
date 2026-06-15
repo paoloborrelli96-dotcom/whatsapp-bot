@@ -12,6 +12,8 @@ from psycopg2.extras import RealDictCursor
 import requests
 import base64
 import io
+import json
+import re
 import pytz
 
 # ─── CONFIGURAZIONE ────────────────────────────────────────────────────────────
@@ -29,6 +31,43 @@ TELEGRAM_BOT_TOKEN     = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID       = os.environ.get("TELEGRAM_CHAT_ID", "")
 TELEGRAM_GROUP_ID      = os.environ.get("TELEGRAM_GROUP_ID", "")
 TIMEZONE               = os.environ.get("TIMEZONE", "Europe/Rome")
+
+# ─── MODELLI OPENAI ────────────────────────────────────────────────────────────
+# Puoi cambiarli da Railway senza modificare il codice.
+# Consiglio: router/classificazioni su modello economico, chat su modello conversazionale, piano su modello piu forte.
+MODEL_ROUTER           = os.environ.get("MODEL_ROUTER", "gpt-5.4-nano")
+MODEL_CLASSIFIER       = os.environ.get("MODEL_CLASSIFIER", "gpt-5.4-nano")
+MODEL_CHAT             = os.environ.get("MODEL_CHAT", "gpt-5.1-chat-latest")
+MODEL_PLAN             = os.environ.get("MODEL_PLAN", "gpt-5.5")
+MODEL_PROFILE          = os.environ.get("MODEL_PROFILE", "gpt-5.4-mini")
+MODEL_AUDIO            = os.environ.get("MODEL_AUDIO", "whisper-1")
+
+TEMP_ROUTER            = float(os.environ.get("TEMP_ROUTER", "0"))
+TEMP_CHAT              = float(os.environ.get("TEMP_CHAT", "0.55"))
+TEMP_PLAN              = float(os.environ.get("TEMP_PLAN", "0.65"))
+
+LINK_PREMIUM           = os.environ.get("LINK_PREMIUM", "https://genitorinarmonia.com/products/metodo-paola-premium")
+LINK_BASE              = os.environ.get("LINK_BASE", "https://genitorinarmonia.com/products/sonno-magico")
+LINK_REFUND            = os.environ.get("LINK_REFUND", "https://genitorinarmonia.com/policies/refund-policy")
+
+OFFERS = {
+    "base": {
+        "price": 37,
+        "duration_days": 30,
+        "weekend_support": False,
+        "name": "Percorso da 37 euro",
+        "description": "questionario iniziale, piano personalizzato e supporto WhatsApp nei giorni lavorativi"
+    },
+    "premium": {
+        "price": 67,
+        "duration_days": 60,
+        "weekend_support": True,
+        "name": "Percorso Premium",
+        "description": "questionario iniziale, piano personalizzato, 60 giorni di supporto WhatsApp e maggiore continuita"
+    },
+    "renewal_30": {"price": 37, "duration_days": 30},
+    "renewal_60": {"price": 47, "duration_days": 60}
+}
 
 def in_orario_silenzio():
     """Controlla se siamo nell'orario di silenzio (23:00 - 07:00 ora italiana)."""
@@ -122,311 +161,161 @@ MSG_CONFERMA_QUESTIONARIO = (
     "Hai risposto a tutto? Dimmi quando hai finito cosi inizio subito a prepararti il piano 🤍"
 )
 
-# ─── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """Sei Paola, una consulente del sonno infantile professionale e appassionata.
-Gestisci il profilo WhatsApp di "Genitori in Armonia".
+# ─── PROMPT MODULARI ───────────────────────────────────────────────────────────
+SYSTEM_PROMPT_BASE = """
+Sei Paola, consulente del sonno infantile di Genitori in Armonia.
+Gestisci conversazioni WhatsApp con mamme e famiglie che chiedono aiuto sul sonno dei bambini.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-IDENTITA E STILE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Sei Paola. Parli sempre in prima persona singolare: "il mio percorso", "lavoro con te", "ti seguo io".
-MAI "il nostro servizio", "il nostro team", "facciamo insieme" riferito all'azienda.
+IDENTITA E TONO
+Parli sempre come Paola, in prima persona singolare: "io ti propongo", "ti seguo", "il mio percorso".
+Non dire "il nostro team" o "il nostro servizio" riferito all'azienda.
+Scrivi come un messaggio WhatsApp umano: caldo, diretto, semplice, concreto.
+Devi sembrare Paola che risponde a una mamma, non un testo generato.
 
-Se qualcuno chiede "sei un bot?", "e un'AI?", "parla un robot?": rispondi in modo naturale:
-"No, uso un'applicazione per gestire le conversazioni e uno strumento che mi aiuta nella scrittura,
-ma leggo tutto io personalmente e sono io che costruisco le risposte in base alla tua situazione."
+REGOLE DI STILE
+Non usare mai punti esclamativi.
+Non usare markdown, titoli, grassetti, elenchi puntati o numerazioni nelle risposte normali.
+Usa poche emoji, massimo una quando serve.
+Non iniziare con frasi da manuale come "Grazie per aver condiviso", "Ora vediamo insieme", "Ecco il piano", "Capisco perfettamente".
+Evita linguaggio tecnico: non scrivere "associazione seno-sonno", "stimolazione cognitiva", "igiene del sonno".
+Usa frasi naturali: "guarda", "ti dico", "secondo me", "io ti propongo", "potresti provare".
+Se il messaggio della mamma è breve, rispondi breve.
+Se è un aggiornamento semplice, non aggiungere spiegazioni lunghe.
+Non chiudere con frasi automatiche tipo "sono qui per qualsiasi domanda", "fammi sapere", "aggiornami".
+Solo nel piano personalizzato puoi chiudere con: "Aggiornami fra qualche giorno e fammi sapere come va 🤍".
 
-Non usare MAI punti esclamativi. Zero.
-Non usare linguaggio tecnico o da manuale ("associazione seno-sonno", "stimolazione cognitiva").
-Parla come un'amica esperta su WhatsApp — calore, concretezza, semplicita.
-Niente frasi di chiusura scontate tipo "Sono qui per qualsiasi domanda".
-Le emoji vanno bene ma con moderazione.
-Rispondi come un'amica esperta che conosce bene la situazione — diretto, caldo,
-informale. Evita costruzioni formali tipo "per quanto riguarda", "in merito a",
-"ti consiglio di". Usa invece "guarda", "ti dico", "secondo me", "prova a".
+PERSONALIZZAZIONE
+Usa sempre il nome del bambino se lo conosci.
+Collega la risposta agli orari, alle abitudini e agli obiettivi già emersi.
+Non rispondere mai come se fosse la prima volta, se hai già contesto.
+Non proporre troppe modifiche insieme: durante il percorso attivo dai 1 o 2 indicazioni alla volta.
+Non colpevolizzare mai la mamma. Non dire "non devi cedere" o "hai creato tu il problema".
+Spiega invece che il bambino ha imparato un aiuto e ora lo accompagnerete gradualmente verso un aiuto diverso.
 
-MAI iniziare una risposta con "Grazie per aver condiviso", "Ora vediamo insieme", 
-"Ecco il piano", "Vediamo di". Queste frasi sono vietate — suonano da manuale.
-Vai dritto al punto come farebbe un'amica che conosce già la situazione.
-Il tono deve sembrare un messaggio WhatsApp scritto da un'amica, non una consulenza scritta.
+CONFINI
+Non dare diagnosi mediche e non sostituirti al pediatra.
+Per febbre, crescita, reflusso importante, allergie, difficoltà respiratorie o dubbi sanitari, rimanda al pediatra in modo naturale.
+Per il sonno, Paola resta il riferimento.
+Non parlare mai di consulenza scaduta, fine percorso o rinnovi, a meno che sia la mamma a chiedere esplicitamente informazioni sul rinnovo oppure sia Paola/Admin a dirtelo.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FILO LOGICO E MEMORIA
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Hai accesso a tutta la storia della conversazione. Usala sempre.
-Ogni risposta deve collegarsi a quello che sai gia di lei e del bambino.
-Usa il nome del bambino sempre — mai "il tuo bimbo" generico se lo conosci.
-Se tre giorni fa ha detto che si svegliava 4 volte e oggi dice 2, notalo e valorizzalo.
-Non rispondere mai come se fosse la prima volta che parla con te.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TONO E LUNGHEZZA RISPOSTA
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se il messaggio e breve, pratico o situazionale
-(es. "si e addormentata, la sveglio?", "stanotte e andata male", "ha dormito 40 minuti"):
-rispondi in 2-3 righe al massimo. Solo la risposta pratica, come un'amica esperta.
-
-Se la mamma racconta la situazione o chiede informazioni piu ampie:
-rispondi con piu dettaglio seguendo la struttura indicata piu avanti.
-Non usare mai formattazione markdown — niente asterischi per il grassetto,
-niente cancelletti per i titoli, niente numeri o bullet point per gli elenchi.
-Scrivi sempre in prosa fluida e discorsiva, come faresti in un messaggio WhatsApp.
-I concetti si esprimono in modo naturale nel testo, non in liste.
-
-QUANDO RISPONDERE IN MODO MINIMO
-Se il messaggio e una conferma, una chiusura o qualcosa di breve senza una domanda reale:
-tipo "ok", "grazie", "ci penso", "va bene", "capito", "perfetto", "ci provo", "ok grazie",
-non aggiungere nulla di nuovo.
-Rispondi solo con qualcosa di brevissimo e naturale, adattato al contesto:
-In fase informativa prima dell'acquisto: "Certo, sono qui quando vuoi 🤍"
-Durante il percorso attivo: "Bene, fammi sapere come va 🤍"
-E poi basta. Non aggiungere frasi motivazionali, non ribadire il percorso, non ripetere cose gia dette.
-Se non c'e nulla di utile da aggiungere, non aggiungere nulla.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PRIMO MESSAGGIO VAGO
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se il primo messaggio e vago o di saluto (es. "ciao", "info", "buongiorno", "vorrei informazioni"):
-rispondi SOLO ed ESATTAMENTE con questo testo:
-
-"Ciao, sono Paola 😊
-
-Se ti va, scrivimi pure in poche parole qual e la difficolta principale che stai vivendo con il sonno del tuo bimbo, cosi capisco meglio come aiutarti."
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MESSAGGI INFORMATIVI
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quando la mamma descrive la situazione o chiede consigli:
-
-Mostrati empatica breve e naturale (1-2 righe) — riconosci la difficolta specifica
-che ha descritto, falla sentire capita.
-
-NON dare consigli pratici su cosa fare. Non dire "prova a", "potresti", "magari".
-Accenna brevemente a come si potrebbe lavorare su quella situazione specifica,
-senza spiegare come. Falla sentire che non e sola — tipo: "e una situazione che
-conosco bene, tante mamme si sono ritrovate nella stessa dinamica e insieme abbiamo
-trovato un equilibrio che funzionava per loro e per il loro bimbo."
-
-Poi, se non lo hai ancora fatto in questa conversazione, descrivi il percorso e lascia il link:
-   "Lavoro con percorsi personalizzati perche ogni bambino ha esigenze e abitudini diverse.
-
-    Dopo un questionario iniziale analizzo la situazione e preparo un piano su misura per voi.
-    Ti seguo poi ogni giorno su WhatsApp, anche nei weekend, aiutandoti passo passo e
-    adattando il percorso in base ai progressi.
-
-    Per la tua situazione ti consiglierei il Percorso Premium: 60 giorni di supporto WhatsApp
-    personalizzato al costo di 67 euro, che comprende anche le 4 guide PDF sui concetti
-    fondamentali del sonno."
-alla fine lasci il LINK — scrivi esattamente cosi, senza parentesi quadre ne markdown:
-   Ti lascio il link: https://genitorinarmonia.com/products/metodo-paola-premium
-
-   "Se decidi di iniziare, dopo l'ordine scrivimi su WhatsApp e partiamo subito con l'analisi personalizzata."
-
-Se nella conversazione hai gia dato il link e descritto il percorso, non ripeterli.
-Rispondi solo a quello che chiede la mamma in modo naturale e empatico.
-Se fa obiezioni affrontale direttamente con calore e concretezza.
-Se vuole il link di nuovo, mandalo senza aggiungere altro.
-
-L'obiettivo e portarla all'acquisto in modo naturale, senza pressione.
-Lascia sempre la conversazione aperta. Non rispondere con frasi preconfezionate.
-
-GESTIONE OBIEZIONI (solo se la mamma le esprime):
-   - "Inizierei fra una settimana" -> rassicurala che non c'e fretta, puo acquistare adesso e iniziare quando vuole
-   - Dubbi sul prezzo -> spiega il valore: supporto diretto, piano su misura, contatto quotidiano
-   - "Ho gia provato tutto" -> empatizza, poi fai capire che un piano su misura e diverso dai metodi generici
-   - "E troppo piccolo" -> non esiste eta troppo presto, il piano rispetta sempre eta e bisogni del bambino
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DIFFERENZA TRA I PERCORSI (se la mamma chiede)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se la mamma chiede la differenza tra il percorso da 37 euro e quello Premium da 67 euro,
-spiega cosi: il percorso da 37 euro include lo stesso questionario iniziale e lo stesso
-piano personalizzato, dura 30 giorni nei giorni lavorativi, ed e gia valido e sufficiente
-per arrivare all'obiettivo.
-
-Il Premium da 67 euro al momento e in promozione, dura 60 giorni, e puoi scrivermi anche
-nei weekend e piu volte durante la giornata — quindi consente piu continuita.
-
-Consiglialo per questo motivo, ma rassicurala che se preferisce iniziare con il 37 euro
-va benissimo lo stesso — entrambi i percorsi funzionano, la scelta e libera.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-QUANDO LA MAMMA DICE "ACQUISTO SUBITO" / "LO PRENDO" / "LO COMPRO"
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-NON mandare benvenuto ne questionario. La mamma NON ha ancora acquistato.
-Rispondi esattamente cosi:
-"Perfetto, ti aspetto qui. Effettua l'ordine dal link e poi scrivimi quando hai completato, cosi iniziamo subito 🤍"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DURANTE IL PERCORSO ATTIVO
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quando la mamma e in percorso e ti scrive aggiornamenti o domande:
-- Rispondi sempre collegandoti a tutto quello che sai di lei e del bambino
-- Usa sempre il nome del bambino
-- Se c'e un miglioramento, riconoscilo
-- Se c'e un passo indietro, normalizzalo e rimetti in carreggiata
-- Mantieni sempre il filo logico con tutto il percorso
-- Sii SPECIFICA e DETTAGLIATA — non dare mai risposte generiche. Fai riferimento
-  esplicito agli orari, alle abitudini e alle situazioni che conosci di lei e del bambino.
-  - Spiega sempre il perché dei comportamenti del bambino in modo semplice e rassicurante,
-  cosi la mamma capisce cosa sta succedendo e non si sente in colpa
-- Quando riconosci un miglioramento, citalo in modo specifico — non "stai andando bene"
-  ma nomina esattamente cosa e migliorato e perche e importante
-  Ogni consiglio deve sembrare scritto apposta per quella situazione concreta.
-  Le indicazioni devono essere CONCRETE e OPERATIVE, non generiche.
-NON scrivere "crea una routine rilassante" o "dagli piu coccole".
-Scrivi COME farlo esattamente — orari, sequenza di azioni, cosa fare quando protesta,
-quanto aspettare, come capire se funziona.
-Esempio sbagliato: "prova a renderlo piu tranquillo prima della nanna"
-Esempio giusto: "verso le 19:30 abbassa le luci, smetti gli stimoli, tienilo in braccio
-senza parlare — se inizia a stropicciarsi gli occhi e il momento, non aspettare"
-
-Rispondi come un'amica esperta che conosce bene la situazione — diretto, caldo,
-informale. Evita costruzioni formali tipo "per quanto riguarda", "in merito a",
-"ti consiglio di". Usa invece "guarda", "ti dico", "secondo me", "prova a".
-Il tono deve sembrare un messaggio WhatsApp scritto da un'amica, non una consulenza scritta.
-NON concludere mai le risposte con "fammi sapere come va", "aggiornami",
-"restiamo in contatto" o frasi simili. Vai dritto al punto e basta.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CHIUSURA DELLE RISPOSTE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Alla fine di ogni risposta:
-NON scrivere frasi come "se vuoi nel prossimo messaggio posso..."
-NON scrivere "dimmi stasera o domani come va"
-NON concludere con domande
-La chiusura deve essere neutra e conclusiva — finisci il concetto e basta.
-
-Solo nella stesura del piano personalizzato e consentito chiudere con:
-"Aggiornami fra qualche giorno e fammi sapere come va 🤍"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RIFERIMENTI A FIGURE ESTERNE E TITOLO
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-NON suggerire mai di rivolgersi a "un'altra figura specializzata nel sonno infantile"
-o a "un consulente del sonno" — quella figura sei tu. Per il sonno, sei il riferimento.
-Il pediatra va citato SOLO per questioni sanitarie/mediche (febbre, crescita, problemi
-di salute), mai per il sonno in se.
-
-Se chiedono il tuo titolo o le tue qualifiche, NON dichiarare titoli formali o
-certificazioni specifiche. Descrivi invece la tua esperienza in modo naturale:
-"aiuto le famiglie con il sonno dei bambini, lavorando con tante mamme e creando
-percorsi su misura per ogni situazione". Resta sul pratico e sull'esperienza,
-non su titoli accademici o certificazioni.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PIANO PERSONALIZZATO
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Quando generi il piano personalizzato, costruiscilo in modo dettagliato.
-Il piano deve sembrare scritto apposta per lei. Usa sempre il nome del bambino.
-Fai riferimento esplicito agli orari, alle abitudini e alla situazione specifica.
-Non usare mai frasi generiche o template standard.
-Il piano deve essere scritto interamente in prosa discorsiva,
-come se Paola lo stesse scrivendo su WhatsApp.
-Niente titoli, niente grassetti, niente bullet point, niente numerazioni.
-Le fasi si distinguono per il contenuto e per il filo logico del testo,
-non per la formattazione. Scrivi come parleresti a una mamma in una conversazione
-vera — caldo, diretto, concreto.
-
-LE INDICAZIONI DEVONO ESSERE CONCRETE E OPERATIVE, mai generiche.
-NON scrivere "crea una routine rilassante" o "dagli piu coccole" o "prova a calmarlo".
-Scrivi COME farlo esattamente — orari precisi, sequenza di azioni passo per passo,
-cosa fare quando protesta, quanto aspettare, come capire se funziona.
-Ogni indicazione deve essere cosi specifica che la mamma sa esattamente cosa fare
-quella sera stessa, senza dover interpretare nulla.
-
-STRUTTURA DEL PIANO:
-Inizia sempre con una lettura personalizzata della situazione — mostra che hai letto
-e capito tutto quello che la mamma ha raccontato. Usa il nome del bambino, fai riferimento
-agli orari, alle abitudini e alle difficolta specifiche che ha descritto. Poi spiega
-brevemente come lavorerete insieme nei prossimi giorni. Solo dopo entra nelle indicazioni
-pratiche divise in fasi.
-
-Dividi in fasi (2, 3, 4 o piu) in base alla situazione.
-Le fasi spiegano cosa fare ora e come mantenere una linea chiara nei primi giorni.
-L'evoluzione si adatta strada facendo via WhatsApp.
-
-OGNI FASE DEVE CONTENERE:
-- Mini premessa su cosa si lavora e perche
-- Come iniziare concretamente
-- Indicazioni pratiche passo passo
-- Cosa aspettarsi dal bambino
-- Come gestire pianto o protesta senza rigidita
-- Come comportarsi nei risvegli notturni
-- Come capire se si va nella direzione giusta
-- Come rientrare dopo una giornata difficile
-
-Le indicazioni devono essere CONCRETE e OPERATIVE, mai generiche.
-NON scrivere "crea una routine rilassante" o "dagli piu coccole" o "prova a calmarlo".
-Scrivi COME farlo esattamente — orari precisi, sequenza di azioni passo per passo,
-cosa fare quando protesta, quanto aspettare, come capire se funziona.
-Ogni indicazione deve essere cosi specifica che la mamma sa esattamente cosa fare
-quella sera stessa, senza dover interpretare nulla.
-
-IL PIANO DEVE SEMPRE INCLUDERE:
-- Addormentamento serale
-- Risvegli notturni
-- Pisolini diurni
-- Finestre di veglia orientative
-- Ambiente e stimoli
-- Distinzione tra fame, stanchezza e bisogno di contatto
-- Come monitorare i progressi
-
-Il piano deve fluire come un unico discorso continuo, senza interruzioni visive.
-Non separare le sezioni con righe vuote eccessive o simboli. Ogni concetto si
-collega al successivo in modo naturale, come in una lettera scritta a mano.
-
-LINGUAGGIO:
-Usa "io ti propongo", "potresti provare", "vediamo insieme".
-Mai regole assolute. Accompagna con esempi concreti e flessibili.
-Il genitore deve sentirsi ascoltato, accompagnato e sostenuto.
-
-CHIUDI SEMPRE IL PIANO CON:
-"Aggiornami fra qualche giorno e fammi sapere come va 🤍"
-
-Non dare mai consigli medici. Se emergono aspetti sanitari, rimanda sempre al pediatra.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PROBLEMA CARRELLO / IMPORTO ERRATO
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se la mamma dice che al checkout non le esce 37 euro o le compare un importo diverso:
-l'unica spiegazione e che ha aggiunto il prodotto piu volte nel carrello.
-Rispondi sempre cosi:
-"L'unica spiegazione e che hai aggiunto il prodotto piu volte nel carrello.
-In alto a destra vedi l'icona di una borsetta — cliccaci sopra, guarda quanti articoli ci sono
-e cambia il numero a 1. Poi procedi al pagamento e ti deve uscire 37 euro 🤍"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PAGAMENTO CON BONIFICO
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se la mamma chiede se puo pagare con bonifico bancario, rispondi cosi:
-"Certo, puoi pagare tramite bonifico. Ecco le coordinate:
-
-Intestatario: P&D Digital
-IBAN: NL10BUNQ2192297467
-
-Importo: 37 euro
-Causale: il tuo nome e cognome
-
-Dimmi quando hai effettuato il bonifico cosi iniziamo 🤍"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-GESTIONE RIMBORSI
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se la mamma e scontenta o chiede un rimborso:
-1. Prima empatizza genuinamente
-2. Fai domande per capire se puoi aiutarla in modo diverso
-3. Se insiste nel voler il rimborso, rispondi cosi:
-   "Capisco, mi dispiace che le cose non siano andate come speravi.
-    Ti lascio il link con la nostra politica di rimborso, dove trovi anche l'email per inviare la richiesta formale:
-    https://genitorinarmonia.com/policies/refund-policy
-    Ti ricordo pero che il rimborso non e applicabile a chi ha gia usufruito in parte o totalmente delle consulenze."
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-COMANDI ADMIN
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Se ricevi messaggi che iniziano con /inizia, /pausa, /riprendi, /nota, /acquisto, /scrivi:
-sono comandi interni. Non rispondere nulla.
+SE CHIEDONO SE SEI UN BOT
+Rispondi in modo trasparente e naturale:
+"No, uso un'applicazione per gestire le conversazioni e uno strumento che mi aiuta nella scrittura, ma leggo tutto io personalmente e sono io che costruisco le risposte in base alla tua situazione."
 """
+
+ROUTER_PROMPT = """
+Sei un classificatore per una chat WhatsApp di consulenza sul sonno infantile.
+Non devi scrivere la risposta alla mamma.
+Devi restituire solo JSON valido.
+
+Intenti possibili:
+- saluto_vago
+- richiesta_info_percorso
+- descrizione_problema_sonno
+- richiesta_consiglio_gratuito
+- richiesta_differenza_percorsi
+- obiezione_prezzo
+- richiesta_link
+- intenzione_acquisto_non_completato
+- acquisto_completato
+- richiesta_bonifico
+- bonifico_effettuato
+- problema_checkout_importo
+- richiesta_rimborso
+- lamentela_generica
+- domanda_percorso_attivo
+- aggiornamento_percorso_attivo
+- richiesta_pratica_immediata
+- messaggio_cortesia
+- conferma_questionario_finito
+- risposta_questionario_concreta
+- risposta_questionario_non_concreta
+- dubbio_medico_lieve
+- dubbio_medico_delicato
+- sospetto_ai_o_richiesta_paola
+- necessita_revisione_umano
+- altro
+
+Regole importanti:
+Non classificare come richiesta_bonifico solo perché compare la parola bonifico. È richiesta_bonifico solo se chiede IBAN, coordinate, o se può pagare con bonifico.
+Se dice che ha già fatto il bonifico, usa bonifico_effettuato.
+Non classificare come richiesta_rimborso solo perché compare la parola rimborso. È richiesta_rimborso solo se vuole indietro i soldi o chiede la procedura.
+Non classificare come problema_checkout_importo solo perché compaiono 37 o 67. È problema_checkout_importo solo se parla di carrello, checkout, importo sbagliato, prezzo che non torna, prodotto aggiunto più volte.
+Non classificare come acquisto_completato se scrive "lo compro", "lo prendo", "acquisto subito". Quello è intenzione_acquisto_non_completato.
+È acquisto_completato solo se dice che ha già pagato, completato ordine, fatto acquisto, o mostra ricevuta/conferma.
+Se la mamma è già in percorso attivo e chiede "che faccio ora", "lo sveglio", "la attacco", "come mi muovo adesso", usa richiesta_pratica_immediata.
+Se parla di febbre, vomito, difficoltà respiratoria, crescita, allergia importante, farmaci, dolore forte o situazione sanitaria preoccupante, usa dubbio_medico_delicato e needs_human true.
+Se esprime rabbia forte, minaccia recensioni, parla di avvocato, truffa, denuncia, o chiede chiaramente una persona vera, usa necessita_revisione_umano e needs_human true.
+Non usare mai intenti legati a consulenza scaduta o fine percorso.
+
+Rispondi solo con questo schema JSON:
+{
+  "intent": "...",
+  "confidence": 0.0,
+  "safe_auto_reply": true,
+  "needs_human": false,
+  "reason": "breve spiegazione interna",
+  "message_type": "micro_update|richiesta_pratica|racconto_lungo|sfogo|obiezione|conferma|altro",
+  "entities": {
+    "price_mentioned": null,
+    "payment_method": null,
+    "child_name": null,
+    "medical_topic": false,
+    "asks_for_link": false
+  }
+}
+"""
+
+CHAT_RESPONSE_PROMPT = """
+Scrivi la risposta WhatsApp come Paola.
+Devi rispettare il prompt base e il contesto operativo.
+Scrivi solo il testo da inviare alla mamma.
+Non spiegare il ragionamento.
+Non dire che hai classificato il messaggio.
+Non parlare mai di consulenza scaduta o fine percorso.
+
+Se la persona non ha ancora acquistato e descrive un problema, non dare un piano gratuito.
+Falla sentire capita, accenna alla direzione di lavoro senza spiegare il metodo passo passo, poi presenta il percorso solo se il link non è già stato inviato.
+
+Se la persona è in percorso attivo, dai indicazioni concrete ma non troppe insieme.
+Usa il profilo del bambino e lo storico recente.
+Se c'è un miglioramento, valorizzalo in modo specifico.
+Se c'è un passo indietro, normalizzalo senza far sentire la mamma in colpa.
+
+Se il messaggio è una micro-conferma o un grazie, rispondi in modo minimo.
+"""
+
+PLAN_PROMPT = """
+Scrivi il piano personalizzato completo come Paola per una mamma che ha acquistato il percorso.
+Il piano deve sembrare scritto apposta per lei, non un modello generico.
+Usa il nome del bambino se disponibile e cita orari, abitudini, difficoltà e obiettivi emersi nel questionario.
+
+Scrivi in prosa discorsiva da WhatsApp, ordinata ma naturale.
+Non usare markdown, grassetti, titoli, bullet point o numerazioni.
+Puoi andare a capo per leggibilità, ma senza formattazione da documento.
+
+Il piano deve includere in modo naturale:
+lettura iniziale della situazione specifica,
+addormentamento serale,
+risvegli notturni,
+pisolini diurni,
+finestre di veglia orientative,
+ambiente e stimoli,
+distinzione tra fame, stanchezza e bisogno di contatto,
+cosa fare se protesta,
+cosa aspettarsi nei primi giorni,
+come monitorare i progressi.
+
+Le indicazioni devono essere concrete e operative: orari, sequenza di azioni, cosa fare quando protesta, quanto aspettare, come capire se sta funzionando.
+Non dare diagnosi o indicazioni mediche. Se emergono temi sanitari, rimanda al pediatra.
+Non proporre troppe modifiche tutte insieme: dai una direzione chiara per i primi giorni.
+
+Chiudi sempre e solo con:
+"Aggiornami fra qualche giorno e fammi sapere come va 🤍"
+"""
+
+# Compatibilità con eventuali funzioni vecchie che richiamano SYSTEM_PROMPT.
+SYSTEM_PROMPT = SYSTEM_PROMPT_BASE
 
 # ─── TELEGRAM FORUM ────────────────────────────────────────────────────────────
 def get_or_create_topic(phone):
@@ -660,6 +549,29 @@ def init_db():
             thread_id INTEGER NOT NULL
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS child_profiles (
+            phone TEXT PRIMARY KEY,
+            mother_name TEXT,
+            child_name TEXT,
+            child_age TEXT,
+            birth_date TEXT,
+            main_problem TEXT,
+            goal TEXT,
+            sleep_association TEXT,
+            night_wakings TEXT,
+            naps TEXT,
+            bedtime TEXT,
+            wake_time TEXT,
+            sleep_place TEXT,
+            feeding TEXT,
+            father_role TEXT,
+            health_notes TEXT,
+            work_stage TEXT,
+            admin_notes TEXT,
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
     conn.commit()
     cur.close()
     conn.close()
@@ -793,34 +705,6 @@ def get_pianos_to_send():
         logger.error(f"Errore get_pianos_to_send: {e}")
         return []
 
-def get_consultations_due_for_renewal():
-    try:
-        conn = get_db()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        thirty_days_ago = datetime.now().date() - timedelta(days=30)
-        cur.execute("""
-            SELECT phone FROM consultations
-            WHERE start_date <= %s AND renewal_sent = FALSE AND start_date IS NOT NULL
-        """, (thirty_days_ago,))
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-        return [r["phone"] for r in rows]
-    except Exception as e:
-        logger.error(f"Errore get_consultations_due_for_renewal: {e}")
-        return []
-
-def mark_renewal_sent(phone):
-    try:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("UPDATE consultations SET renewal_sent = TRUE WHERE phone = %s", (phone,))
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        logger.error(f"Errore mark_renewal_sent: {e}")
-
 # ─── AUDIO ─────────────────────────────────────────────────────────────────────
 def transcribe_audio(media_url):
     try:
@@ -832,7 +716,7 @@ def transcribe_audio(media_url):
         audio_file = io.BytesIO(response.content)
         audio_file.name = "audio.ogg"
         transcript = openai_client.audio.transcriptions.create(
-            model="whisper-1",
+            model=MODEL_AUDIO,
             file=audio_file
         )
         return transcript.text
@@ -841,33 +725,500 @@ def transcribe_audio(media_url):
         return None
 
 # ─── AI ────────────────────────────────────────────────────────────────────────
+def openai_chat_completion(model, messages, max_tokens=1000, temperature=None, response_format=None, timeout=60):
+    """Wrapper robusto per Chat Completions: prova fallback se un modello non supporta alcuni parametri."""
+    base_kwargs = {
+        "model": model,
+        "messages": messages,
+        "timeout": timeout
+    }
+    if max_tokens is not None:
+        base_kwargs["max_tokens"] = max_tokens
+    if temperature is not None:
+        base_kwargs["temperature"] = temperature
+    if response_format is not None:
+        base_kwargs["response_format"] = response_format
+
+    attempts = []
+    attempts.append(dict(base_kwargs))
+
+    no_temp = dict(base_kwargs)
+    no_temp.pop("temperature", None)
+    attempts.append(no_temp)
+
+    if "max_tokens" in base_kwargs:
+        max_completion = dict(base_kwargs)
+        max_completion["max_completion_tokens"] = max_completion.pop("max_tokens")
+        attempts.append(max_completion)
+
+        max_completion_no_temp = dict(max_completion)
+        max_completion_no_temp.pop("temperature", None)
+        attempts.append(max_completion_no_temp)
+
+    no_format = dict(base_kwargs)
+    no_format.pop("response_format", None)
+    attempts.append(no_format)
+
+    last_error = None
+    seen = set()
+    for kwargs in attempts:
+        key = tuple(sorted(kwargs.keys())) + tuple((k, str(v)) for k, v in kwargs.items() if k in ("model", "max_tokens", "max_completion_tokens", "temperature"))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            return openai_client.chat.completions.create(**kwargs)
+        except Exception as e:
+            last_error = e
+            logger.warning(f"OpenAI retry con parametri diversi per modello {model}: {e}")
+    raise last_error
+
+
+def parse_json_safely(text, default=None):
+    if default is None:
+        default = {}
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    try:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+    except Exception:
+        pass
+    return default
+
+
+def get_recent_history(phone, limit=30):
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """SELECT role, content FROM messages
+               WHERE phone = %s
+               ORDER BY timestamp DESC
+               LIMIT %s""",
+            (phone, limit)
+        )
+        rows = list(reversed(cur.fetchall()))
+        cur.close()
+        conn.close()
+        return [{"role": r["role"], "content": r["content"]} for r in rows]
+    except Exception as e:
+        logger.error(f"Errore lettura recent history: {e}")
+        return []
+
+
 def link_gia_inviato(phone):
-    """Controlla se il link del percorso è già stato inviato in questa conversazione."""
+    """Controlla se uno dei link del percorso è già stato inviato."""
     try:
         conn = get_db()
         cur = conn.cursor()
         cur.execute("""
             SELECT COUNT(*) FROM messages
             WHERE phone = %s AND role = 'assistant'
-            AND content LIKE '%genitorinarmonia.com/products/sonno-magico%'
-        """, (phone,))
+            AND (
+                content LIKE %s OR
+                content LIKE %s
+            )
+        """, (phone, f"%{LINK_BASE.replace('https://', '')}%", f"%{LINK_PREMIUM.replace('https://', '')}%"))
         result = cur.fetchone()
         cur.close()
         conn.close()
-        if result is None or len(result) == 0:
-            return False
-        count = result[0]
-        if count is None:
-            return False
-        return int(count) > 0
+        return bool(result and int(result[0]) > 0)
     except Exception as e:
         logger.error(f"Errore link_gia_inviato: {e}")
-        return True  # in caso di errore assumiamo già inviato — meglio non ripetere il link
+        return True
 
-def get_ai_response(phone, image_url=None):
-    history = get_history(phone)
+
+def user_chiede_link(router_result, pending_text):
+    if router_result and router_result.get("intent") == "richiesta_link":
+        return True
+    entities = router_result.get("entities", {}) if router_result else {}
+    if entities.get("asks_for_link"):
+        return True
+    t = (pending_text or "").lower()
+    return "link" in t or "dove acquisto" in t or "dove posso acquist" in t
+
+
+def get_child_profile(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM child_profiles WHERE phone = %s", (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return dict(row) if row else {}
+    except Exception as e:
+        logger.error(f"Errore get_child_profile: {e}")
+        return {}
+
+
+def upsert_child_profile(phone, data):
+    if not data or not isinstance(data, dict):
+        return
+    allowed = [
+        "mother_name", "child_name", "child_age", "birth_date", "main_problem", "goal",
+        "sleep_association", "night_wakings", "naps", "bedtime", "wake_time",
+        "sleep_place", "feeding", "father_role", "health_notes", "work_stage", "admin_notes"
+    ]
+    clean = {k: (str(v).strip() if v is not None else None) for k, v in data.items() if k in allowed and str(v).strip() not in ("", "null", "None")}
+    if not clean:
+        return
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        columns = ["phone"] + list(clean.keys())
+        values = [phone] + list(clean.values())
+        placeholders = ", ".join(["%s"] * len(columns))
+        update_clause = ", ".join([f"{c} = COALESCE(EXCLUDED.{c}, child_profiles.{c})" for c in clean.keys()])
+        cur.execute(f"""
+            INSERT INTO child_profiles ({', '.join(columns)})
+            VALUES ({placeholders})
+            ON CONFLICT (phone) DO UPDATE SET
+            {update_clause},
+            updated_at = NOW()
+        """, values)
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"Profilo bambino aggiornato per {phone}: {list(clean.keys())}")
+    except Exception as e:
+        logger.error(f"Errore upsert_child_profile: {e}")
+
+
+def profile_to_text(profile):
+    if not profile:
+        return "Nessun profilo strutturato ancora disponibile. Usa lo storico recente."
+    labels = {
+        "mother_name": "Nome mamma",
+        "child_name": "Nome bambino",
+        "child_age": "Età",
+        "birth_date": "Data nascita",
+        "main_problem": "Problema principale",
+        "goal": "Obiettivo",
+        "sleep_association": "Addormentamento/aiuto sonno",
+        "night_wakings": "Risvegli notturni",
+        "naps": "Pisolini",
+        "bedtime": "Nanna serale",
+        "wake_time": "Sveglia mattina",
+        "sleep_place": "Dove dorme",
+        "feeding": "Alimentazione",
+        "father_role": "Ruolo papà",
+        "health_notes": "Note salute",
+        "work_stage": "Fase di lavoro",
+        "admin_notes": "Note Paola"
+    }
+    parts = []
+    for key, label in labels.items():
+        value = profile.get(key)
+        if value:
+            parts.append(f"{label}: {value}")
+    return "\n".join(parts) if parts else "Profilo presente ma ancora povero di dati."
+
+
+def extract_child_profile_from_history(phone):
+    """Estrae/aggiorna profilo bambino dal questionario e dallo storico."""
+    history = get_history(phone, days=45)
+    if not history:
+        return
+    text_history = "\n".join([f"{m['role']}: {m['content']}" for m in history[-80:]])
+    messages = [
+        {"role": "system", "content": "Estrai dati strutturati da una chat di consulenza sonno infantile. Rispondi solo JSON valido. Non inventare dati mancanti."},
+        {"role": "user", "content": f"""
+Dalla chat seguente estrai questi campi se presenti:
+mother_name, child_name, child_age, birth_date, main_problem, goal, sleep_association, night_wakings, naps, bedtime, wake_time, sleep_place, feeding, father_role, health_notes, work_stage, admin_notes.
+
+Regole:
+- Non inventare.
+- Se un campo non è chiaro, omettilo.
+- work_stage deve essere una breve etichetta utile tra: osservazione_iniziale, routine_orari, dissociazione_seno_sonno, appoggio_culla, gestione_risvegli, pisolini_diurni, consolidamento, regressione_dentizione_malattia, rientro_lavoro_nido, altro.
+
+Chat:
+{text_history}
+"""}
+    ]
+    try:
+        response = openai_chat_completion(
+            model=MODEL_PROFILE,
+            messages=messages,
+            max_tokens=900,
+            temperature=0,
+            response_format={"type": "json_object"},
+            timeout=60
+        )
+        data = parse_json_safely(response.choices[0].message.content, {})
+        upsert_child_profile(phone, data)
+    except Exception as e:
+        logger.error(f"Errore estrazione profilo bambino per {phone}: {e}")
+        threading.Thread(target=send_telegram, args=[f"⚠️ Errore estrazione profilo per {phone}: {e}"], daemon=True).start()
+
+
+def classify_message(phone, fase, pending_text, image_url=None):
+    recent = get_recent_history(phone, limit=12)
+    recent_text = "\n".join([f"{m['role']}: {m['content'][:500]}" for m in recent])
+    profile_text = profile_to_text(get_child_profile(phone))
+    messages = [
+        {"role": "system", "content": ROUTER_PROMPT},
+        {"role": "user", "content": f"""
+Fase attuale: {fase}
+Ha immagine allegata: {bool(image_url)}
+Link già inviato: {link_gia_inviato(phone)}
+
+Profilo bambino:
+{profile_text}
+
+Storico recente:
+{recent_text}
+
+Ultimi messaggi da classificare:
+{pending_text or "(vuoto)"}
+"""}
+    ]
+    default = {
+        "intent": "altro",
+        "confidence": 0.0,
+        "safe_auto_reply": True,
+        "needs_human": False,
+        "reason": "fallback",
+        "message_type": "altro",
+        "entities": {"medical_topic": False, "asks_for_link": False}
+    }
+    try:
+        response = openai_chat_completion(
+            model=MODEL_ROUTER,
+            messages=messages,
+            max_tokens=500,
+            temperature=TEMP_ROUTER,
+            response_format={"type": "json_object"},
+            timeout=60
+        )
+        data = parse_json_safely(response.choices[0].message.content, default)
+        if not isinstance(data, dict):
+            return default
+        data.setdefault("intent", "altro")
+        data.setdefault("confidence", 0.0)
+        data.setdefault("safe_auto_reply", True)
+        data.setdefault("needs_human", False)
+        data.setdefault("reason", "")
+        data.setdefault("message_type", "altro")
+        data.setdefault("entities", {})
+        return data
+    except Exception as e:
+        logger.error(f"Errore router per {phone}: {e}")
+        threading.Thread(target=send_telegram, args=[f"⚠️ Errore router per {phone}: {e}"], daemon=True).start()
+        return default
+
+
+def get_business_rule(intent, fase, link_sent=False):
+    """Regole specifiche passate al generatore solo quando servono."""
+    if intent == "richiesta_differenza_percorsi":
+        return f"""
+Spiega la differenza tra i percorsi in modo naturale.
+Il percorso da {OFFERS['base']['price']} euro include questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp nei giorni lavorativi.
+Il Premium da {OFFERS['premium']['price']} euro dura 60 giorni, dà maggiore continuità e supporto anche nei weekend.
+Consiglia il Premium se la situazione è complessa o la mamma vuole essere seguita con più continuità, ma rassicura che anche il percorso da 37 euro va bene.
+Non spingere in modo aggressivo.
+"""
+    if intent == "obiezione_prezzo":
+        return """
+Rispondi all'obiezione sul prezzo con calore e concretezza.
+Spiega che il valore non è solo il PDF, ma il questionario, il piano su misura e il supporto WhatsApp passo passo.
+Non fare pressione.
+"""
+    if intent == "richiesta_rimborso":
+        return f"""
+Rispondi prima con empatia, senza tono freddo.
+Chiedi in modo naturale cosa non ha funzionato e se puoi sistemare qualcosa.
+Se dal messaggio è chiaro che vuole la procedura formale, aggiungi questo link: {LINK_REFUND}
+Ricorda con delicatezza che il rimborso non è applicabile a chi ha già usufruito in parte o totalmente delle consulenze.
+"""
+    if intent in ("richiesta_info_percorso", "descrizione_problema_sonno", "richiesta_consiglio_gratuito") and fase == 0:
+        if link_sent:
+            return """
+La persona è ancora lead e il link è già stato mandato.
+Non ripetere il link, a meno che lo chieda espressamente.
+Rispondi con empatia, senza dare un piano gratuito completo.
+Accenna alla direzione di lavoro e mantieni la conversazione naturale.
+"""
+        return f"""
+La persona è ancora lead e non ha acquistato.
+Non dare un piano gratuito completo e non dare una sequenza dettagliata di azioni.
+Mostra che hai capito la difficoltà specifica.
+Spiega che lavori con percorsi personalizzati perché ogni bambino ha età, abitudini e bisogni diversi.
+Presenta il Percorso Premium: 60 giorni di supporto WhatsApp personalizzato al costo di {OFFERS['premium']['price']} euro, con questionario iniziale, piano su misura e guide PDF.
+Inserisci il link una sola volta: {LINK_PREMIUM}
+Chiudi dicendo che dopo l'ordine può scriverti su WhatsApp e partite con l'analisi personalizzata.
+"""
+    if intent in ("domanda_percorso_attivo", "aggiornamento_percorso_attivo", "richiesta_pratica_immediata") or fase == 4:
+        return """
+La persona è in percorso attivo.
+Rispondi collegandoti al profilo bambino e allo storico recente.
+Dai massimo 1 o 2 indicazioni pratiche, non cambiare troppe cose insieme.
+Se è una richiesta immediata, rispondi breve e operativo.
+Se è un aggiornamento, valorizza o normalizza in modo specifico.
+Non parlare di scadenze, rinnovi o fine percorso.
+"""
+    if intent == "dubbio_medico_lieve":
+        return """
+Rispondi in modo prudente.
+Per la parte sanitaria rimanda al pediatra, poi dai solo una cornice generale sul sonno senza diagnosi e senza indicazioni mediche.
+"""
+    return """
+Rispondi in modo naturale come Paola, rispettando il contesto, senza aggiungere link o offerte se non servono.
+"""
+
+
+def direct_reply_for_intent(phone, fase, router_result, pending_text):
+    """Risposte fisse solo per intenti sicuri. Altrimenti torna None e risponde GPT."""
+    intent = router_result.get("intent", "altro") if router_result else "altro"
+    confidence = float(router_result.get("confidence", 0) or 0) if router_result else 0
+
+    if intent == "saluto_vago" and fase == 0 and confidence >= 0.75:
+        return "Ciao, sono Paola 😊\n\nSe ti va, scrivimi pure in poche parole qual e la difficolta principale che stai vivendo con il sonno del tuo bimbo, cosi capisco meglio come aiutarti."
+
+    if intent == "intenzione_acquisto_non_completato" and fase == 0 and confidence >= 0.75:
+        return "Perfetto, ti aspetto qui. Effettua l'ordine dal link e poi scrivimi quando hai completato, cosi iniziamo subito 🤍"
+
+    if intent == "richiesta_link" and confidence >= 0.75:
+        return f"Certo, ti lascio il link: {LINK_PREMIUM}"
+
+    if intent == "richiesta_bonifico" and confidence >= 0.85:
+        return (
+            "Certo, puoi pagare tramite bonifico. Ecco le coordinate:\n\n"
+            "Intestatario: P&D Digital\n"
+            "IBAN: NL10BUNQ2192297467\n\n"
+            "Importo: 37 euro\n"
+            "Causale: il tuo nome e cognome\n\n"
+            "Dimmi quando hai effettuato il bonifico cosi iniziamo 🤍"
+        )
+
+    if intent == "problema_checkout_importo" and confidence >= 0.85:
+        return (
+            "L'unica spiegazione e che hai aggiunto il prodotto piu volte nel carrello.\n"
+            "In alto a destra vedi l'icona di una borsetta — cliccaci sopra, guarda quanti articoli ci sono "
+            "e cambia il numero a 1. Poi procedi al pagamento e ti deve uscire 37 euro 🤍"
+        )
+
+    if intent == "bonifico_effettuato" and confidence >= 0.80:
+        return "Perfetto, appena verifico il pagamento ti avvio il questionario cosi partiamo con l'analisi personalizzata 🤍"
+
+    if intent == "messaggio_cortesia" and confidence >= 0.80:
+        if fase == 0:
+            return "Certo, quando vuoi 🤍"
+        return "Va bene 🤍"
+
+    return None
+
+
+def should_hold_for_human(router_result):
+    if not router_result:
+        return False
+    intent = router_result.get("intent", "")
+    if router_result.get("needs_human") is True:
+        return True
+    if intent in {"dubbio_medico_delicato", "sospetto_ai_o_richiesta_paola", "necessita_revisione_umano"}:
+        return True
+    return False
+
+
+def validate_reply(reply, context):
+    if not reply:
+        return None, "risposta vuota"
+
+    clean = reply.strip()
+    clean = clean.replace("!", ".")
+    clean = re.sub(r"\*\*|__|###?|^- ", "", clean, flags=re.MULTILINE)
+
+    # Evita link ripetuti se la mamma non lo ha chiesto.
+    if context.get("link_sent") and not context.get("asks_link") and "genitorinarmonia.com/products/" in clean:
+        lines = [line for line in clean.splitlines() if "genitorinarmonia.com/products/" not in line]
+        clean = "\n".join(lines).strip()
+
+    banned_phrases = [
+        "grazie per aver condiviso",
+        "capisco perfettamente",
+        "in conclusione",
+        "ecco cosa puoi fare",
+        "associazione seno-sonno",
+        "igiene del sonno",
+        "stimolazione cognitiva",
+        "garantito",
+        "devi assolutamente",
+        "consulenza scaduta",
+        "percorso è terminato",
+        "percorso e terminato"
+    ]
+    lower = clean.lower()
+    for phrase in banned_phrases:
+        if phrase in lower:
+            return clean, f"frase vietata: {phrase}"
+
+    return clean, None
+
+
+def rewrite_reply_if_needed(reply, issue, context):
+    if not issue:
+        return reply
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_BASE},
+        {"role": "user", "content": f"""
+Riscrivi questo messaggio in modo più naturale, breve e da WhatsApp, eliminando il problema: {issue}.
+Non aggiungere link se non richiesto.
+Non parlare di consulenza scaduta o fine percorso.
+
+Messaggio da riscrivere:
+{reply}
+"""}
+    ]
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=messages,
+            max_tokens=800,
+            temperature=0.35,
+            timeout=60
+        )
+        rewritten = response.choices[0].message.content.strip()
+        clean, issue2 = validate_reply(rewritten, context)
+        if issue2:
+            logger.warning(f"Riscrittura ancora problematica: {issue2}")
+        return clean
+    except Exception as e:
+        logger.error(f"Errore riscrittura risposta: {e}")
+        return reply
+
+
+def build_ai_context(phone, fase, router_result, pending_text):
+    link_sent = link_gia_inviato(phone)
+    asks_link = user_chiede_link(router_result, pending_text)
+    profile = get_child_profile(phone)
+    return {
+        "fase": fase,
+        "link_sent": link_sent,
+        "asks_link": asks_link,
+        "profile_text": profile_to_text(profile),
+        "business_rule": get_business_rule(router_result.get("intent", "altro") if router_result else "altro", fase, link_sent),
+        "recent_history": get_recent_history(phone, limit=30),
+        "pending_text": pending_text
+    }
+
+
+def get_ai_response(phone, image_url=None, router_result=None):
     pending = get_messages_since_last_reply(phone)
     user_message = "\n".join(pending) if pending else "(nessun nuovo messaggio)"
+    fase = get_fase(phone)
+
+    if router_result is None:
+        router_result = classify_message(phone, fase, user_message, image_url=image_url)
+
+    direct = direct_reply_for_intent(phone, fase, router_result, user_message)
+    if direct:
+        return direct
+
+    context = build_ai_context(phone, fase, router_result, user_message)
 
     if image_url:
         try:
@@ -884,23 +1235,57 @@ def get_ai_response(phone, image_url=None):
     else:
         user_content = user_message
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(history)
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_BASE},
+        {"role": "system", "content": CHAT_RESPONSE_PROMPT},
+        {"role": "system", "content": f"""
+Contesto operativo:
+Fase: {fase}
+Intento rilevato: {router_result.get('intent', 'altro')}
+Confidenza router: {router_result.get('confidence', 0)}
+Tipo messaggio: {router_result.get('message_type', 'altro')}
+Link già inviato: {context['link_sent']}
+La mamma chiede il link: {context['asks_link']}
+
+Regola business per questa risposta:
+{context['business_rule']}
+
+Profilo bambino:
+{context['profile_text']}
+"""}
+    ]
+    messages.extend(context["recent_history"])
     messages.append({"role": "user", "content": user_content})
 
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4o",
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
             messages=messages,
-            max_tokens=3000,
-            temperature=0.85,
+            max_tokens=1800,
+            temperature=TEMP_CHAT,
             timeout=60
         )
-        return response.choices[0].message.content.strip()
+        reply = response.choices[0].message.content.strip()
+        clean, issue = validate_reply(reply, context)
+        clean = rewrite_reply_if_needed(clean, issue, context) if issue else clean
+        return clean.strip() if clean else None
     except Exception as e:
         logger.error(f"Errore OpenAI: {e}")
         threading.Thread(target=send_telegram, args=[f"⚠️ Errore OpenAI per {phone}: {e}"], daemon=True).start()
         return None
+
+
+def is_immediate_question(text):
+    """Serve solo a ridurre il timer, non decide la risposta."""
+    if not text:
+        return False
+    t = text.lower()
+    patterns = [
+        "che faccio", "cosa faccio", "che devo fare", "come mi muovo",
+        "lo sveglio", "la sveglio", "lo attacco", "la attacco",
+        "adesso", "ora", "si è svegliato", "si e svegliato", "si è svegliata", "si e svegliata"
+    ]
+    return any(p in t for p in patterns) and "?" in text or any(p in t for p in ["che faccio", "cosa faccio", "lo sveglio", "la sveglio"])
 
 # ─── INVIO ─────────────────────────────────────────────────────────────────────
 def send_whatsapp_message(phone, text):
@@ -928,19 +1313,22 @@ def send_whatsapp_message(phone, text):
             logger.error(f"Errore invio a {phone}: {e}")
             threading.Thread(target=send_telegram, args=[f"⚠️ Errore Twilio per {phone}: {e}"], daemon=True).start()
 
-def send_renewal_message(phone):
-    text = (
-        "Ciao, come va? Come sta andando il sonno del tuo bimbo in queste settimane? 🤍\n\n"
-        "Volevo dirti che il tuo percorso di 30 giorni e arrivato al termine. "
-        "Se vuoi continuare insieme per altri 60 giorni, il rinnovo e sempre a 37 euro. "
-        "Ti lascio qui il link: https://genitorinarmonia.com/products/sonno-magico"
-    )
-    send_whatsapp_message(phone, text)
-
 def send_piano(phone):
     logger.info(f"Generazione piano per {phone}")
+
+    # Aggiorna profilo strutturato prima del piano, senza interrompere se fallisce.
+    try:
+        extract_child_profile_from_history(phone)
+    except Exception as e:
+        logger.error(f"Errore estrazione profilo prima del piano: {e}")
+
     history = get_history(phone)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    profile_text = profile_to_text(get_child_profile(phone))
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_BASE},
+        {"role": "system", "content": PLAN_PROMPT},
+        {"role": "system", "content": f"Profilo bambino strutturato:\n{profile_text}"}
+    ]
     messages.extend(history)
     messages.append({"role": "user", "content": (
         "Genera ora il piano personalizzato completo.\n\n"
@@ -950,14 +1338,18 @@ def send_piano(phone):
         "Usa il nome del bambino. Sii specifico sulla sua situazione.]"
     )})
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4o",
+        response = openai_chat_completion(
+            model=MODEL_PLAN,
             messages=messages,
-            max_tokens=4000,
-            temperature=0.85,
-            timeout=60
+            max_tokens=5000,
+            temperature=TEMP_PLAN,
+            timeout=90
         )
         piano = response.choices[0].message.content.strip()
+        context = {"link_sent": True, "asks_link": False}
+        piano, issue = validate_reply(piano, context)
+        if issue:
+            piano = rewrite_reply_if_needed(piano, issue, context)
     except Exception as e:
         logger.error(f"Errore generazione piano: {e}")
         threading.Thread(target=send_telegram, args=[f"⚠️ Errore piano per {phone}: {e}"], daemon=True).start()
@@ -996,10 +1388,23 @@ def process_response(phone, image_url=None):
     fase = get_fase(phone)
     logger.info(f"process_response per {phone} — fase {fase}")
 
-    if fase == 0:
-        pending = get_messages_since_last_reply(phone)
-        combined = "\n".join(pending).lower()
+    pending = get_messages_since_last_reply(phone)
+    combined_raw = "\n".join(pending)
+    combined = combined_raw.lower().strip()
 
+    # Router semantico: non invia nulla, serve solo per decidere meglio.
+    router_result = classify_message(phone, fase, combined_raw, image_url=image_url)
+    logger.info(f"Router per {phone}: {router_result}")
+
+    if should_hold_for_human(router_result):
+        threading.Thread(
+            target=send_telegram,
+            args=[f"⚠️ Revisione manuale consigliata per {phone}\nIntento: {router_result.get('intent')}\nMotivo: {router_result.get('reason')}\nMessaggio:\n{combined_raw}"],
+            daemon=True
+        ).start()
+        return
+
+    if fase == 0:
         parole_acquisto = [
             "ho acquistato", "ho comprato", "ho fatto l'ordine", "ho effettuato l'ordine",
             "ho preso il pacchetto", "ho preso il percorso", "ho pagato", "ho fatto il pagamento",
@@ -1007,38 +1412,17 @@ def process_response(phone, image_url=None):
             "l'ho comprato", "l'ho acquistato", "ho fatto l'acquisto"
         ]
         is_acquisto = any(p in combined for p in parole_acquisto)
+        if router_result.get("intent") == "acquisto_completato" and float(router_result.get("confidence", 0) or 0) >= 0.75:
+            is_acquisto = True
 
-        if not is_acquisto and combined:
-            try:
-                history = get_history(phone)
-                history_text = "\n".join([
-                    f"{'Mamma' if m['role']=='user' else 'Bot'}: {m['content'][:100]}"
-                    for m in history[-5:]
-                ])
-                check_response = openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO."},
-                        {"role": "user", "content": f"Contesto:\n{history_text}\n\nI messaggi indicano che la persona ha acquistato o completato un ordine? Messaggi: '{combined}'"}
-                    ],
-                    max_tokens=5,
-                    temperature=0,
-                    timeout=60
-                )
-                if check_response.choices[0].message.content.strip().lower().startswith("si"):
-                    is_acquisto = True
-                    logger.info(f"Acquisto rilevato da GPT per {phone}")
-            except Exception as e:
-                logger.error(f"Errore check acquisto GPT: {e}")
-                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore acquisto per {phone}: {e}"], daemon=True).start()
-
+        # Manteniamo il controllo immagine/ricevuta del vecchio codice.
         if not is_acquisto and image_url:
             try:
                 img_response = requests.get(image_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=30)
                 img_data = base64.b64encode(img_response.content).decode("utf-8")
                 content_type = img_response.headers.get("Content-Type", "image/jpeg")
-                check_response = openai_client.chat.completions.create(
-                    model="gpt-4o",
+                check_response = openai_chat_completion(
+                    model=MODEL_CHAT,
                     messages=[
                         {"role": "system", "content": "Rispondi SOLO con SI o NO."},
                         {"role": "user", "content": [
@@ -1060,34 +1444,34 @@ def process_response(phone, image_url=None):
             invia_sequenza_acquisto(phone)
             return
 
-        ai_reply = get_ai_response(phone, image_url=image_url)
+        ai_reply = get_ai_response(phone, image_url=image_url, router_result=router_result)
         if ai_reply:
             save_message(phone, "assistant", ai_reply)
             send_whatsapp_message(phone, ai_reply)
 
     elif fase == 1:
-        # Controlla se la mamma ha risposto concretamente o solo messaggi di cortesia
-        pending = get_messages_since_last_reply(phone)
-        combined = "\n".join(pending)
-        ha_risposto = False
-        try:
-            check_response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO se la mamma ha scritto informazioni concrete su se stessa o sul bambino (nome, eta, routine, sonno, orari, ecc.). NON_HA_RISPOSTO se ha scritto solo messaggi generici di cortesia o rinvio (ok, grazie, ci penso, ti rispondo domani, dopo, perfetto, ecc.)."},
-                    {"role": "user", "content": f"Messaggi della mamma: '{combined}'"}
-                ],
-                max_tokens=10,
-                temperature=0,
-                timeout=60
-            )
-            risposta = check_response.choices[0].message.content.strip().upper()
-            ha_risposto = "HA_RISPOSTO" in risposta
-            logger.info(f"Classificatore fase 1 per {phone}: {risposta}")
-        except Exception as e:
-            logger.error(f"Errore classificatore fase 1: {e}")
-            threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 1 per {phone}: {e}"], daemon=True).start()
-            ha_risposto = True
+        # Controlla se la mamma ha risposto concretamente o solo messaggi di cortesia.
+        ha_risposto = router_result.get("intent") == "risposta_questionario_concreta" and float(router_result.get("confidence", 0) or 0) >= 0.65
+        if not ha_risposto:
+            # Fallback vecchio classificatore, mantenuto per sicurezza.
+            try:
+                check_response = openai_chat_completion(
+                    model=MODEL_CLASSIFIER,
+                    messages=[
+                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO se la mamma ha scritto informazioni concrete su se stessa o sul bambino (nome, eta, routine, sonno, orari, ecc.). NON_HA_RISPOSTO se ha scritto solo messaggi generici di cortesia o rinvio (ok, grazie, ci penso, ti rispondo domani, dopo, perfetto, ecc.)."},
+                        {"role": "user", "content": f"Messaggi della mamma: '{combined_raw}'"}
+                    ],
+                    max_tokens=10,
+                    temperature=0,
+                    timeout=60
+                )
+                risposta = check_response.choices[0].message.content.strip().upper()
+                ha_risposto = "HA_RISPOSTO" in risposta
+                logger.info(f"Classificatore fase 1 per {phone}: {risposta}")
+            except Exception as e:
+                logger.error(f"Errore classificatore fase 1: {e}")
+                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 1 per {phone}: {e}"], daemon=True).start()
+                ha_risposto = True
 
         if ha_risposto:
             time.sleep(300)
@@ -1099,28 +1483,26 @@ def process_response(phone, image_url=None):
             logger.info(f"Fase 1 per {phone} — mamma non ha risposto concretamente, bot in attesa")
 
     elif fase == 2:
-        # Controlla se la mamma ha risposto concretamente alla parte 2
-        pending = get_messages_since_last_reply(phone)
-        combined = "\n".join(pending)
-        ha_risposto = False
-        try:
-            check_response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO se la mamma ha scritto informazioni concrete su se stessa o sul bambino (nome, eta, routine, sonno, orari, ecc.). NON_HA_RISPOSTO se ha scritto solo messaggi generici di cortesia o rinvio (ok, grazie, ci penso, ti rispondo domani, dopo, perfetto, ecc.)."},
-                    {"role": "user", "content": f"Messaggi della mamma: '{combined}'"}
-                ],
-                max_tokens=10,
-                temperature=0,
-                timeout=60
-            )
-            risposta = check_response.choices[0].message.content.strip().upper()
-            ha_risposto = "HA_RISPOSTO" in risposta
-            logger.info(f"Classificatore fase 2 per {phone}: {risposta}")
-        except Exception as e:
-            logger.error(f"Errore classificatore fase 2: {e}")
-            threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 2 per {phone}: {e}"], daemon=True).start()
-            ha_risposto = True
+        ha_risposto = router_result.get("intent") == "risposta_questionario_concreta" and float(router_result.get("confidence", 0) or 0) >= 0.65
+        if not ha_risposto:
+            try:
+                check_response = openai_chat_completion(
+                    model=MODEL_CLASSIFIER,
+                    messages=[
+                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO se la mamma ha scritto informazioni concrete su se stessa o sul bambino (nome, eta, routine, sonno, orari, ecc.). NON_HA_RISPOSTO se ha scritto solo messaggi generici di cortesia o rinvio (ok, grazie, ci penso, ti rispondo domani, dopo, perfetto, ecc.)."},
+                        {"role": "user", "content": f"Messaggi della mamma: '{combined_raw}'"}
+                    ],
+                    max_tokens=10,
+                    temperature=0,
+                    timeout=60
+                )
+                risposta = check_response.choices[0].message.content.strip().upper()
+                ha_risposto = "HA_RISPOSTO" in risposta
+                logger.info(f"Classificatore fase 2 per {phone}: {risposta}")
+            except Exception as e:
+                logger.error(f"Errore classificatore fase 2: {e}")
+                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 2 per {phone}: {e}"], daemon=True).start()
+                ha_risposto = True
 
         if ha_risposto:
             save_message(phone, "assistant", MSG_CONFERMA_QUESTIONARIO)
@@ -1131,20 +1513,19 @@ def process_response(phone, image_url=None):
             logger.info(f"Fase 2 per {phone} — mamma non ha risposto concretamente, bot in attesa")
 
     elif fase == 5:
-        pending = get_messages_since_last_reply(phone)
-        combined = "\n".join(pending).lower().strip()
-
         parole_finito = [
             "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto",
             "risposto", "fatto", "ho fatto", "ecco tutto", "tutto",
             "completato", "ho completato", "pronta", "sono pronta", "yes"
         ]
         ha_finito = any(combined == p or combined.startswith(p + " ") or combined.startswith(p + ",") for p in parole_finito)
+        if router_result.get("intent") == "conferma_questionario_finito" and float(router_result.get("confidence", 0) or 0) >= 0.65:
+            ha_finito = True
 
         if not ha_finito:
             try:
-                check_response = openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
+                check_response = openai_chat_completion(
+                    model=MODEL_CLASSIFIER,
                     messages=[
                         {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO. SI se la persona indica in qualsiasi modo che ha finito, completato, risposto a tutto, o e pronta. NO in tutti gli altri casi."},
                         {"role": "user", "content": f"Messaggio: '{combined}'"}
@@ -1160,6 +1541,10 @@ def process_response(phone, image_url=None):
                 ha_finito = False
 
         if ha_finito:
+            try:
+                extract_child_profile_from_history(phone)
+            except Exception as e:
+                logger.error(f"Errore estrazione profilo in fase 5: {e}")
             piano_time = datetime.now() + timedelta(hours=1)
             set_fase(phone, 3, piano_scheduled_at=piano_time)
             logger.info(f"Piano schedulato per {phone} alle {piano_time}")
@@ -1171,21 +1556,19 @@ def process_response(phone, image_url=None):
             logger.info(f"Fase 6 per {phone} — silenzio totale")
 
     elif fase == 6:
-        # Silenzio totale — aspetta solo la conferma che ha finito
-        pending = get_messages_since_last_reply(phone)
-        combined = "\n".join(pending).lower().strip()
-
         parole_finito = [
             "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto",
             "risposto", "fatto", "ho fatto", "ecco tutto", "tutto",
             "completato", "ho completato", "pronta", "sono pronta", "yes"
         ]
         ha_finito = any(combined == p or combined.startswith(p + " ") or combined.startswith(p + ",") for p in parole_finito)
+        if router_result.get("intent") == "conferma_questionario_finito" and float(router_result.get("confidence", 0) or 0) >= 0.65:
+            ha_finito = True
 
         if not ha_finito:
             try:
-                check_response = openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
+                check_response = openai_chat_completion(
+                    model=MODEL_CLASSIFIER,
                     messages=[
                         {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO. SI se la persona indica in qualsiasi modo che ha finito, completato, risposto a tutto, o e pronta. NO in tutti gli altri casi."},
                         {"role": "user", "content": f"Messaggio: '{combined}'"}
@@ -1201,6 +1584,10 @@ def process_response(phone, image_url=None):
                 ha_finito = False
 
         if ha_finito:
+            try:
+                extract_child_profile_from_history(phone)
+            except Exception as e:
+                logger.error(f"Errore estrazione profilo in fase 6: {e}")
             piano_time = datetime.now() + timedelta(hours=1)
             set_fase(phone, 3, piano_scheduled_at=piano_time)
             logger.info(f"Piano schedulato per {phone} alle {piano_time}")
@@ -1211,7 +1598,10 @@ def process_response(phone, image_url=None):
         logger.info(f"Fase 3 per {phone} — bot in attesa del piano")
 
     elif fase == 4:
-        ai_reply = get_ai_response(phone, image_url=image_url)
+        # Se emergono nuovi dati utili, prova ad aggiornare il profilo senza bloccare la risposta.
+        if len(combined_raw) > 120:
+            threading.Thread(target=extract_child_profile_from_history, args=[phone], daemon=True).start()
+        ai_reply = get_ai_response(phone, image_url=image_url, router_result=router_result)
         if ai_reply:
             save_message(phone, "assistant", ai_reply)
             send_whatsapp_message(phone, ai_reply)
@@ -1384,7 +1774,10 @@ def webhook():
         elif fase == 6:
             delay = 1800   # 30 minuti — silenzio totale, aspetta solo conferma
         elif fase == 4:
-            delay = random.randint(1800, 2400)
+            if is_immediate_question(text_to_process):
+                delay = random.randint(180, 420)
+            else:
+                delay = random.randint(1800, 2400)
         else:
             delay = 5
 
