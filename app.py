@@ -138,7 +138,7 @@ MSG_QUESTIONARIO_1 = (
     "rispondimi con calma:\n\n"
     "1. Nominativo con cui hai effettuato l'ordine e data di acquisto\n"
     "2. Come ti chiami e quanti anni hai?\n"
-    "3. Nome del bambino/a, eta attuale precisa in mesi o anni, e peso attuale\n"
+    "3. Nome del bambino/a, eta attuale precisa in mesi o anni, data di nascita e peso attuale\n"
     "4. E il primo figlio? Ha fratelli o sorelle?\n"
     "5. Descrivimi la sua giornata tipo: orario sveglia mattina, pisolini con orari e durata, orario nanna serale\n"
     "6. Come si addormenta di solito? Seno, biberon, ciuccio, braccio, dondolio, lettone, presenza, da solo o altro?\n"
@@ -248,7 +248,9 @@ Non classificare come problema_checkout_importo solo perché compaiono 37 o 67. 
 Non classificare come acquisto_completato se scrive "lo compro", "lo prendo", "acquisto subito". Quello è intenzione_acquisto_non_completato.
 È acquisto_completato solo se dice che ha già pagato, completato ordine, fatto acquisto, o mostra ricevuta/conferma.
 Se la mamma è già in percorso attivo e chiede "che faccio ora", "lo sveglio", "la attacco", "come mi muovo adesso", usa richiesta_pratica_immediata.
-Se parla di febbre, vomito, difficoltà respiratoria, crescita, allergia importante, farmaci, dolore forte o situazione sanitaria preoccupante, usa dubbio_medico_delicato e needs_human true.
+Se cita febbre, tosse, raffreddore, dentini, malattia recente o malessere passato ma la domanda principale riguarda il sonno, il latte, i risvegli o il rientro alla routine, NON bloccare la risposta: usa domanda_percorso_attivo o aggiornamento_percorso_attivo, metti entities.medical_topic=true, safe_auto_reply=true e needs_human=false.
+In questi casi il generatore dovrà rispondere sul sonno con prudenza, senza diagnosi e senza consigli medici.
+Usa dubbio_medico_delicato con needs_human=true SOLO se ci sono segnali sanitari importanti o richieste mediche dirette: difficoltà respiratoria, febbre alta ancora in corso o peggioramento, vomito persistente, disidratazione, dolore forte, crescita/peso preoccupante, farmaci/dosaggi, richiesta di diagnosi, indicazioni del pediatra da interpretare, pronto soccorso o situazione che sembra urgente.
 Se esprime rabbia forte, minaccia recensioni, parla di avvocato, truffa, denuncia, o chiede chiaramente una persona vera, usa necessita_revisione_umano e needs_human true.
 Non usare mai intenti legati a consulenza scaduta o fine percorso.
 
@@ -1094,12 +1096,15 @@ Rispondi collegandoti al profilo bambino e allo storico recente.
 Dai massimo 1 o 2 indicazioni pratiche, non cambiare troppe cose insieme.
 Se è una richiesta immediata, rispondi breve e operativo.
 Se è un aggiornamento, valorizza o normalizza in modo specifico.
+Se nel messaggio compaiono febbre, tosse, raffreddore, dentini o malattia recente, non dare consigli medici: riconosci che quando un bambino sta male può cercare più contatto/latte/braccio, invita a seguire il pediatra se non è ancora del tutto in forma, e poi dai indicazioni solo sul rientro graduale alla routine del sonno.
 Non parlare di scadenze, rinnovi o fine percorso.
 """
-    if intent == "dubbio_medico_lieve":
+    if intent in ("dubbio_medico_lieve", "dubbio_medico_delicato"):
         return """
 Rispondi in modo prudente.
-Per la parte sanitaria rimanda al pediatra, poi dai solo una cornice generale sul sonno senza diagnosi e senza indicazioni mediche.
+Non dare diagnosi, non parlare di farmaci, dosi, cause mediche o cure.
+Per la parte sanitaria rimanda al pediatra, soprattutto se il bambino non è ancora in forma.
+Poi, se la domanda riguarda il sonno, dai solo indicazioni di rientro morbido alla routine: aspettare che il bambino stia meglio, non irrigidirsi durante la malattia, riprendere gradualmente le abitudini precedenti e lavorare su latte/contatto senza forzare.
 """
     return """
 Rispondi in modo naturale come Paola, rispettando il contesto, senza aggiungere link o offerte se non servono.
@@ -1152,9 +1157,12 @@ def should_hold_for_human(router_result):
     if not router_result:
         return False
     intent = router_result.get("intent", "")
+    # Non blocchiamo automaticamente ogni messaggio che cita febbre/tosse/raffreddore.
+    # Il bot deve rispondere sul sonno con cautela e senza consigli medici.
+    # Blocchiamo solo quando il router segnala davvero bisogno umano o casi commerciali/relazionali delicati.
     if router_result.get("needs_human") is True:
         return True
-    if intent in {"dubbio_medico_delicato", "sospetto_ai_o_richiesta_paola", "necessita_revisione_umano"}:
+    if intent in {"sospetto_ai_o_richiesta_paola", "necessita_revisione_umano"}:
         return True
     return False
 
@@ -1279,6 +1287,7 @@ Fase: {fase}
 Intento rilevato: {router_result.get('intent', 'altro')}
 Confidenza router: {router_result.get('confidence', 0)}
 Tipo messaggio: {router_result.get('message_type', 'altro')}
+Tema sanitario citato: {router_result.get('entities', {}).get('medical_topic', False)}
 Link già inviato: {context['link_sent']}
 La mamma chiede il link: {context['asks_link']}
 
