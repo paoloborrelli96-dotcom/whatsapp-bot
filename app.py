@@ -138,7 +138,7 @@ MSG_QUESTIONARIO_1 = (
     "rispondimi con calma:\n\n"
     "1. Nominativo con cui hai effettuato l'ordine e data di acquisto\n"
     "2. Come ti chiami e quanti anni hai?\n"
-    "3. Nome del bambino/a, eta attuale precisa in mesi o anni, e peso attuale\n"
+    "3. Nome del bambino/a, eta attuale precisa in mesi o anni, data di nascita e peso attuale\n"
     "4. E il primo figlio? Ha fratelli o sorelle?\n"
     "5. Descrivimi la sua giornata tipo: orario sveglia mattina, pisolini con orari e durata, orario nanna serale\n"
     "6. Come si addormenta di solito? Seno, biberon, ciuccio, braccio, dondolio, lettone, presenza, da solo o altro?\n"
