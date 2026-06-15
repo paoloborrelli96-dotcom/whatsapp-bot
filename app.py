@@ -769,14 +769,12 @@ def openai_chat_completion(model, messages, max_tokens=1000, temperature=None, r
         no_format.pop("response_format", None)
         attempts.append(no_format)
 
-    # Fallback 2: compatibilità inversa tra max_tokens e max_completion_tokens.
+    # Fallback 2: compatibilità tra max_tokens e max_completion_tokens.
+    # IMPORTANTE: per i modelli GPT-5/reasoning NON ritentare mai con max_tokens,
+    # perché OpenAI restituisce 400: "Use max_completion_tokens instead".
     if "max_tokens" in base_kwargs:
         alt = dict(base_kwargs)
         alt["max_completion_tokens"] = alt.pop("max_tokens")
-        attempts.append(alt)
-    elif "max_completion_tokens" in base_kwargs:
-        alt = dict(base_kwargs)
-        alt["max_tokens"] = alt.pop("max_completion_tokens")
         attempts.append(alt)
 
     # Fallback 3: elimina temperature se un modello la rifiuta.
@@ -793,7 +791,12 @@ def openai_chat_completion(model, messages, max_tokens=1000, temperature=None, r
             continue
         seen.add(key)
         try:
-            return openai_client.chat.completions.create(**kwargs)
+            response = openai_client.chat.completions.create(**kwargs)
+            logger.info(
+                f"OpenAI OK — model={kwargs.get('model')} — "
+                f"token_param={'max_completion_tokens' if 'max_completion_tokens' in kwargs else 'max_tokens' if 'max_tokens' in kwargs else 'none'}"
+            )
+            return response
         except Exception as e:
             last_error = e
             logger.warning(f"OpenAI retry con parametri diversi per modello {model}: {e}")
@@ -1369,9 +1372,10 @@ def send_piano(phone):
             messages=messages,
             max_tokens=5000,
             temperature=TEMP_PLAN,
-            timeout=90
+            timeout=180
         )
         piano = response.choices[0].message.content.strip()
+        logger.info(f"Piano generato per {phone} — lunghezza {len(piano)} caratteri")
         context = {"link_sent": True, "asks_link": False}
         piano, issue = validate_reply(piano, context)
         if issue:
@@ -1382,6 +1386,7 @@ def send_piano(phone):
         return
     save_message(phone, "assistant", piano)
     send_whatsapp_message(phone, piano)
+    logger.info(f"Piano inviato a {phone}")
     set_fase(phone, 4)
     set_start_date(phone, datetime.now().date())
 
