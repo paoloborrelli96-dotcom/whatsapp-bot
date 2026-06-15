@@ -138,23 +138,27 @@ MSG_QUESTIONARIO_1 = (
     "rispondimi con calma:\n\n"
     "1. Nominativo con cui hai effettuato l'ordine e data di acquisto\n"
     "2. Come ti chiami e quanti anni hai?\n"
-    "3. Nome, data di nascita e peso attuale del bambino/a?\n"
+    "3. Nome del bambino/a, eta attuale precisa in mesi o anni, e peso attuale\n"
     "4. E il primo figlio? Ha fratelli o sorelle?\n"
-    "5. Descrivimi la sua giornata tipo: orario sveglia mattina, pisolini (orari e durata), orario nanna serale\n"
-    "6. Come si addormenta? (seno, ciuccio, in braccio, da solo...)\n"
-    "7. Dove dorme? (culla, lettone, carrozzina...)\n\n"
+    "5. Descrivimi la sua giornata tipo: orario sveglia mattina, pisolini con orari e durata, orario nanna serale\n"
+    "6. Come si addormenta di solito? Seno, biberon, ciuccio, braccio, dondolio, lettone, presenza, da solo o altro?\n"
+    "7. Dove dorme all'inizio della notte e dove finisce la notte? Lettino, culla, next to me, lettone, braccio o altro?\n\n"
     "Rispondimi a queste prime domande con calma, poi ti mando le altre 🤍"
 )
 
 MSG_QUESTIONARIO_2 = (
     "Rispondi anche a queste, grazie:\n\n"
-    "8. Quante volte si sveglia di notte e come lo riaddormenti?\n"
-    "9. Allatti al seno, biberon o entrambi?\n"
-    "10. Hai gia provato qualcosa per migliorare il sonno? Com'e andata?\n"
-    "11. Lavori? Sei in maternita o rientri presto?\n"
-    "12. Il tuo partner ti aiuta di notte?\n"
-    "13. Qual e la difficolta principale che vuoi risolvere?\n"
-    "14. C'e altro che vuoi dirmi che per te e importante che io sappia?"
+    "8. Quante volte si sveglia di notte circa e in che orari di solito?\n"
+    "9. Quando si sveglia cosa succede esattamente? Piange subito, si gira e rigira, cerca seno/biberon/ciuccio, vuole essere preso in braccio, si alza, chiama o resta tranquillo ma non si riaddormenta?\n"
+    "10. Come lo riaddormenti durante i risvegli e quanto tempo ci mette di solito?\n"
+    "11. Allatti al seno, biberon o entrambi? Se prende latte di notte, quanto e quante volte circa?\n"
+    "12. Hai gia provato qualcosa per migliorare il sonno? Com'e andata?\n"
+    "13. Il tuo partner ti aiuta di notte o nell'addormentamento? Se si, come reagisce il bambino con lui/lei?\n"
+    "14. Lavori, sei in maternita o rientri presto? Ci sono nido, vacanze o cambiamenti in arrivo?\n"
+    "15. Qual e l'obiettivo principale che vuoi raggiungere? Meno risvegli, togliere seno/biberon, addormentamento piu autonomo, riuscire ad appoggiarlo, spostare gli orari o altro?\n"
+    "16. C'e qualcosa che non vuoi fare o che ti mette particolarmente in difficolta? Per esempio lasciarlo piangere, togliere il seno subito, far intervenire il papa, alzarti spesso o tenerlo in braccio.\n"
+    "17. C'e qualche aspetto di salute che devo sapere? Reflusso, allergie, crescita, febbre recente, dentini, farmaci, indicazioni del pediatra o altro?\n"
+    "18. C'e altro che per te e importante che io sappia?"
 )
 
 MSG_CONFERMA_QUESTIONARIO = (
@@ -963,6 +967,8 @@ mother_name, child_name, child_age, birth_date, main_problem, goal, sleep_associ
 Regole:
 - Non inventare.
 - Se un campo non è chiaro, omettilo.
+- Per child_age usa prima l'età dichiarata esplicitamente dalla mamma in mesi o anni. Non calcolare l'età dalla data di nascita se la mamma ha già scritto l'età. Se l'età non è chiara, ometti child_age.
+- Se la data è ambigua, copiala come scritta dalla mamma in birth_date senza reinterpretarla.
 - work_stage deve essere una breve etichetta utile tra: osservazione_iniziale, routine_orari, dissociazione_seno_sonno, appoggio_culla, gestione_risvegli, pisolini_diurni, consolidamento, regressione_dentizione_malattia, rientro_lavoro_nido, altro.
 
 Chat:
@@ -1756,9 +1762,10 @@ def webhook():
                 pass
         return Response("OK", status=200)
 
-    if get_fase(phone) == 99:
-        logger.info(f"Chat {phone} in pausa — ignorato")
-        return Response("OK", status=200)
+    # Se la chat è in pausa, NON deve partire nessuna risposta automatica.
+    # Però il messaggio della mamma deve comunque essere salvato e inoltrato nel topic Telegram,
+    # così Paola può leggerlo e rispondere manualmente dal topic.
+    chat_in_pausa = get_fase(phone) == 99
 
     text_to_process = body
     image_url_to_process = None
@@ -1769,19 +1776,26 @@ def webhook():
             text_to_process = transcribed if transcribed else "[messaggio vocale non comprensibile]"
         elif media_type.startswith("image/"):
             image_url_to_process = media_url
-            text_to_process = body or ""
+            text_to_process = body or "[immagine]"
         elif media_type.startswith("video/"):
-            send_whatsapp_message(phone, "Non riesco a vedere i video, scrivimi pure qui in chat 🙏")
-            return Response("OK", status=200)
+            if chat_in_pausa:
+                text_to_process = body or "[video ricevuto — non elaborato automaticamente]"
+            else:
+                send_whatsapp_message(phone, "Non riesco a vedere i video, scrivimi pure qui in chat 🙏")
+                return Response("OK", status=200)
 
     if not text_to_process and not image_url_to_process:
         return Response("OK", status=200)
 
-    save_message(phone, "user", text_to_process or "[immagine]")
+    saved_content = text_to_process or "[immagine]"
+    save_message(phone, "user", saved_content)
 
-    # Notifica nel topic Telegram
-    if text_to_process:
-        threading.Thread(target=send_to_topic, args=[phone, text_to_process, False], daemon=True).start()
+    # Notifica nel topic Telegram anche se la chat è in pausa.
+    threading.Thread(target=send_to_topic, args=[phone, saved_content, False], daemon=True).start()
+
+    if chat_in_pausa:
+        logger.info(f"Chat {phone} in pausa — messaggio salvato e inoltrato a Telegram, nessun timer")
+        return Response("OK", status=200)
 
     # ── Orario silenzio (23:00 - 07:00 ora italiana) ──────────────────────────
     if in_orario_silenzio():
