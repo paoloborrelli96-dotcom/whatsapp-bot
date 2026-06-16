@@ -143,7 +143,7 @@ MSG_QUESTIONARIO_1 = (
     "rispondimi con calma:\n\n"
     "1. Nominativo con cui hai effettuato l'ordine e data di acquisto\n"
     "2. Come ti chiami e quanti anni hai?\n"
-    "3. Nome del bambino/a, eta attuale precisa in mesi o anni e peso attuale\n"
+    "3. Nome del bambino/a, eta attuale precisa in mesi o anni, data di nascita e peso attuale\n"
     "4. E il primo figlio? Ha fratelli o sorelle?\n"
     "5. Descrivimi la sua giornata tipo: orario sveglia mattina, pisolini con orari e durata, orario nanna serale\n"
     "6. Come si addormenta di solito? Seno, biberon, ciuccio, braccio, dondolio, lettone, presenza, da solo o altro?\n"
@@ -394,6 +394,33 @@ Non dare diagnosi o consigli medici.
 Non concludere con frasi automatiche, ma puoi chiudere con una frase neutra di direzione.
 """
 
+CHECKUP_GENERATION_PROMPT = """
+Genera le domande di checkup personalizzate come Paola.
+La mamma ha gia ricevuto un piano o indicazioni precedenti: ora devi raccogliere informazioni mirate per capire cosa sta succedendo davvero.
+
+Non mandare un questionario generico uguale per tutti.
+Devi usare lo storico, il profilo del bambino, il piano precedente e gli ultimi messaggi per scegliere domande specifiche.
+
+Scrivi un messaggio WhatsApp naturale, caldo e pratico.
+Puoi usare numerazione per le domande, perche deve essere facile rispondere.
+Fai massimo 6-9 domande.
+Non dare consigli in questo messaggio: devi solo raccogliere informazioni.
+Non fare domande inutili o gia chiarite nello storico.
+Se conosci il nome del bambino, usalo.
+
+Le domande devono essere concrete e pertinenti al problema attuale.
+Esempi di adattamento:
+- se il tema e seno, latte o biberon: chiedi quando lo cerca, in quali risvegli, cosa succede se la mamma aspetta, quanto beve/succhia, come si addormenta dopo;
+- se il tema sono risvegli frequenti: chiedi orari, durata, modalita di rientro, primo risveglio, seconda parte della notte;
+- se il tema sono pisolini o finestre di veglia: chiedi orari, durata, segnali di sonno, ultimo pisolino e orario nanna;
+- se il tema e appoggio in culla o lettino: chiedi quando prova ad appoggiarlo, come reagisce, dopo quanti minuti, cosa accetta;
+- se il tema e stanchezza della mamma: chiedi cosa pesa di piu e quale passaggio non riesce a sostenere;
+- se ci sono denti, malattia, nido, viaggi o cambiamenti: chiedi solo i dettagli utili per il sonno, senza dare consigli medici.
+
+Il messaggio deve iniziare in modo naturale, tipo: "Ok, allora rivediamo un attimo la situazione su ..." ma adattato al caso.
+Deve chiudere chiedendo di rispondere con calma, senza promettere risultati.
+"""
+
 CHECKUP_CLASSIFIER_PROMPT = """
 Sei un classificatore. Devi capire se la mamma ha risposto in modo sufficiente alle domande di checkup sul sonno.
 Restituisci solo JSON valido.
@@ -563,7 +590,7 @@ def telegram_webhook():
                         active_timers[phone].cancel()
                         active_timers.pop(phone, None)
                 threading.Thread(target=send_piano, args=[phone], daemon=True).start()
-            elif cmd == "/checkup":
+            elif cmd in ("/checkup", "/chekup", "/check", "/ceckup"):
                 with active_timers_lock:
                     if phone in active_timers:
                         active_timers[phone].cancel()
@@ -1648,7 +1675,7 @@ def quick_commands_text(include_checkup=True):
     ]
     if include_checkup:
         lines.extend([
-            "➜ /checkup = mando domande di aggiornamento",
+            "➜ /checkup = mando domande di aggiornamento personalizzate",
             "➜ /revisione = genero revisione aggiornata"
         ])
     return "\n".join(lines)
@@ -1664,11 +1691,59 @@ def manual_alert_message(phone, router_result, message_text):
     )
 
 
+def generate_personalized_checkup(phone):
+    """Genera domande di checkup sempre personalizzate sulla situazione della mamma."""
+    try:
+        # Aggiorna il profilo prima di generare le domande, cosi il checkup parte dal contesto piu recente.
+        try:
+            extract_child_profile_from_history(phone)
+        except Exception as e:
+            logger.error(f"Errore estrazione profilo prima del checkup: {e}")
+
+        profile_text = profile_to_text(get_child_profile(phone))
+        recent_history = get_recent_history(phone, limit=45)
+
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT_BASE},
+            {"role": "system", "content": CHECKUP_GENERATION_PROMPT},
+            {"role": "system", "content": f"Profilo bambino strutturato:\n{profile_text}"}
+        ]
+        messages.extend(recent_history)
+        messages.append({"role": "user", "content": (
+            "Genera ora le domande di checkup PERSONALIZZATE per questa mamma. "
+            "Non usare il questionario standard. Leggi bene lo storico e scegli solo le domande utili "
+            "per rivedere il piano in base alla situazione attuale."
+        )})
+
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=messages,
+            max_tokens=1800,
+            temperature=TEMP_CHAT,
+            timeout=120
+        )
+        checkup = response.choices[0].message.content.strip()
+        checkup = checkup.replace("!", ".")
+        return checkup
+    except Exception as e:
+        logger.error(f"Errore generazione checkup personalizzato per {phone}: {e}")
+        threading.Thread(
+            target=send_telegram,
+            args=[f"⚠️ Errore checkup personalizzato per {phone}: {e}"],
+            daemon=True
+        ).start()
+        return None
+
+
 def send_checkup(phone):
-    save_message(phone, "assistant", MSG_CHECKUP)
-    send_whatsapp_message(phone, MSG_CHECKUP)
+    checkup = generate_personalized_checkup(phone)
+    if not checkup:
+        send_to_topic(phone, "⚠️ Non sono riuscito a generare il checkup personalizzato. Riprova /checkup tra poco oppure scrivi tu manualmente.", True)
+        return
+    save_message(phone, "assistant", checkup)
+    send_whatsapp_message(phone, checkup)
     set_checkup_pending(phone, True)
-    logger.info(f"Checkup inviato a {phone}")
+    logger.info(f"Checkup personalizzato inviato a {phone} — lunghezza {len(checkup)} caratteri")
 
 
 def classify_checkup_response(pending_text):
@@ -2246,7 +2321,7 @@ def webhook():
             threading.Thread(target=send_piano, args=[target], daemon=True).start()
         return Response("OK", status=200)
 
-    if body.startswith("/checkup"):
+    if body.startswith("/checkup") or body.startswith("/chekup") or body.startswith("/check") or body.startswith("/ceckup"):
         parts = body.strip().split()
         if len(parts) == 2:
             target = parts[1].replace("+", "").replace(" ", "")
