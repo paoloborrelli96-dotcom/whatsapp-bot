@@ -261,12 +261,16 @@ Intenti possibili:
 - altro
 
 Regole importanti:
+In fase 0, se il messaggio e solo vago o informativo tipo "ciao", "info", "vorrei informazioni", "quanto costa", "come funziona" e NON contiene una descrizione concreta del problema del bambino, usa richiesta_info_percorso oppure saluto_vago.
+In fase 0, se il messaggio contiene gia una difficolta concreta del sonno, ad esempio risvegli, seno/latte, ciuccio, braccio, lettone, pisolini, addormentamento, pianto, orari, notti difficili, stanchezza della mamma, usa descrizione_problema_sonno anche se chiede anche informazioni sul percorso.
+Se prima la persona ha ricevuto la domanda "qual e la difficolta principale" e ora risponde raccontando il problema, usa descrizione_problema_sonno.
+Non dare per acquisto completato frasi come "lo compro", "vorrei acquistare", "procedo". Acquisto completato solo se dice che ha gia pagato, acquistato, scaricato o letto la guida/PDF/materiale.
 Non classificare come richiesta_bonifico solo perché compare la parola bonifico. È richiesta_bonifico solo se chiede IBAN, coordinate, o se può pagare con bonifico.
 Se dice che ha già fatto il bonifico, usa bonifico_effettuato.
 Non classificare come richiesta_rimborso solo perché compare la parola rimborso. È richiesta_rimborso solo se vuole indietro i soldi o chiede la procedura.
 Non classificare come problema_checkout_importo solo perché compaiono 37 o 67. È problema_checkout_importo solo se parla di carrello, checkout, importo sbagliato, prezzo che non torna, prodotto aggiunto più volte.
 Non classificare come acquisto_completato se scrive "lo compro", "lo prendo", "acquisto subito". Quello è intenzione_acquisto_non_completato.
-È acquisto_completato solo se dice che ha già pagato, completato ordine, fatto acquisto, o mostra ricevuta/conferma.
+È acquisto_completato solo se dice che ha già pagato, completato ordine, fatto acquisto, mostra ricevuta/conferma, oppure dice di aver scaricato/letto/ricevuto la guida, il PDF, il materiale o il percorso.
 Se la mamma è già in percorso attivo e chiede "che faccio ora", "lo sveglio", "la attacco", "come mi muovo adesso", usa richiesta_pratica_immediata.
 Se la mamma è in percorso attivo e dice che dopo alcuni giorni non vede miglioramenti, non funziona, è peggiorato, è molto stanca o non ce la fa più, usa difficolta_persistente_post_piano. Non mettere needs_human=true solo per questo: safe_auto_reply=true e needs_human=false, salvo rabbia forte o richiesta rimborso.
 Se cita febbre, tosse, raffreddore, dentini, malattia recente o malessere passato ma la domanda principale riguarda il sonno, il latte, i risvegli o il rientro alla routine, NON bloccare la risposta: usa domanda_percorso_attivo o aggiornamento_percorso_attivo, metti entities.medical_topic=true, safe_auto_reply=true e needs_human=false.
@@ -302,8 +306,10 @@ Non spiegare il ragionamento.
 Non dire che hai classificato il messaggio.
 Non parlare mai di consulenza scaduta o fine percorso.
 
-Se la persona non ha ancora acquistato e descrive un problema, non dare un piano gratuito.
-Falla sentire capita, accenna alla direzione di lavoro senza spiegare il metodo passo passo, poi presenta il percorso solo se il link non è già stato inviato.
+In fase 0 ci sono tre casi diversi.
+Se la persona scrive solo ciao, info, vorrei informazioni, quanto costa o come funziona senza raccontare il problema, non vendere subito: chiedi prima in poche parole qual e la difficolta principale che vive con il sonno del bambino.
+Se invece la persona non ha ancora acquistato ma descrive gia un problema concreto del sonno, fai una prima analisi breve e personalizzata: falla sentire capita, spiega la dinamica in modo semplice, non dare un piano gratuito e non dare una sequenza completa di azioni. Poi presenta il percorso e il link se non e gia stato inviato.
+Se dichiara di aver gia acquistato, il codice avvia la sequenza acquisto e non devi fare analisi commerciale.
 
 Se la persona è in percorso attivo, dai indicazioni concrete ma non troppe insieme.
 Usa il profilo del bambino e lo storico recente.
@@ -1129,6 +1135,102 @@ def user_chiede_link(router_result, pending_text):
     return "link" in t or "dove acquisto" in t or "dove posso acquist" in t
 
 
+def acquisto_dichiarato(text):
+    """Rileva a codice quando la mamma dichiara di aver già acquistato o avuto accesso al materiale.
+
+    Questa regola viene eseguita prima del router GPT in fase 0, così frasi come
+    "ho già acquistato", "ho scaricato la guida" o "ho letto il pdf" avviano
+    sempre la sequenza acquisto. Evita però intenzioni future tipo "lo compro".
+    """
+    t = (text or "").lower()
+    t = re.sub(r"\s+", " ", t).strip()
+
+    # Frasi che indicano acquisto/pagamento già completato.
+    segnali_forti = [
+        "ho acquistato", "ho già acquistato", "ho gia acquistato", "ho appena acquistato",
+        "ho comprato", "ho già comprato", "ho gia comprato", "ho appena comprato",
+        "ho fatto l'ordine", "ho effettuato l'ordine", "ordine completato", "ordine effettuato",
+        "ho fatto il pagamento", "ho effettuato il pagamento", "ho pagato",
+        "pagamento completato", "pagamento effettuato", "pagamento andato a buon fine",
+        "l'ho preso", "l ho preso", "l'ho comprato", "l ho comprato",
+        "l'ho acquistato", "l ho acquistato", "ho fatto l'acquisto", "ho fatto acquisto",
+        "ho preso il pacchetto", "ho preso il percorso", "ho acquistato il percorso",
+        "ho già acquistato il percorso", "ho gia acquistato il percorso",
+        "ho acquistato la consulenza", "ho preso la consulenza",
+        "ho preso la guida", "ho acquistato la guida", "ho comprato la guida",
+    ]
+    if any(s in t for s in segnali_forti):
+        return True
+
+    # Accesso al materiale = acquisto già fatto, ma solo se vicino a parole prodotto/materiale.
+    verbi_accesso = [
+        "ho scaricato", "ho già scaricato", "ho gia scaricato",
+        "ho letto", "ho già letto", "ho gia letto",
+        "ho ricevuto", "ho già ricevuto", "ho gia ricevuto",
+        "mi è arrivato", "mi e arrivato", "mi è arrivata", "mi e arrivata",
+        "mi hanno mandato", "mi avete mandato", "ho accesso", "sono entrata", "sono dentro"
+    ]
+    parole_materiale = [
+        "guida", "pdf", "manuale", "materiale", "percorso", "sonno magico",
+        "metodo paola", "consulenza", "pacchetto"
+    ]
+    if any(v in t for v in verbi_accesso) and any(p in t for p in parole_materiale):
+        return True
+
+    # Alcune mamme scrivono solo "mi è arrivato tutto" dopo checkout: consideriamolo acquisto
+    # se nel messaggio compare anche ordine/pagamento/acquisto.
+    if any(x in t for x in ["mi è arrivato tutto", "mi e arrivato tutto", "ho ricevuto tutto", "ho scaricato tutto"]) and \
+       any(x in t for x in ["ordine", "pagamento", "acquisto", "guida", "percorso"]):
+        return True
+
+    return False
+
+
+def lead_problem_described(text):
+    """Capisce se una lead in fase 0 ha gia raccontato un problema concreto del sonno.
+
+    Serve come protezione extra: se il router classifica come richiesta_info_percorso
+    ma nel testo ci sono dettagli su risvegli, seno, pisolini, pianto o addormentamento,
+    il bot deve fare una prima analisi e non limitarsi a chiedere "raccontami".
+    """
+    t = (text or "").lower()
+    t = re.sub(r"\s+", " ", t).strip()
+    if len(t) < 45:
+        return False
+
+    sleep_terms = [
+        "si sveglia", "sveglia", "risvegli", "risveglio", "notte", "notti",
+        "dorme", "dormire", "sonno", "nanna", "addormenta", "addormentarsi",
+        "seno", "latte", "biberon", "ciuccio", "braccio", "braccia", "cull",
+        "lettone", "lettino", "culla", "next to me", "pisolino", "pisolini",
+        "piange", "pianto", "urla", "contatto", "ogni ora", "ogni due ore",
+        "stanca", "distrutta", "non ce la faccio", "mesi", "anni"
+    ]
+    count = sum(1 for term in sleep_terms if term in t)
+    return count >= 2 or (count >= 1 and len(t) >= 120)
+
+
+def normalize_phase0_intent(router_result, pending_text):
+    """Rende più coerente la fase 0 commerciale.
+
+    - info vaghe restano info e chiedono prima la difficolta;
+    - se nel testo c'e gia un problema concreto, forza descrizione_problema_sonno,
+      cosi parte la prima analisi + proposta percorso.
+    """
+    if not router_result:
+        return router_result
+    intent = router_result.get("intent", "altro")
+    if intent in {"saluto_vago", "richiesta_info_percorso", "altro"} and lead_problem_described(pending_text):
+        r = dict(router_result)
+        r["intent"] = "descrizione_problema_sonno"
+        r["reason"] = (r.get("reason", "") + " | override codice: lead ha descritto un problema concreto del sonno").strip()
+        r["confidence"] = max(float(r.get("confidence", 0) or 0), 0.82)
+        r["safe_auto_reply"] = True
+        r["needs_human"] = False
+        return r
+    return router_result
+
+
 def get_child_profile(phone):
     try:
         conn = get_db()
@@ -1324,22 +1426,29 @@ Chiedi in modo naturale cosa non ha funzionato e se puoi sistemare qualcosa.
 Se dal messaggio è chiaro che vuole la procedura formale, aggiungi questo link: {LINK_REFUND}
 Ricorda con delicatezza che il rimborso non è applicabile a chi ha già usufruito in parte o totalmente delle consulenze.
 """
-    if intent in ("richiesta_info_percorso", "descrizione_problema_sonno", "richiesta_consiglio_gratuito") and fase == 0:
+    if intent == "richiesta_info_percorso" and fase == 0:
+        return """
+La persona e ancora lead e ha chiesto informazioni senza descrivere davvero il problema.
+Non mandare subito il link e non vendere subito in modo freddo.
+Rispondi breve e chiedi di raccontarti in poche parole qual e la difficolta principale con il sonno del bambino, cosi puoi capire meglio la situazione prima di consigliarle il percorso giusto.
+Se chiede solo il prezzo in modo diretto, puoi accennare che il percorso personalizzato parte da 37 euro e il Premium dura 60 giorni a 67 euro, ma chiudi chiedendo la difficolta principale prima di orientarla.
+"""
+    if intent in ("descrizione_problema_sonno", "richiesta_consiglio_gratuito") and fase == 0:
         if link_sent:
             return """
-La persona è ancora lead e il link è già stato mandato.
+La persona e ancora lead, ha gia raccontato una difficolta concreta e il link e gia stato mandato.
 Non ripetere il link, a meno che lo chieda espressamente.
-Rispondi con empatia, senza dare un piano gratuito completo.
-Accenna alla direzione di lavoro e mantieni la conversazione naturale.
+Fai una prima lettura breve e personalizzata della situazione, senza dare un piano gratuito completo.
+Accenna alla direzione di lavoro e mantieni la conversazione naturale verso il percorso.
 """
         return f"""
-La persona è ancora lead e non ha acquistato.
-Non dare un piano gratuito completo e non dare una sequenza dettagliata di azioni.
-Mostra che hai capito la difficoltà specifica.
-Spiega che lavori con percorsi personalizzati perché ogni bambino ha età, abitudini e bisogni diversi.
-Presenta il Percorso Premium: 60 giorni di supporto WhatsApp personalizzato al costo di {OFFERS['premium']['price']} euro, con questionario iniziale, piano su misura e guide PDF.
+La persona e ancora lead e ha gia descritto una difficolta concreta del sonno.
+Non fare altre domande generiche: fai subito una prima analisi commerciale personalizzata.
+Devi riconoscere la difficolta specifica, spiegare in modo semplice cosa potrebbe esserci dietro, senza diagnosi e senza dare un piano completo gratuito.
+Accenna alla direzione di lavoro, facendo capire che andrebbe vista su orari, pisolini, addormentamento e risvegli.
+Poi presenta il Percorso Premium: 60 giorni di supporto WhatsApp personalizzato al costo di {OFFERS['premium']['price']} euro, con questionario iniziale, piano su misura e guide PDF.
 Inserisci il link una sola volta: {LINK_PREMIUM}
-Chiudi dicendo che dopo l'ordine può scriverti su WhatsApp e partite con l'analisi personalizzata.
+Chiudi dicendo che dopo l'ordine puo scriverti su WhatsApp e partite con l'analisi personalizzata.
 """
     if intent in ("domanda_percorso_attivo", "aggiornamento_percorso_attivo", "richiesta_pratica_immediata") or fase == 4:
         return """
@@ -1370,6 +1479,9 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
 
     if intent == "saluto_vago" and fase == 0 and confidence >= 0.75:
         return "Ciao, sono Paola 😊\n\nSe ti va, scrivimi pure in poche parole qual e la difficolta principale che stai vivendo con il sonno del tuo bimbo, cosi capisco meglio come aiutarti."
+
+    if intent == "richiesta_info_percorso" and fase == 0 and confidence >= 0.70 and not lead_problem_described(pending_text):
+        return "Ciao, sono Paola 😊\n\nCerto, prima di spiegarti bene il percorso mi aiuta capire la situazione: qual e la difficolta principale che stai vivendo con il sonno del tuo bimbo?"
 
     if intent == "intenzione_acquisto_non_completato" and fase == 0 and confidence >= 0.75:
         return "Perfetto, ti aspetto qui. Effettua l'ordine dal link e poi scrivimi quando hai completato, cosi iniziamo subito 🤍"
@@ -2001,8 +2113,17 @@ def process_response(phone, image_url=None):
     combined_raw = "\n".join(pending)
     combined = combined_raw.lower().strip()
 
+    # Priorità assoluta in fase 0: se la mamma dichiara di aver già acquistato
+    # o di aver scaricato/letto la guida, avvia subito la sequenza senza aspettare GPT.
+    if fase == 0 and acquisto_dichiarato(combined_raw):
+        logger.info(f"Acquisto dichiarato rilevato a codice per {phone}")
+        invia_sequenza_acquisto(phone)
+        return
+
     # Router semantico: non invia nulla, serve solo per decidere meglio.
     router_result = classify_message(phone, fase, combined_raw, image_url=image_url)
+    if fase == 0:
+        router_result = normalize_phase0_intent(router_result, combined_raw)
     logger.info(f"Router per {phone}: {router_result}")
 
     if should_hold_for_human(router_result):
@@ -2034,13 +2155,7 @@ def process_response(phone, image_url=None):
         return
 
     if fase == 0:
-        parole_acquisto = [
-            "ho acquistato", "ho comprato", "ho fatto l'ordine", "ho effettuato l'ordine",
-            "ho preso il pacchetto", "ho preso il percorso", "ho pagato", "ho fatto il pagamento",
-            "ordine completato", "pagamento completato", "l'ho preso",
-            "l'ho comprato", "l'ho acquistato", "ho fatto l'acquisto"
-        ]
-        is_acquisto = any(p in combined for p in parole_acquisto)
+        is_acquisto = acquisto_dichiarato(combined_raw)
         if router_result.get("intent") == "acquisto_completato" and float(router_result.get("confidence", 0) or 0) >= 0.75:
             is_acquisto = True
 
