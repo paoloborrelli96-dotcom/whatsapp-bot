@@ -143,7 +143,7 @@ MSG_QUESTIONARIO_1 = (
     "rispondimi con calma:\n\n"
     "1. Nominativo con cui hai effettuato l'ordine e data di acquisto\n"
     "2. Come ti chiami e quanti anni hai?\n"
-    "3. Nome del bambino/a, eta attuale precisa in mesi o anni, data di nascita e peso attuale\n"
+    "3. Nome del bambino/a, eta attuale precisa in mesi o anni e peso attuale\n"
     "4. E il primo figlio? Ha fratelli o sorelle?\n"
     "5. Descrivimi la sua giornata tipo: orario sveglia mattina, pisolini con orari e durata, orario nanna serale\n"
     "6. Come si addormenta di solito? Seno, biberon, ciuccio, braccio, dondolio, lettone, presenza, da solo o altro?\n"
@@ -169,6 +169,20 @@ MSG_QUESTIONARIO_2 = (
 MSG_CONFERMA_QUESTIONARIO = (
     "Hai risposto a tutto? Dimmi quando hai finito cosi inizio subito a prepararti il piano 🤍"
 )
+
+MSG_CHECKUP = """Ok, allora rivediamo un attimo la situazione cosi capisco bene cosa sta succedendo adesso.
+
+1. Da quanti giorni state seguendo il piano?
+2. Cosa e migliorato, anche poco?
+3. Cosa invece e rimasto uguale o peggiorato?
+4. Com'e l'addormentamento serale in questi giorni?
+5. Quanti risvegli sta facendo circa e in che orari?
+6. Nei risvegli cosa cerca per riaddormentarsi?
+7. I pisolini come stanno andando?
+8. C'e stato qualcosa di diverso: dentini, malattia, nido, viaggi, giornate piu stimolanti o cambiamenti?
+9. Qual e la cosa che ti pesa di piu in questo momento?
+
+Rispondimi con calma, poi rivedo il piano in base a quello che mi scrivi 🤍"""
 
 # ─── PROMPT MODULARI ───────────────────────────────────────────────────────────
 SYSTEM_PROMPT_BASE = """
@@ -234,6 +248,7 @@ Intenti possibili:
 - lamentela_generica
 - domanda_percorso_attivo
 - aggiornamento_percorso_attivo
+- difficolta_persistente_post_piano
 - richiesta_pratica_immediata
 - messaggio_cortesia
 - conferma_questionario_finito
@@ -253,6 +268,7 @@ Non classificare come problema_checkout_importo solo perché compaiono 37 o 67. 
 Non classificare come acquisto_completato se scrive "lo compro", "lo prendo", "acquisto subito". Quello è intenzione_acquisto_non_completato.
 È acquisto_completato solo se dice che ha già pagato, completato ordine, fatto acquisto, o mostra ricevuta/conferma.
 Se la mamma è già in percorso attivo e chiede "che faccio ora", "lo sveglio", "la attacco", "come mi muovo adesso", usa richiesta_pratica_immediata.
+Se la mamma è in percorso attivo e dice che dopo alcuni giorni non vede miglioramenti, non funziona, è peggiorato, è molto stanca o non ce la fa più, usa difficolta_persistente_post_piano. Non mettere needs_human=true solo per questo: safe_auto_reply=true e needs_human=false, salvo rabbia forte o richiesta rimborso.
 Se cita febbre, tosse, raffreddore, dentini, malattia recente o malessere passato ma la domanda principale riguarda il sonno, il latte, i risvegli o il rientro alla routine, NON bloccare la risposta: usa domanda_percorso_attivo o aggiornamento_percorso_attivo, metti entities.medical_topic=true, safe_auto_reply=true e needs_human=false.
 In questi casi il generatore dovrà rispondere sul sonno con prudenza, senza diagnosi e senza consigli medici.
 Usa dubbio_medico_delicato con needs_human=true SOLO se ci sono segnali sanitari importanti o richieste mediche dirette: difficoltà respiratoria, febbre alta ancora in corso o peggioramento, vomito persistente, disidratazione, dolore forte, crescita/peso preoccupante, farmaci/dosaggi, richiesta di diagnosi, indicazioni del pediatra da interpretare, pronto soccorso o situazione che sembra urgente.
@@ -324,6 +340,76 @@ Non proporre troppe modifiche tutte insieme: dai una direzione chiara per i prim
 
 Chiudi sempre e solo con:
 "Aggiornami fra qualche giorno e fammi sapere come va 🤍"
+"""
+
+CONTINUA_PROMPT = """
+Rispondi all'ultimo messaggio della mamma come Paola.
+Questo comando e stato autorizzato da Paola dopo un alert: puoi rispondere comunque, ma con cautela.
+
+Non generare un nuovo piano.
+Non proporre un checkup.
+Non fare troppe modifiche.
+Non scrivere una risposta solo motivazionale.
+
+Devi:
+- riconoscere la stanchezza o la difficolta se presente;
+- rispondere alla domanda concreta che la mamma ha fatto;
+- collegarti al piano gia dato e allo storico;
+- dare massimo 1 o 2 indicazioni pratiche per oggi o per stanotte;
+- se c'e un tema sanitario leggero, non dare consigli medici e rimanda al pediatra per la parte sanitaria;
+- se c'e una lamentela o rimborso, rispondi con molta cautela, senza promesse e senza irrigidirti;
+- se c'e sospetto AI, rispondi in modo trasparente come previsto dal prompt base.
+
+La risposta deve sembrare un messaggio WhatsApp umano, pratico e diretto.
+"""
+
+RISPOSTA_FORZATA_PROMPT = """
+Rispondi normalmente all'ultimo messaggio della mamma come Paola, anche se prima era stato generato un alert.
+Non dire che c'e stato un alert.
+Rispetta tutte le regole di tono, sicurezza e personalizzazione.
+"""
+
+REVISION_PROMPT = """
+Scrivi una revisione aggiornata del piano come Paola.
+La mamma ha gia ricevuto un piano o indicazioni precedenti: NON generare un piano iniziale da zero.
+
+Devi partire da quello che e cambiato o da quello che non sta funzionando.
+Spiega cosa manterresti, cosa correggeresti e cosa invece non toccheresti per non creare confusione.
+Dai una linea concreta per i prossimi 3-5 giorni.
+
+La revisione deve includere, se rilevante:
+- lettura breve della situazione aggiornata;
+- cosa e migliorato o quale segnale va valorizzato;
+- cosa probabilmente sta mantenendo la difficolta;
+- addormentamento serale;
+- risvegli notturni;
+- pisolini;
+- gestione di seno, latte, biberon, ciuccio, braccio o contatto se presenti;
+- cosa fare se protesta;
+- cosa osservare nei prossimi giorni.
+
+Non usare titoli, markdown, grassetti, bullet point o numerazioni.
+Scrivi in prosa naturale da WhatsApp, ma ordinata e concreta.
+Non dare diagnosi o consigli medici.
+Non concludere con frasi automatiche, ma puoi chiudere con una frase neutra di direzione.
+"""
+
+CHECKUP_CLASSIFIER_PROMPT = """
+Sei un classificatore. Devi capire se la mamma ha risposto in modo sufficiente alle domande di checkup sul sonno.
+Restituisci solo JSON valido.
+
+Valori possibili per status:
+- sufficient: ha dato informazioni concrete utili su almeno 2-3 aspetti tra miglioramenti, peggioramenti, addormentamento, risvegli, pisolini, latte/seno/ciuccio, eventi nuovi, difficolta principale.
+- defer: scrive solo che rispondera dopo, ok, grazie, appena riesco, ti aggiorno, o altra risposta di rinvio/cortesia.
+- incomplete: ha scritto qualcosa, ma e troppo poco per rivedere il piano in modo serio.
+
+Restituisci:
+{
+  "status": "sufficient|defer|incomplete",
+  "confidence": 0.0,
+  "missing": "eventuali dati mancanti in una frase breve",
+  "reason": "breve motivo"
+}
 """
 
 # Compatibilità con eventuali funzioni vecchie che richiamano SYSTEM_PROMPT.
@@ -477,6 +563,30 @@ def telegram_webhook():
                         active_timers[phone].cancel()
                         active_timers.pop(phone, None)
                 threading.Thread(target=send_piano, args=[phone], daemon=True).start()
+            elif cmd == "/checkup":
+                with active_timers_lock:
+                    if phone in active_timers:
+                        active_timers[phone].cancel()
+                        active_timers.pop(phone, None)
+                send_checkup(phone)
+            elif cmd == "/revisione":
+                with active_timers_lock:
+                    if phone in active_timers:
+                        active_timers[phone].cancel()
+                        active_timers.pop(phone, None)
+                threading.Thread(target=send_revision, args=[phone, "manuale"], daemon=True).start()
+            elif cmd == "/continua":
+                with active_timers_lock:
+                    if phone in active_timers:
+                        active_timers[phone].cancel()
+                        active_timers.pop(phone, None)
+                threading.Thread(target=generate_forced_reply, args=[phone, "continua"], daemon=True).start()
+            elif cmd == "/rispondi":
+                with active_timers_lock:
+                    if phone in active_timers:
+                        active_timers[phone].cancel()
+                        active_timers.pop(phone, None)
+                threading.Thread(target=generate_forced_reply, args=[phone, "rispondi"], daemon=True).start()
             elif cmd == "/inizia":
                 set_start_date(phone, datetime.now().date())
                 set_fase(phone, 4)
@@ -555,6 +665,12 @@ def init_db():
             created_at TIMESTAMPTZ DEFAULT NOW()
         )
     """)
+    # Colonne aggiunte nelle versioni successive: ALTER sicuro anche su DB già esistente.
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS last_plan_sent_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS checkup_pending BOOLEAN DEFAULT FALSE")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS checkup_sent_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS last_post_plan_alert_at TIMESTAMPTZ")
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS telegram_topics (
             phone TEXT PRIMARY KEY,
@@ -701,6 +817,107 @@ def set_start_date(phone, start_date):
         conn.close()
     except Exception as e:
         logger.error(f"Errore set_start_date: {e}")
+
+def set_last_plan_sent_at(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO consultations (phone, last_plan_sent_at, checkup_pending)
+            VALUES (%s, NOW(), FALSE)
+            ON CONFLICT (phone) DO UPDATE
+            SET last_plan_sent_at = NOW(), checkup_pending = FALSE
+        """, (phone,))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Errore set_last_plan_sent_at: {e}")
+
+
+def get_last_plan_sent_at(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT last_plan_sent_at FROM consultations WHERE phone = %s", (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row[0] if row else None
+    except Exception as e:
+        logger.error(f"Errore get_last_plan_sent_at: {e}")
+        return None
+
+
+def set_checkup_pending(phone, pending=True):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        if pending:
+            cur.execute("""
+                INSERT INTO consultations (phone, checkup_pending, checkup_sent_at)
+                VALUES (%s, TRUE, NOW())
+                ON CONFLICT (phone) DO UPDATE
+                SET checkup_pending = TRUE, checkup_sent_at = NOW()
+            """, (phone,))
+        else:
+            cur.execute("""
+                INSERT INTO consultations (phone, checkup_pending)
+                VALUES (%s, FALSE)
+                ON CONFLICT (phone) DO UPDATE
+                SET checkup_pending = FALSE
+            """, (phone,))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Errore set_checkup_pending: {e}")
+
+
+def is_checkup_pending(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT COALESCE(checkup_pending, FALSE) FROM consultations WHERE phone = %s", (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return bool(row and row[0])
+    except Exception as e:
+        logger.error(f"Errore is_checkup_pending: {e}")
+        return False
+
+
+def mark_post_plan_alert_sent(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO consultations (phone, last_post_plan_alert_at)
+            VALUES (%s, NOW())
+            ON CONFLICT (phone) DO UPDATE
+            SET last_post_plan_alert_at = NOW()
+        """, (phone,))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Errore mark_post_plan_alert_sent: {e}")
+
+
+def get_last_post_plan_alert_at(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT last_post_plan_alert_at FROM consultations WHERE phone = %s", (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row[0] if row else None
+    except Exception as e:
+        logger.error(f"Errore get_last_post_plan_alert_at: {e}")
+        return None
+
 
 def get_pianos_to_send():
     try:
@@ -1421,6 +1638,211 @@ def send_whatsapp_message(phone, text):
             logger.error(f"Errore invio a {phone}: {e}")
             threading.Thread(target=send_telegram, args=[f"⚠️ Errore Twilio per {phone}: {e}"], daemon=True).start()
 
+def quick_commands_text(include_checkup=True):
+    lines = [
+        "",
+        "Comandi rapidi nel topic:",
+        "➜ /continua = autorizza il bot a rispondere comunque con cautela",
+        "➜ /rispondi = risposta normale GPT all'ultimo messaggio",
+        "➜ /pausa = gestisco io manualmente"
+    ]
+    if include_checkup:
+        lines.extend([
+            "➜ /checkup = mando domande di aggiornamento",
+            "➜ /revisione = genero revisione aggiornata"
+        ])
+    return "\n".join(lines)
+
+
+def manual_alert_message(phone, router_result, message_text):
+    return (
+        f"⚠️ Revisione manuale consigliata per {phone}\n"
+        f"Intento: {router_result.get('intent')}\n"
+        f"Motivo: {router_result.get('reason')}\n"
+        f"Messaggio:\n{message_text}"
+        f"{quick_commands_text()}"
+    )
+
+
+def send_checkup(phone):
+    save_message(phone, "assistant", MSG_CHECKUP)
+    send_whatsapp_message(phone, MSG_CHECKUP)
+    set_checkup_pending(phone, True)
+    logger.info(f"Checkup inviato a {phone}")
+
+
+def classify_checkup_response(pending_text):
+    default = {"status": "incomplete", "confidence": 0.0, "missing": "", "reason": "fallback"}
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CLASSIFIER,
+            messages=[
+                {"role": "system", "content": CHECKUP_CLASSIFIER_PROMPT},
+                {"role": "user", "content": pending_text or ""}
+            ],
+            max_tokens=350,
+            temperature=0,
+            response_format={"type": "json_object"},
+            timeout=60
+        )
+        data = parse_json_safely(response.choices[0].message.content, default)
+        if not isinstance(data, dict):
+            return default
+        data.setdefault("status", "incomplete")
+        data.setdefault("confidence", 0.0)
+        data.setdefault("missing", "")
+        data.setdefault("reason", "")
+        return data
+    except Exception as e:
+        logger.error(f"Errore classificazione risposta checkup: {e}")
+        return default
+
+
+def send_revision(phone, reason="manuale"):
+    logger.info(f"Generazione revisione per {phone} — motivo {reason}")
+    try:
+        extract_child_profile_from_history(phone)
+    except Exception as e:
+        logger.error(f"Errore estrazione profilo prima della revisione: {e}")
+
+    history = get_history(phone)
+    profile_text = profile_to_text(get_child_profile(phone))
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_BASE},
+        {"role": "system", "content": REVISION_PROMPT},
+        {"role": "system", "content": f"Profilo bambino strutturato:\n{profile_text}"}
+    ]
+    messages.extend(history)
+    messages.append({"role": "user", "content": (
+        "Genera ora una revisione aggiornata del piano. "
+        "Non rifare il piano iniziale da zero. Usa tutte le informazioni recenti, "
+        "specialmente le risposte al checkup o le ultime difficolta raccontate dalla mamma. "
+        "Sii concreta, specifica e utile per i prossimi giorni."
+    )})
+    try:
+        response = openai_chat_completion(
+            model=MODEL_PLAN,
+            messages=messages,
+            max_tokens=4200,
+            temperature=TEMP_PLAN,
+            timeout=180
+        )
+        revisione = response.choices[0].message.content.strip()
+        logger.info(f"Revisione generata per {phone} — lunghezza {len(revisione)} caratteri")
+        context = {"link_sent": True, "asks_link": False}
+        revisione, issue = validate_reply(revisione, context)
+        if issue:
+            revisione = rewrite_reply_if_needed(revisione, issue, context)
+    except Exception as e:
+        logger.error(f"Errore generazione revisione: {e}")
+        threading.Thread(target=send_telegram, args=[f"⚠️ Errore revisione per {phone}: {e}"], daemon=True).start()
+        return
+
+    save_message(phone, "assistant", revisione)
+    send_whatsapp_message(phone, revisione)
+    set_fase(phone, 4)
+    set_checkup_pending(phone, False)
+    set_last_plan_sent_at(phone)
+    logger.info(f"Revisione inviata a {phone}")
+
+
+def generate_forced_reply(phone, mode="continua"):
+    pending = get_messages_since_last_reply(phone)
+    pending_text = "\n".join(pending).strip()
+    if not pending_text:
+        send_to_topic(phone, "⚠️ Nessun messaggio nuovo in attesa a cui rispondere.", True)
+        return
+
+    fase = get_fase(phone)
+    router_result = classify_message(phone, fase, pending_text, image_url=None)
+    context = build_ai_context(phone, fase, router_result, pending_text)
+    special_prompt = CONTINUA_PROMPT if mode == "continua" else RISPOSTA_FORZATA_PROMPT
+    context_text = f"""
+Contesto operativo:
+Fase: {fase}
+Intento rilevato: {router_result.get('intent', 'altro')}
+Tipo messaggio: {router_result.get('message_type', 'altro')}
+Tema sanitario citato: {router_result.get('entities', {}).get('medical_topic', False)}
+
+Regola business per questa risposta:
+{context['business_rule']}
+
+Profilo bambino:
+{context['profile_text']}
+"""
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_BASE},
+        {"role": "system", "content": CHAT_RESPONSE_PROMPT},
+        {"role": "system", "content": special_prompt},
+        {"role": "system", "content": context_text}
+    ]
+    messages.extend(context["recent_history"])
+    messages.append({"role": "user", "content": pending_text})
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=messages,
+            max_tokens=1800,
+            temperature=TEMP_CHAT,
+            timeout=90
+        )
+        reply = response.choices[0].message.content.strip()
+        clean, issue = validate_reply(reply, context)
+        clean = rewrite_reply_if_needed(clean, issue, context) if issue else clean
+        if clean:
+            save_message(phone, "assistant", clean)
+            send_whatsapp_message(phone, clean)
+            logger.info(f"Risposta forzata {mode} inviata a {phone}")
+    except Exception as e:
+        logger.error(f"Errore risposta forzata {mode} per {phone}: {e}")
+        threading.Thread(target=send_telegram, args=[f"⚠️ Errore /{mode} per {phone}: {e}"], daemon=True).start()
+
+
+def maybe_send_post_plan_alert(phone, router_result, pending_text):
+    intent = router_result.get("intent", "") if router_result else ""
+    text = (pending_text or "").lower()
+    difficulty_terms = [
+        "non funziona", "non sta funzionando", "non vedo miglioramenti", "nessun miglioramento",
+        "sono stanca", "sono distrutta", "non ce la faccio", "non ce la faccio piu", "non ce la faccio più",
+        "e peggiorato", "è peggiorato", "peggiorato", "si sveglia ancora tantissimo", "risvegli continui"
+    ]
+    is_difficulty = intent == "difficolta_persistente_post_piano" or any(term in text for term in difficulty_terms)
+    if not is_difficulty:
+        return
+    last_plan = get_last_plan_sent_at(phone)
+    if not last_plan:
+        return
+    try:
+        now = datetime.now(last_plan.tzinfo) if getattr(last_plan, 'tzinfo', None) else datetime.now()
+        hours = (now - last_plan).total_seconds() / 3600
+    except Exception:
+        return
+    if hours < 72:
+        logger.info(f"Difficolta post-piano rilevata per {phone}, ma piano inviato da {hours:.1f} ore: nessun alert checkup")
+        return
+    last_alert = get_last_post_plan_alert_at(phone)
+    if last_alert:
+        try:
+            now2 = datetime.now(last_alert.tzinfo) if getattr(last_alert, 'tzinfo', None) else datetime.now()
+            alert_hours = (now2 - last_alert).total_seconds() / 3600
+            if alert_hours < 24:
+                return
+        except Exception:
+            pass
+    mark_post_plan_alert_sent(phone)
+    threading.Thread(
+        target=send_telegram,
+        args=[(
+            f"⚠️ Possibile difficolta post-piano per {phone}\n"
+            f"Sono passati almeno 3 giorni dal piano e la mamma segnala stanchezza, pochi miglioramenti o peggioramento.\n"
+            f"Il bot rispondera comunque normalmente, ma valuta tu se usare /checkup o /continua.\n"
+            f"Messaggio:\n{pending_text}"
+            f"{quick_commands_text()}"
+        )],
+        daemon=True
+    ).start()
+
+
 def send_piano(phone):
     logger.info(f"Generazione piano per {phone}")
 
@@ -1468,6 +1890,8 @@ def send_piano(phone):
     logger.info(f"Piano inviato a {phone}")
     set_fase(phone, 4)
     set_start_date(phone, datetime.now().date())
+    set_checkup_pending(phone, False)
+    set_last_plan_sent_at(phone)
 
 # ─── SEQUENZA ACQUISTO ─────────────────────────────────────────────────────────
 def invia_sequenza_acquisto(phone):
@@ -1509,9 +1933,29 @@ def process_response(phone, image_url=None):
     if should_hold_for_human(router_result):
         threading.Thread(
             target=send_telegram,
-            args=[f"⚠️ Revisione manuale consigliata per {phone}\nIntento: {router_result.get('intent')}\nMotivo: {router_result.get('reason')}\nMessaggio:\n{combined_raw}"],
+            args=[manual_alert_message(phone, router_result, combined_raw)],
             daemon=True
         ).start()
+        return
+
+    if fase == 4 and is_checkup_pending(phone):
+        check = classify_checkup_response(combined_raw)
+        logger.info(f"Checkup response per {phone}: {check}")
+        status = check.get("status", "incomplete")
+        confidence = float(check.get("confidence", 0) or 0)
+        if status == "sufficient" and confidence >= 0.60:
+            send_revision(phone, reason="checkup automatico")
+            return
+        if status == "defer" and confidence >= 0.60:
+            mark_silent_no_reply(phone, "checkup in attesa: risposta di rinvio/cortesia")
+            return
+        missing = check.get("missing") or "qualche dettaglio su addormentamento, risvegli e pisolini"
+        risposta = (
+            "Ok, per rivederlo bene mi manca ancora " + missing + ". "
+            "Quando riesci mandami questi dettagli, cosi posso rielaborare il piano senza andare a tentativi 🤍"
+        )
+        save_message(phone, "assistant", risposta)
+        send_whatsapp_message(phone, risposta)
         return
 
     if fase == 0:
@@ -1708,6 +2152,7 @@ def process_response(phone, image_url=None):
         logger.info(f"Fase 3 per {phone} — bot in attesa del piano")
 
     elif fase == 4:
+        maybe_send_post_plan_alert(phone, router_result, combined_raw)
         # Se emergono nuovi dati utili, prova ad aggiornare il profilo senza bloccare la risposta.
         if len(combined_raw) > 120:
             threading.Thread(target=extract_child_profile_from_history, args=[phone], daemon=True).start()
@@ -1799,6 +2244,50 @@ def webhook():
                     active_timers[target].cancel()
                     active_timers.pop(target, None)
             threading.Thread(target=send_piano, args=[target], daemon=True).start()
+        return Response("OK", status=200)
+
+    if body.startswith("/checkup"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            with active_timers_lock:
+                if target in active_timers:
+                    active_timers[target].cancel()
+                    active_timers.pop(target, None)
+            send_checkup(target)
+        return Response("OK", status=200)
+
+    if body.startswith("/revisione"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            with active_timers_lock:
+                if target in active_timers:
+                    active_timers[target].cancel()
+                    active_timers.pop(target, None)
+            threading.Thread(target=send_revision, args=[target, "manuale"], daemon=True).start()
+        return Response("OK", status=200)
+
+    if body.startswith("/continua"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            with active_timers_lock:
+                if target in active_timers:
+                    active_timers[target].cancel()
+                    active_timers.pop(target, None)
+            threading.Thread(target=generate_forced_reply, args=[target, "continua"], daemon=True).start()
+        return Response("OK", status=200)
+
+    if body.startswith("/rispondi"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            with active_timers_lock:
+                if target in active_timers:
+                    active_timers[target].cancel()
+                    active_timers.pop(target, None)
+            threading.Thread(target=generate_forced_reply, args=[target, "rispondi"], daemon=True).start()
         return Response("OK", status=200)
 
     if body.startswith("/q1"):
@@ -1996,6 +2485,5 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
-
 
 
