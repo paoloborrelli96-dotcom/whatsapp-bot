@@ -1231,6 +1231,147 @@ def normalize_phase0_intent(router_result, pending_text):
     return router_result
 
 
+
+# ─── ACQUISTO CONTESTUALE E QUESTIONARIO ROBUSTO ─────────────────────────────
+def contextual_purchase_fallback(trigger_text=""):
+    """Fallback umano se GPT non riesce a generare l'introduzione acquisto."""
+    t = (trigger_text or "").lower()
+    if any(x in t for x in ["cosa", "che cosa", "integrato", "include", "compreso", "dentro", "nel percorso"]):
+        return (
+            "Certo cara, ti spiego subito.\n\n"
+            "Nel percorso hai incluso il supporto WhatsApp, il questionario iniziale, il piano personalizzato costruito sulla vostra situazione e il materiale pratico da consultare.\n\n"
+            "La parte più importante però è proprio il lavoro su misura: guardiamo orari, pisolini, addormentamento, risvegli e difficoltà reali del tuo bambino, così non resti con indicazioni generiche.\n\n"
+            "Per iniziare bene ora ti mando le regole della chat e poi il questionario dettagliato."
+        )
+    if lead_problem_described(trigger_text):
+        return (
+            "Perfetto cara, ho capito. Visto quello che mi hai raccontato, partiamo raccogliendo bene tutti i dettagli così il piano non sarà generico, ma adatto alla vostra situazione reale.\n\n"
+            "Ora ti mando prima le regole della chat e poi il questionario iniziale."
+        )
+    return (
+        "Perfetto cara, allora iniziamo.\n\n"
+        "Per prepararti un piano davvero su misura ho bisogno prima di raccogliere bene le informazioni sulla vostra situazione.\n\n"
+        "Ora ti mando le regole della chat e poi il questionario iniziale."
+    )
+
+
+def build_contextual_purchase_intro(phone, trigger_text=""):
+    """Genera un'introduzione coerente quando l'acquisto viene rilevato dai messaggi della mamma.
+
+    Non deve sembrare una sequenza rigida: se la mamma ha fatto una domanda, risponde prima alla domanda;
+    poi accompagna verso regole + questionario.
+    """
+    try:
+        recent = get_recent_history(phone, limit=14)
+        history_text = "\n".join([f"{m.get('role')}: {str(m.get('content',''))[:700]}" for m in recent])
+        messages = [
+            {"role": "system", "content": (
+                "Sei Paola di Genitori in Armonia. Devi scrivere un breve messaggio WhatsApp naturale.\n"
+                "La mamma ha appena fatto capire che ha già acquistato o ha già accesso al percorso/guida.\n"
+                "Rispondi in modo coerente all'ultimo messaggio: se ha fatto una domanda, rispondi prima a quella domanda.\n"
+                "Poi fai una transizione morbida: ora le manderai le regole della chat e il questionario iniziale per preparare il piano personalizzato.\n"
+                "Non sembrare un messaggio automatico. Non dire 'messaggio automatico'. Non inserire link.\n"
+                "Non fare un piano sonno. Non dare troppe indicazioni pratiche.\n"
+                "Tono empatico, professionale, umano, da WhatsApp. Massimo 10-12 righe."
+            )},
+            {"role": "user", "content": (
+                f"Storico recente:\n{history_text}\n\n"
+                f"Ultimo messaggio/messaggi della mamma che hanno fatto rilevare l'acquisto:\n{trigger_text}\n\n"
+                "Scrivi solo il messaggio da inviare alla mamma."
+            )}
+        ]
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=messages,
+            max_tokens=450,
+            temperature=TEMP_CHAT,
+            timeout=60
+        )
+        intro = response.choices[0].message.content.strip()
+        intro, issue = validate_reply(intro, {"link_sent": True, "asks_link": False})
+        if issue:
+            intro = rewrite_reply_if_needed(intro, issue, {"link_sent": True, "asks_link": False})
+        if not intro or len(intro) < 20:
+            return contextual_purchase_fallback(trigger_text)
+        return intro
+    except Exception as e:
+        logger.error(f"Errore intro acquisto contestuale per {phone}: {e}")
+        return contextual_purchase_fallback(trigger_text)
+
+
+def is_questionnaire_deferral(text):
+    """Rileva rinvii/cortesie dopo questionario, per evitare risposte fuori contesto.
+
+    Esempi: 'scrivo più tardi', 'ti rispondo domani', 'lo faccio dopo'.
+    """
+    t = (text or "").lower()
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t:
+        return False
+
+    # Se sta dicendo che ha finito, non è un rinvio.
+    if any(x in t for x in ["ho finito", "finito", "ho risposto", "risposto a tutto", "completato", "ecco tutto"]):
+        return False
+
+    exact = {
+        "ok", "ok grazie", "va bene", "va bene grazie", "perfetto", "perfetto grazie",
+        "grazie", "grazie mille", "dopo", "più tardi", "piu tardi", "domani"
+    }
+    if t in exact:
+        return True
+
+    patterns = [
+        "scrivo più tardi", "scrivo piu tardi", "ti scrivo più tardi", "ti scrivo piu tardi",
+        "rispondo più tardi", "rispondo piu tardi", "ti rispondo più tardi", "ti rispondo piu tardi",
+        "ti rispondo dopo", "rispondo dopo", "lo faccio dopo", "lo faccio più tardi", "lo faccio piu tardi",
+        "appena riesco", "appena posso", "ora non riesco", "non riesco ora", "poi compilo",
+        "lo compilo dopo", "lo compilo più tardi", "lo compilo piu tardi", "te lo mando dopo",
+        "te lo mando più tardi", "te lo mando piu tardi", "ti mando tutto dopo", "ti mando tutto più tardi",
+        "ti mando tutto piu tardi", "stasera", "questa sera", "domani ti rispondo", "ti rispondo domani"
+    ]
+    if any(pat in t for pat in patterns) and len(t) < 220:
+        return True
+
+    return False
+
+
+def questionnaire_answer_seems_concrete(text, part=1):
+    """Controllo prudente: manda Q2/conferma solo se ci sono risposte reali, non rinvii."""
+    if is_questionnaire_deferral(text):
+        return False
+
+    t = (text or "").lower()
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t:
+        return False
+
+    if part == 1:
+        numbered = len(re.findall(r"(?:^|\s)([1-7])\s*[\.)-]", t))
+        terms = [
+            "nome", "anni", "mesi", "data", "nasc", "peso", "kg", "sveglia",
+            "pisolino", "pisolini", "nanna", "addormenta", "seno", "biberon",
+            "ciuccio", "braccio", "lettino", "lettone", "culla", "next to me", "fratell"
+        ]
+        min_len = 110
+    else:
+        numbered = len(re.findall(r"(?:^|\s)(8|9|1[0-8])\s*[\.)-]", t))
+        terms = [
+            "risvegl", "notte", "orari", "piange", "seno", "biberon", "latte",
+            "ciuccio", "braccio", "riaddorment", "partner", "papà", "papa",
+            "mamma", "lavor", "matern", "nido", "obiettivo", "voglio", "non voglio",
+            "salute", "reflusso", "dent", "febbre", "pediatra"
+        ]
+        min_len = 100
+
+    term_count = sum(1 for term in terms if term in t)
+    if numbered >= 3:
+        return True
+    if len(t) >= min_len and term_count >= 4:
+        return True
+    if len(t) >= 260 and term_count >= 3:
+        return True
+    return False
+
 def get_child_profile(phone):
     try:
         conn = get_db()
@@ -2081,7 +2222,7 @@ def send_piano(phone):
     set_last_plan_sent_at(phone)
 
 # ─── SEQUENZA ACQUISTO ─────────────────────────────────────────────────────────
-def invia_sequenza_acquisto(phone):
+def invia_sequenza_acquisto(phone, intro_text=None):
     if get_fase(phone) != 0:
         logger.info(f"Sequenza acquisto gia avviata per {phone} — skip")
         return
@@ -2089,8 +2230,9 @@ def invia_sequenza_acquisto(phone):
     set_fase(phone, 1)
     logger.info(f"Avvio sequenza acquisto per {phone}")
 
-    save_message(phone, "assistant", MSG_BENVENUTO)
-    send_whatsapp_message(phone, MSG_BENVENUTO)
+    intro = (intro_text or MSG_BENVENUTO).strip()
+    save_message(phone, "assistant", intro)
+    send_whatsapp_message(phone, intro)
     time.sleep(3)
 
     save_message(phone, "assistant", MSG_REGOLE)
@@ -2117,7 +2259,8 @@ def process_response(phone, image_url=None):
     # o di aver scaricato/letto la guida, avvia subito la sequenza senza aspettare GPT.
     if fase == 0 and acquisto_dichiarato(combined_raw):
         logger.info(f"Acquisto dichiarato rilevato a codice per {phone}")
-        invia_sequenza_acquisto(phone)
+        intro = build_contextual_purchase_intro(phone, combined_raw)
+        invia_sequenza_acquisto(phone, intro_text=intro)
         return
 
     # Router semantico: non invia nulla, serve solo per decidere meglio.
@@ -2185,7 +2328,8 @@ def process_response(phone, image_url=None):
                 threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore immagine per {phone}: {e}"], daemon=True).start()
 
         if is_acquisto:
-            invia_sequenza_acquisto(phone)
+            intro = build_contextual_purchase_intro(phone, combined_raw)
+            invia_sequenza_acquisto(phone, intro_text=intro)
             return
 
         ai_reply = get_ai_response(phone, image_url=image_url, router_result=router_result)
@@ -2194,15 +2338,20 @@ def process_response(phone, image_url=None):
             send_whatsapp_message(phone, ai_reply)
 
     elif fase == 1:
-        # Controlla se la mamma ha risposto concretamente o solo messaggi di cortesia.
-        ha_risposto = router_result.get("intent") == "risposta_questionario_concreta" and float(router_result.get("confidence", 0) or 0) >= 0.65
+        # Q1 -> Q2: manda la seconda parte solo se la mamma ha davvero iniziato a rispondere.
+        # Se scrive "ti rispondo più tardi", "lo compilo dopo", ecc. resta in attesa e non invia frasi fuori contesto.
+        if is_questionnaire_deferral(combined_raw):
+            mark_silent_no_reply(phone, "fase 1: rinvio compilazione questionario")
+            logger.info(f"Fase 1 per {phone} — rinvio/cortesia, nessun Q2 inviato")
+            return
+
+        ha_risposto = questionnaire_answer_seems_concrete(combined_raw, part=1)
         if not ha_risposto:
-            # Fallback vecchio classificatore, mantenuto per sicurezza.
             try:
                 check_response = openai_chat_completion(
                     model=MODEL_CLASSIFIER,
                     messages=[
-                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO se la mamma ha scritto informazioni concrete su se stessa o sul bambino (nome, eta, routine, sonno, orari, ecc.). NON_HA_RISPOSTO se ha scritto solo messaggi generici di cortesia o rinvio (ok, grazie, ci penso, ti rispondo domani, dopo, perfetto, ecc.)."},
+                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO solo se la mamma ha scritto risposte concrete al questionario: dati su mamma/bambino, eta, routine, sonno, orari, addormentamento, dove dorme. NON_HA_RISPOSTO se ha scritto solo cortesia o rinvio tipo ok, grazie, dopo, scrivo più tardi, ti rispondo domani, appena riesco."},
                         {"role": "user", "content": f"Messaggi della mamma: '{combined_raw}'"}
                     ],
                     max_tokens=10,
@@ -2210,12 +2359,12 @@ def process_response(phone, image_url=None):
                     timeout=60
                 )
                 risposta = check_response.choices[0].message.content.strip().upper()
-                ha_risposto = "HA_RISPOSTO" in risposta
+                ha_risposto = "HA_RISPOSTO" in risposta and not is_questionnaire_deferral(combined_raw)
                 logger.info(f"Classificatore fase 1 per {phone}: {risposta}")
             except Exception as e:
                 logger.error(f"Errore classificatore fase 1: {e}")
                 threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 1 per {phone}: {e}"], daemon=True).start()
-                ha_risposto = True
+                ha_risposto = questionnaire_answer_seems_concrete(combined_raw, part=1)
 
         if ha_risposto:
             time.sleep(300)
@@ -2227,13 +2376,19 @@ def process_response(phone, image_url=None):
             logger.info(f"Fase 1 per {phone} — mamma non ha risposto concretamente, bot in attesa")
 
     elif fase == 2:
-        ha_risposto = router_result.get("intent") == "risposta_questionario_concreta" and float(router_result.get("confidence", 0) or 0) >= 0.65
+        # Q2 -> conferma finale: chiedi "hai finito?" solo dopo risposte vere alla seconda parte.
+        if is_questionnaire_deferral(combined_raw):
+            mark_silent_no_reply(phone, "fase 2: rinvio compilazione questionario")
+            logger.info(f"Fase 2 per {phone} — rinvio/cortesia, nessuna conferma inviata")
+            return
+
+        ha_risposto = questionnaire_answer_seems_concrete(combined_raw, part=2)
         if not ha_risposto:
             try:
                 check_response = openai_chat_completion(
                     model=MODEL_CLASSIFIER,
                     messages=[
-                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO se la mamma ha scritto informazioni concrete su se stessa o sul bambino (nome, eta, routine, sonno, orari, ecc.). NON_HA_RISPOSTO se ha scritto solo messaggi generici di cortesia o rinvio (ok, grazie, ci penso, ti rispondo domani, dopo, perfetto, ecc.)."},
+                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO solo se la mamma ha scritto risposte concrete alla seconda parte del questionario: risvegli, orari, cosa succede di notte, riaddormentamento, latte, partner, lavoro/nido, obiettivo, difficoltà, salute. NON_HA_RISPOSTO se ha scritto solo cortesia o rinvio tipo ok, grazie, dopo, scrivo più tardi, ti rispondo domani, appena riesco."},
                         {"role": "user", "content": f"Messaggi della mamma: '{combined_raw}'"}
                     ],
                     max_tokens=10,
@@ -2241,12 +2396,12 @@ def process_response(phone, image_url=None):
                     timeout=60
                 )
                 risposta = check_response.choices[0].message.content.strip().upper()
-                ha_risposto = "HA_RISPOSTO" in risposta
+                ha_risposto = "HA_RISPOSTO" in risposta and not is_questionnaire_deferral(combined_raw)
                 logger.info(f"Classificatore fase 2 per {phone}: {risposta}")
             except Exception as e:
                 logger.error(f"Errore classificatore fase 2: {e}")
                 threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 2 per {phone}: {e}"], daemon=True).start()
-                ha_risposto = True
+                ha_risposto = questionnaire_answer_seems_concrete(combined_raw, part=2)
 
         if ha_risposto:
             save_message(phone, "assistant", MSG_CONFERMA_QUESTIONARIO)
@@ -2257,6 +2412,12 @@ def process_response(phone, image_url=None):
             logger.info(f"Fase 2 per {phone} — mamma non ha risposto concretamente, bot in attesa")
 
     elif fase == 5:
+        if is_questionnaire_deferral(combined_raw):
+            set_fase(phone, 6)
+            mark_silent_no_reply(phone, "fase 5: mamma rimanda conferma fine questionario")
+            logger.info(f"Fase 5 per {phone} — rinvio, passo a silenzio totale senza risposta")
+            return
+
         parole_finito = [
             "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto",
             "risposto", "fatto", "ho fatto", "ecco tutto", "tutto",
@@ -2675,5 +2836,6 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 else:
     startup()
+
 
 
