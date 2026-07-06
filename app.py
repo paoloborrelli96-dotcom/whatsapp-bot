@@ -74,6 +74,21 @@ OFFERS = {
 SILENT_NO_REPLY_MARKER = "[SILENT_NO_REPLY]"
 NO_REPLY = "__NO_REPLY__"
 
+
+# ─── MULTI-PRODOTTO ───────────────────────────────────────────────────────────
+PRODUCT_SLEEP = "sleep"
+PRODUCT_POTTY = "potty"
+PRODUCT_UNKNOWN = "unknown"
+
+PRODUCT_LABELS = {
+    PRODUCT_SLEEP: "sonno infantile",
+    PRODUCT_POTTY: "spannolinamento",
+    PRODUCT_UNKNOWN: "percorso"
+}
+
+def product_label(product_type):
+    return PRODUCT_LABELS.get(product_type or PRODUCT_UNKNOWN, "percorso")
+
 def in_orario_silenzio():
     """Controlla se siamo nell'orario di silenzio (23:00 - 07:00 ora italiana)."""
     try:
@@ -166,6 +181,36 @@ MSG_QUESTIONARIO_2 = (
     "18. C'e altro che per te e importante che io sappia?"
 )
 
+
+MSG_QUESTIONARIO_POTTY_1 = (
+    "Per prepararti un piano personalizzato sullo spannolinamento ho bisogno di conoscere bene la vostra situazione.\n\n"
+    "1. Nominativo con cui hai effettuato l'ordine e data di acquisto\n"
+    "2. Come ti chiami e quanti anni hai?\n"
+    "3. Nome del bambino/a, eta precisa e data di nascita\n"
+    "4. Avete gia iniziato a togliere il pannolino oppure state ancora valutando quando partire?\n"
+    "5. Se avete gia iniziato: da quanti giorni o settimane?\n"
+    "6. Durante il giorno usa ancora il pannolino, le mutandine o alternate?\n"
+    "7. La pipi la segnala prima, durante, dopo oppure non la segnala?\n"
+    "8. La cacca come la gestisce? La fa nel pannolino, nel vasino/water, la trattiene o si nasconde?\n\n"
+    "Rispondimi a queste prime domande con calma, poi ti mando le altre 🤍"
+)
+
+MSG_QUESTIONARIO_POTTY_2 = (
+    "Rispondimi anche a queste, cosi completo il quadro:\n\n"
+    "9. Come reagisce quando proponete vasino, riduttore o water?\n"
+    "10. Ci sono stati incidenti? Come reagisce lui/lei e come reagite voi?\n"
+    "11. Com'e organizzata la giornata? Casa, nido, nonni, uscite?\n"
+    "12. Al nido come stanno gestendo pannolino, mutandine, vasino o water?\n"
+    "13. Di notte usa ancora il pannolino? Al mattino e asciutto o bagnato?\n"
+    "14. Avete gia provato metodi, premi, adesivi, riduttore, vasino, mutandine o altro? Com'e andata?\n"
+    "15. Ci sono paure, rifiuti, pianti, trattenimento o momenti di forte opposizione?\n"
+    "16. Com'e il linguaggio/comunicazione del bambino? Riesce a dire pipi/cacca o farsi capire?\n"
+    "17. Ci sono cambiamenti recenti? Nido, fratellino, trasloco, malattia, vacanze o stress familiare?\n"
+    "18. Qual e il tuo obiettivo principale? Iniziare, capire se e pronto, gestire incidenti, nido, cacca, uscite, notte o altro?\n"
+    "19. C'e qualcosa che non vuoi fare? Forzarlo, usare premi, togliere tutto subito, insistere troppo o altro?\n"
+    "20. C'e altro che per te e importante che io sappia?"
+)
+
 MSG_CONFERMA_QUESTIONARIO = (
     "Hai risposto a tutto? Dimmi quando hai finito cosi inizio subito a prepararti il piano 🤍"
 )
@@ -186,8 +231,8 @@ Rispondimi con calma, poi rivedo il piano in base a quello che mi scrivi 🤍"""
 
 # ─── PROMPT MODULARI ───────────────────────────────────────────────────────────
 SYSTEM_PROMPT_BASE = """
-Sei Paola, consulente del sonno infantile di Genitori in Armonia.
-Gestisci conversazioni WhatsApp con mamme e famiglie che chiedono aiuto sul sonno dei bambini.
+Sei Paola, consulente di Genitori in Armonia.
+Gestisci conversazioni WhatsApp con mamme e famiglie che chiedono aiuto sul sonno dei bambini oppure sullo spannolinamento, in base al percorso/prodotto salvato nel contesto.
 
 IDENTITA E TONO
 Parli sempre come Paola, in prima persona singolare: "io ti propongo", "ti seguo", "il mio percorso".
@@ -218,7 +263,7 @@ Spiega invece che il bambino ha imparato un aiuto e ora lo accompagnerete gradua
 CONFINI
 Non dare diagnosi mediche e non sostituirti al pediatra.
 Per febbre, crescita, reflusso importante, allergie, difficoltà respiratorie o dubbi sanitari, rimanda al pediatra in modo naturale.
-Per il sonno, Paola resta il riferimento.
+Per sonno e spannolinamento, Paola resta il riferimento nel proprio ambito.
 Non parlare mai di consulenza scaduta, fine percorso o rinnovi, a meno che sia la mamma a chiedere esplicitamente informazioni sul rinnovo oppure sia Paola/Admin a dirtelo.
 
 SE CHIEDONO SE SEI UN BOT
@@ -227,7 +272,7 @@ Rispondi in modo trasparente e naturale:
 """
 
 ROUTER_PROMPT = """
-Sei un classificatore per una chat WhatsApp di consulenza sul sonno infantile.
+Sei un classificatore per una chat WhatsApp di consulenza su sonno infantile e spannolinamento.
 Non devi scrivere la risposta alla mamma.
 Devi restituire solo JSON valido.
 
@@ -235,6 +280,7 @@ Intenti possibili:
 - saluto_vago
 - richiesta_info_percorso
 - descrizione_problema_sonno
+- descrizione_problema_spannolinamento
 - richiesta_consiglio_gratuito
 - richiesta_differenza_percorsi
 - obiezione_prezzo
@@ -263,6 +309,7 @@ Intenti possibili:
 Regole importanti:
 In fase 0, se il messaggio e solo vago o informativo tipo "ciao", "info", "vorrei informazioni", "quanto costa", "come funziona" e NON contiene una descrizione concreta del problema del bambino, usa richiesta_info_percorso oppure saluto_vago.
 In fase 0, se il messaggio contiene gia una difficolta concreta del sonno, ad esempio risvegli, seno/latte, ciuccio, braccio, lettone, pisolini, addormentamento, pianto, orari, notti difficili, stanchezza della mamma, usa descrizione_problema_sonno anche se chiede anche informazioni sul percorso.
+In fase 0, se il messaggio contiene una difficolta di spannolinamento, ad esempio pannolino, pipi/cacca, vasino, water, mutandine, incidenti, rifiuto, paura, trattenimento, nido, usa descrizione_problema_spannolinamento.
 Se prima la persona ha ricevuto la domanda "qual e la difficolta principale" e ora risponde raccontando il problema, usa descrizione_problema_sonno.
 Non dare per acquisto completato frasi come "lo compro", "vorrei acquistare", "procedo". Acquisto completato solo se dice che ha gia pagato, acquistato, scaricato o letto la guida/PDF/materiale.
 Non classificare come richiesta_bonifico solo perché compare la parola bonifico. È richiesta_bonifico solo se chiede IBAN, coordinate, o se può pagare con bonifico.
@@ -270,7 +317,7 @@ Se dice che ha già fatto il bonifico, usa bonifico_effettuato.
 Non classificare come richiesta_rimborso solo perché compare la parola rimborso. È richiesta_rimborso solo se vuole indietro i soldi o chiede la procedura.
 Non classificare come problema_checkout_importo solo perché compaiono 37 o 67. È problema_checkout_importo solo se parla di carrello, checkout, importo sbagliato, prezzo che non torna, prodotto aggiunto più volte.
 Non classificare come acquisto_completato se scrive "lo compro", "lo prendo", "acquisto subito". Quello è intenzione_acquisto_non_completato.
-È acquisto_completato solo se dice che ha già pagato, completato ordine, fatto acquisto, mostra ricevuta/conferma, oppure dice di aver scaricato/letto/ricevuto la guida, il PDF, il materiale o il percorso.
+È acquisto_completato solo se dice che ha già pagato, completato ordine, fatto acquisto, mostra ricevuta/conferma, oppure dice di aver scaricato/letto/ricevuto la guida, il PDF, il materiale o il percorso. Se l'acquisto è generico non devi decidere tu il prodotto: il codice chiederà sonno o spannolinamento.
 Se la mamma è già in percorso attivo e chiede "che faccio ora", "lo sveglio", "la attacco", "come mi muovo adesso", usa richiesta_pratica_immediata.
 Se la mamma è in percorso attivo e dice che dopo alcuni giorni non vede miglioramenti, non funziona, è peggiorato, è molto stanca o non ce la fa più, usa difficolta_persistente_post_piano. Non mettere needs_human=true solo per questo: safe_auto_reply=true e needs_human=false, salvo rabbia forte o richiesta rimborso.
 Se cita febbre, tosse, raffreddore, dentini, malattia recente o malessere passato ma la domanda principale riguarda il sonno, il latte, i risvegli o il rientro alla routine, NON bloccare la risposta: usa domanda_percorso_attivo o aggiornamento_percorso_attivo, metti entities.medical_topic=true, safe_auto_reply=true e needs_human=false.
@@ -306,10 +353,11 @@ Non spiegare il ragionamento.
 Non dire che hai classificato il messaggio.
 Non parlare mai di consulenza scaduta o fine percorso.
 
-In fase 0 ci sono tre casi diversi.
-Se la persona scrive solo ciao, info, vorrei informazioni, quanto costa o come funziona senza raccontare il problema, non vendere subito: chiedi prima in poche parole qual e la difficolta principale che vive con il sonno del bambino.
-Se invece la persona non ha ancora acquistato ma descrive gia un problema concreto del sonno, fai una prima analisi breve e personalizzata: falla sentire capita, spiega la dinamica in modo semplice, non dare un piano gratuito e non dare una sequenza completa di azioni. Poi presenta il percorso e il link se non e gia stato inviato.
-Se dichiara di aver gia acquistato, il codice avvia la sequenza acquisto e non devi fare analisi commerciale.
+In fase 0 ci sono casi diversi.
+Se non è chiaro se parla di sonno o spannolinamento, chiedi prima a quale percorso si riferisce.
+Se la persona scrive solo ciao, info, vorrei informazioni, quanto costa o come funziona senza raccontare il problema, non vendere subito: chiedi prima il prodotto o la difficoltà principale specifica del prodotto.
+Se invece non ha ancora acquistato ma descrive già un problema concreto di sonno o spannolinamento, fai una prima analisi breve e personalizzata: falla sentire capita, spiega la dinamica in modo semplice, non dare un piano gratuito e non dare una sequenza completa di azioni. Poi presenta il percorso e il link se non è già stato inviato.
+Se dichiara di aver già acquistato, il codice avvia la sequenza acquisto corretta; se l'acquisto è generico, prima chiede sonno o spannolinamento.
 
 Se la persona è in percorso attivo, dai indicazioni concrete ma non troppe insieme.
 Usa il profilo del bambino e lo storico recente.
@@ -448,6 +496,62 @@ Restituisci:
 # Compatibilità con eventuali funzioni vecchie che richiamano SYSTEM_PROMPT.
 SYSTEM_PROMPT = SYSTEM_PROMPT_BASE
 
+
+POTTY_PLAN_PROMPT = """
+Scrivi il piano personalizzato completo come Paola per una mamma che ha acquistato il percorso spannolinamento.
+Il piano deve essere specifico sul bambino e sulla situazione descritta, non un modello generico.
+Usa il nome del bambino se disponibile e cita eta, fase attuale, nido/casa, pipi, cacca, incidenti, reazioni e obiettivi emersi nel questionario.
+
+Scrivi in prosa discorsiva da WhatsApp, ordinata ma naturale.
+Non usare markdown, grassetti, titoli, bullet point o numerazioni rigide.
+Puoi andare a capo per leggibilita, ma senza formattazione da documento.
+
+Il piano deve includere in modo naturale:
+lettura iniziale della situazione,
+se il bambino sembra pronto o se conviene rallentare,
+obiettivo dei prossimi 7/9 giorni,
+come presentare vasino o water,
+routine pipi,
+gestione degli incidenti senza far vivere colpa o pressione,
+gestione della cacca se pertinente,
+uscite,
+nido/nonni,
+notte solo se pertinente,
+cosa osservare ogni giorno,
+quando aggiornare Paola.
+
+Non promettere che in 9 giorni sara tutto risolto. Spiega che i 9 giorni servono a dare una sequenza chiara e adattabile.
+Non forzare mai il bambino, non colpevolizzare la mamma, non usare punizioni.
+Se emergono dubbi sanitari o stitichezza importante, rimanda al pediatra.
+
+Chiudi sempre e solo con:
+"Aggiornami fra qualche giorno e fammi sapere come va 🤍"
+"""
+
+POTTY_REVISION_PROMPT = """
+Scrivi una revisione aggiornata del piano spannolinamento come Paola.
+La mamma ha gia ricevuto un piano o indicazioni precedenti: NON generare un piano iniziale da zero.
+
+Devi partire da cosa e cambiato: pipi nel vasino/water, incidenti, cacca, rifiuto, trattenimento, nido/nonni, uscite, notte o reazioni emotive.
+Spiega cosa manterresti, cosa correggeresti e cosa non toccheresti per non creare confusione.
+Dai una linea concreta per i prossimi 3-5 giorni.
+
+Non forzare, non colpevolizzare, non proporre premi/punizioni come soluzione principale.
+Se ci sono dubbi sanitari, dolore, stitichezza importante o trattenimento forte, rimanda al pediatra.
+Tono WhatsApp Paola, pratico, umano e rassicurante.
+"""
+
+POTTY_CHECKUP_GENERATION_PROMPT = """
+Genera le domande di checkup personalizzate come Paola per un percorso di spannolinamento.
+Non mandare un questionario generico uguale per tutti.
+Leggi storico e profilo e scegli solo le domande utili per capire cosa non sta funzionando adesso.
+
+Fai massimo 6-9 domande.
+Devono essere concrete e pertinenti: giorni di applicazione, pipi, cacca, incidenti, reazione al vasino/water, nido/nonni, uscite, notte, trattenimento, cosa pesa di piu alla mamma.
+Non dare ancora consigli. Raccogli solo informazioni per poter rivedere il piano.
+Tono WhatsApp Paola, empatico e ordinato.
+"""
+
 # ─── TELEGRAM FORUM ────────────────────────────────────────────────────────────
 def get_or_create_topic(phone):
     """Ottiene o crea un topic Telegram per questo numero."""
@@ -580,16 +684,30 @@ def telegram_webhook():
         if text.startswith("/"):
             cmd = text.strip().lower().split()[0]
 
-            if cmd == "/acquisto":
+            if cmd in ("/sonno", "/sleep"):
+                set_product_type(phone, PRODUCT_SLEEP)
+                set_awaiting_product_choice(phone, False)
+            elif cmd in ("/spannolinamento", "/pannolino", "/potty"):
+                set_product_type(phone, PRODUCT_POTTY)
+                set_awaiting_product_choice(phone, False)
+            elif cmd == "/acquisto":
                 threading.Thread(target=invia_sequenza_acquisto, args=[phone], daemon=True).start()
+            elif cmd in ("/acquisto_sonno", "/acquisto_sleep"):
+                threading.Thread(target=invia_sequenza_acquisto, args=[phone, None, PRODUCT_SLEEP], daemon=True).start()
+            elif cmd in ("/acquisto_spannolinamento", "/acquisto_pannolino", "/acquisto_potty"):
+                threading.Thread(target=invia_sequenza_acquisto, args=[phone, None, PRODUCT_POTTY], daemon=True).start()
             elif cmd == "/q1":
+                product_type = get_product_type(phone)
                 set_fase(phone, 1)
-                save_message(phone, "assistant", MSG_QUESTIONARIO_1)
-                send_whatsapp_message(phone, MSG_QUESTIONARIO_1)
+                q1 = get_questionario_1(product_type)
+                save_message(phone, "assistant", q1)
+                send_whatsapp_message(phone, q1)
             elif cmd == "/q2":
+                product_type = get_product_type(phone)
                 set_fase(phone, 2)
-                save_message(phone, "assistant", MSG_QUESTIONARIO_2)
-                send_whatsapp_message(phone, MSG_QUESTIONARIO_2)
+                q2 = get_questionario_2(product_type)
+                save_message(phone, "assistant", q2)
+                send_whatsapp_message(phone, q2)
             elif cmd == "/piano":
                 with active_timers_lock:
                     if phone in active_timers:
@@ -703,6 +821,9 @@ def init_db():
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS checkup_pending BOOLEAN DEFAULT FALSE")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS checkup_sent_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS last_post_plan_alert_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS product_type TEXT DEFAULT 'unknown'")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS awaiting_product_choice BOOLEAN DEFAULT FALSE")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS awaiting_product_choice_reason TEXT")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS telegram_topics (
@@ -811,6 +932,74 @@ def get_fase(phone):
     except Exception as e:
         logger.error(f"Errore get_fase: {e}")
         return 0
+
+def get_product_type(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT COALESCE(product_type, 'unknown') FROM consultations WHERE phone = %s", (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row[0] if row and row[0] in (PRODUCT_SLEEP, PRODUCT_POTTY, PRODUCT_UNKNOWN) else PRODUCT_UNKNOWN
+    except Exception as e:
+        logger.error(f"Errore get_product_type: {e}")
+        return PRODUCT_UNKNOWN
+
+
+def set_product_type(phone, product_type):
+    if product_type not in (PRODUCT_SLEEP, PRODUCT_POTTY, PRODUCT_UNKNOWN):
+        product_type = PRODUCT_UNKNOWN
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO consultations (phone, product_type)
+            VALUES (%s, %s)
+            ON CONFLICT (phone) DO UPDATE SET product_type = EXCLUDED.product_type
+        """, (phone, product_type))
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"Prodotto impostato per {phone}: {product_type}")
+    except Exception as e:
+        logger.error(f"Errore set_product_type: {e}")
+
+
+def set_awaiting_product_choice(phone, waiting=True, reason=None):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO consultations (phone, awaiting_product_choice, awaiting_product_choice_reason)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (phone) DO UPDATE
+            SET awaiting_product_choice = EXCLUDED.awaiting_product_choice,
+                awaiting_product_choice_reason = EXCLUDED.awaiting_product_choice_reason
+        """, (phone, bool(waiting), reason if waiting else None))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Errore set_awaiting_product_choice: {e}")
+
+
+def get_awaiting_product_choice_reason(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT COALESCE(awaiting_product_choice, FALSE), awaiting_product_choice_reason FROM consultations WHERE phone = %s", (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row and row[0]:
+            return row[1] or "info"
+        return None
+    except Exception as e:
+        logger.error(f"Errore get_awaiting_product_choice_reason: {e}")
+        return None
+
+
 
 def set_fase(phone, fase, piano_scheduled_at=None):
     try:
@@ -1186,6 +1375,126 @@ def acquisto_dichiarato(text):
     return False
 
 
+
+def normalize_text(text):
+    t = (text or "").lower()
+    t = t.replace("’", "'")
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def detect_product_type_from_text(text):
+    """Rileva se il messaggio parla chiaramente di sonno o spannolinamento.
+    Se è generico, torna unknown.
+    """
+    t = normalize_text(text)
+    if not t:
+        return PRODUCT_UNKNOWN
+
+    potty_terms = [
+        "spannolinamento", "spannolinare", "spanolinamento", "spandolinamento",
+        "togliere il pannolino", "togliere pannolino", "via il pannolino", "senza pannolino",
+        "pannolino", "vasino", "riduttore", "water", "wc", "mutandine",
+        "pipi", "pipì", "cacca", "popo", "popò", "incidenti", "se la fa addosso",
+        "bagnato", "asciutto", "trattiene", "trattenere", "nido e pannolino",
+        "guida spannolinamento", "percorso spannolinamento", "pannolino in 9 giorni"
+    ]
+    sleep_terms = [
+        "sonno", "sonno magico", "nanna", "dormire", "dorme", "addorment",
+        "risvegl", "sveglia ogni", "si sveglia", "notte", "notti", "pisolino", "pisolini",
+        "lettino", "lettone", "culla", "next to me", "seno di notte", "biberon di notte",
+        "ciuccio", "braccio", "braccia", "cullare", "metodo del sonno", "percorso sonno"
+    ]
+
+    potty_count = sum(1 for term in potty_terms if term in t)
+    sleep_count = sum(1 for term in sleep_terms if term in t)
+
+    # parole molto forti che bastano da sole
+    if any(term in t for term in ["spannolinamento", "spandolinamento", "spanolinamento", "togliere il pannolino", "pannolino", "vasino", "guida spannolinamento", "percorso spannolinamento", "pannolino in 9 giorni"]):
+        return PRODUCT_POTTY
+    if any(term in t for term in ["sonno", "sonno magico", "percorso sonno", "guida sonno", "guida sul sonno", "guida del sonno", "metodo del sonno", "consulenza sonno"]):
+        return PRODUCT_SLEEP
+
+    if potty_count >= 2 and potty_count > sleep_count:
+        return PRODUCT_POTTY
+    if sleep_count >= 2 and sleep_count > potty_count:
+        return PRODUCT_SLEEP
+
+    return PRODUCT_UNKNOWN
+
+
+def product_from_context_or_text(phone, text):
+    product = detect_product_type_from_text(text)
+    if product != PRODUCT_UNKNOWN:
+        return product
+    stored = get_product_type(phone)
+    return stored if stored in (PRODUCT_SLEEP, PRODUCT_POTTY) else PRODUCT_UNKNOWN
+
+
+def potty_problem_described(text):
+    t = normalize_text(text)
+    if len(t) < 35:
+        return False
+    terms = [
+        "pannolino", "vasino", "water", "riduttore", "mutandine", "pipi", "pipì", "cacca",
+        "incidenti", "addosso", "trattiene", "rifiuta", "piange", "paura", "nido",
+        "segnala", "asciutto", "bagnato", "spannolinamento"
+    ]
+    count = sum(1 for term in terms if term in t)
+    return count >= 2 or (count >= 1 and len(t) >= 110)
+
+
+def get_questionario_1(product_type):
+    return MSG_QUESTIONARIO_POTTY_1 if product_type == PRODUCT_POTTY else MSG_QUESTIONARIO_1
+
+
+def get_questionario_2(product_type):
+    return MSG_QUESTIONARIO_POTTY_2 if product_type == PRODUCT_POTTY else MSG_QUESTIONARIO_2
+
+
+def get_msg_regole(product_type):
+    if product_type == PRODUCT_POTTY:
+        return MSG_REGOLE.replace("supporto al sonno infantile", "supporto allo spannolinamento")
+    return MSG_REGOLE
+
+
+def product_specific_first_question(product_type):
+    if product_type == PRODUCT_POTTY:
+        return "Certo cara 😊\n\nPer capire bene come aiutarti, raccontami solo una cosa: quanti anni ha il tuo bimbo e avete gia iniziato a togliere il pannolino oppure state ancora valutando quando partire?"
+    if product_type == PRODUCT_SLEEP:
+        return "Ciao, sono Paola 😊\n\nSe ti va, scrivimi pure in poche parole qual e la difficolta principale che stai vivendo con il sonno del tuo bimbo, cosi capisco meglio come aiutarti."
+    return "Ciao cara 😊\n\nTi riferisci al percorso sul sonno del bambino o al percorso sullo spannolinamento? Cosi capisco subito come aiutarti meglio."
+
+
+def build_product_clarification(phone, trigger_text="", reason="info"):
+    """Chiede quale prodotto in modo contestuale quando il messaggio/acquisto è generico."""
+    try:
+        recent = get_recent_history(phone, limit=10)
+        history_text = "\n".join([f"{m.get('role')}: {str(m.get('content',''))[:500]}" for m in recent])
+        if reason == "purchase":
+            task = "La mamma ha scritto che ha acquistato o scaricato una guida/percorso, ma non è chiaro se parli di sonno o spannolinamento. Ringrazia in modo naturale e chiedi solo di quale percorso parla prima di mandare il questionario."
+        else:
+            task = "La mamma chiede informazioni ma non è chiaro se parli di sonno o spannolinamento. Chiedi in modo naturale a quale percorso si riferisce."
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=[
+                {"role": "system", "content": "Sei Paola di Genitori in Armonia. Scrivi un breve messaggio WhatsApp umano, naturale, non automatico. Non inserire link. Massimo 5-7 righe."},
+                {"role": "user", "content": f"{task}\n\nStorico recente:\n{history_text}\n\nUltimo messaggio:\n{trigger_text}\n\nScrivi solo il messaggio da inviare."}
+            ],
+            max_tokens=350,
+            temperature=TEMP_CHAT,
+            timeout=60
+        )
+        msg = response.choices[0].message.content.strip().replace("!", ".")
+        if msg and len(msg) >= 20:
+            return msg
+    except Exception as e:
+        logger.error(f"Errore chiarimento prodotto per {phone}: {e}")
+    if reason == "purchase":
+        return "Perfetto cara, grazie per avermelo scritto 😊\n\nPrima di mandarti il questionario giusto, mi confermi solo a quale percorso fai riferimento? Sonno del bambino oppure spannolinamento?"
+    return "Certo cara 😊\n\nTi riferisci al percorso sul sonno del bambino o al percorso sullo spannolinamento? Cosi capisco subito come aiutarti meglio."
+
+
 def lead_problem_described(text):
     """Capisce se una lead in fase 0 ha gia raccontato un problema concreto del sonno.
 
@@ -1210,30 +1519,50 @@ def lead_problem_described(text):
     return count >= 2 or (count >= 1 and len(t) >= 120)
 
 
-def normalize_phase0_intent(router_result, pending_text):
-    """Rende più coerente la fase 0 commerciale.
+def normalize_phase0_intent(router_result, pending_text, product_type=PRODUCT_UNKNOWN):
+    """Rende più coerente la fase 0 commerciale multi-prodotto.
 
-    - info vaghe restano info e chiedono prima la difficolta;
-    - se nel testo c'e gia un problema concreto, forza descrizione_problema_sonno,
-      cosi parte la prima analisi + proposta percorso.
+    - info vaghe restano info e chiedono prima prodotto/difficolta;
+    - se nel testo c'e gia un problema concreto, forza l'intento corretto;
+    - non mischia sonno e spannolinamento.
     """
     if not router_result:
         return router_result
     intent = router_result.get("intent", "altro")
-    if intent in {"saluto_vago", "richiesta_info_percorso", "altro"} and lead_problem_described(pending_text):
-        r = dict(router_result)
-        r["intent"] = "descrizione_problema_sonno"
-        r["reason"] = (r.get("reason", "") + " | override codice: lead ha descritto un problema concreto del sonno").strip()
-        r["confidence"] = max(float(r.get("confidence", 0) or 0), 0.82)
-        r["safe_auto_reply"] = True
-        r["needs_human"] = False
-        return r
+    r = dict(router_result)
+
+    detected = detect_product_type_from_text(pending_text)
+    effective_product = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else detected
+
+    if intent in {"saluto_vago", "richiesta_info_percorso", "altro"}:
+        if effective_product == PRODUCT_POTTY and potty_problem_described(pending_text):
+            r["intent"] = "descrizione_problema_spannolinamento"
+            r["reason"] = (r.get("reason", "") + " | override codice: lead ha descritto un problema di spannolinamento").strip()
+            r["confidence"] = max(float(r.get("confidence", 0) or 0), 0.82)
+            r["safe_auto_reply"] = True
+            r["needs_human"] = False
+            return r
+        if effective_product == PRODUCT_SLEEP and lead_problem_described(pending_text):
+            r["intent"] = "descrizione_problema_sonno"
+            r["reason"] = (r.get("reason", "") + " | override codice: lead ha descritto un problema concreto del sonno").strip()
+            r["confidence"] = max(float(r.get("confidence", 0) or 0), 0.82)
+            r["safe_auto_reply"] = True
+            r["needs_human"] = False
+            return r
+        # Se non abbiamo prodotto salvato ma il testo fa capire il tipo di problema, forza comunque.
+        if detected == PRODUCT_POTTY and potty_problem_described(pending_text):
+            r["intent"] = "descrizione_problema_spannolinamento"
+            r["confidence"] = max(float(r.get("confidence", 0) or 0), 0.82)
+            return r
+        if detected == PRODUCT_SLEEP and lead_problem_described(pending_text):
+            r["intent"] = "descrizione_problema_sonno"
+            r["confidence"] = max(float(r.get("confidence", 0) or 0), 0.82)
+            return r
     return router_result
 
 
-
 # ─── ACQUISTO CONTESTUALE E QUESTIONARIO ROBUSTO ─────────────────────────────
-def contextual_purchase_fallback(trigger_text=""):
+def contextual_purchase_fallback(trigger_text="", product_type=PRODUCT_SLEEP):
     """Fallback umano se GPT non riesce a generare l'introduzione acquisto."""
     t = (trigger_text or "").lower()
     if any(x in t for x in ["cosa", "che cosa", "integrato", "include", "compreso", "dentro", "nel percorso"]):
@@ -1242,6 +1571,11 @@ def contextual_purchase_fallback(trigger_text=""):
             "Nel percorso hai incluso il supporto WhatsApp, il questionario iniziale, il piano personalizzato costruito sulla vostra situazione e il materiale pratico da consultare.\n\n"
             "La parte più importante però è proprio il lavoro su misura: guardiamo orari, pisolini, addormentamento, risvegli e difficoltà reali del tuo bambino, così non resti con indicazioni generiche.\n\n"
             "Per iniziare bene ora ti mando le regole della chat e poi il questionario dettagliato."
+        )
+    if product_type == PRODUCT_POTTY and potty_problem_described(trigger_text):
+        return (
+            "Perfetto cara, ho capito. Visto quello che mi hai raccontato sul pannolino, partiamo raccogliendo bene tutti i dettagli così il piano sarà adatto alla vostra situazione reale.\n\n"
+            "Ora ti mando prima le regole della chat e poi il questionario iniziale sullo spannolinamento."
         )
     if lead_problem_described(trigger_text):
         return (
@@ -1255,7 +1589,7 @@ def contextual_purchase_fallback(trigger_text=""):
     )
 
 
-def build_contextual_purchase_intro(phone, trigger_text=""):
+def build_contextual_purchase_intro(phone, trigger_text="", product_type=PRODUCT_SLEEP):
     """Genera un'introduzione coerente quando l'acquisto viene rilevato dai messaggi della mamma.
 
     Non deve sembrare una sequenza rigida: se la mamma ha fatto una domanda, risponde prima alla domanda;
@@ -1268,10 +1602,11 @@ def build_contextual_purchase_intro(phone, trigger_text=""):
             {"role": "system", "content": (
                 "Sei Paola di Genitori in Armonia. Devi scrivere un breve messaggio WhatsApp naturale.\n"
                 "La mamma ha appena fatto capire che ha già acquistato o ha già accesso al percorso/guida.\n"
+                f"Il prodotto/percorso è: {product_label(product_type)}.\n"
                 "Rispondi in modo coerente all'ultimo messaggio: se ha fatto una domanda, rispondi prima a quella domanda.\n"
-                "Poi fai una transizione morbida: ora le manderai le regole della chat e il questionario iniziale per preparare il piano personalizzato.\n"
+                "Poi fai una transizione morbida: ora le manderai le regole della chat e il questionario iniziale corretto per preparare il piano personalizzato.\n"
                 "Non sembrare un messaggio automatico. Non dire 'messaggio automatico'. Non inserire link.\n"
-                "Non fare un piano sonno. Non dare troppe indicazioni pratiche.\n"
+                "Non fare un piano completo. Non dare troppe indicazioni pratiche.\n"
                 "Tono empatico, professionale, umano, da WhatsApp. Massimo 10-12 righe."
             )},
             {"role": "user", "content": (
@@ -1292,11 +1627,11 @@ def build_contextual_purchase_intro(phone, trigger_text=""):
         if issue:
             intro = rewrite_reply_if_needed(intro, issue, {"link_sent": True, "asks_link": False})
         if not intro or len(intro) < 20:
-            return contextual_purchase_fallback(trigger_text)
+            return contextual_purchase_fallback(trigger_text, product_type)
         return intro
     except Exception as e:
         logger.error(f"Errore intro acquisto contestuale per {phone}: {e}")
-        return contextual_purchase_fallback(trigger_text)
+        return contextual_purchase_fallback(trigger_text, product_type)
 
 
 def is_questionnaire_deferral(text):
@@ -1350,7 +1685,8 @@ def questionnaire_answer_seems_concrete(text, part=1):
         terms = [
             "nome", "anni", "mesi", "data", "nasc", "peso", "kg", "sveglia",
             "pisolino", "pisolini", "nanna", "addormenta", "seno", "biberon",
-            "ciuccio", "braccio", "lettino", "lettone", "culla", "next to me", "fratell"
+            "ciuccio", "braccio", "lettino", "lettone", "culla", "next to me", "fratell",
+            "pannolino", "vasino", "water", "pipi", "pipì", "cacca", "mutandine", "spannolinamento"
         ]
         min_len = 110
     else:
@@ -1359,7 +1695,8 @@ def questionnaire_answer_seems_concrete(text, part=1):
             "risvegl", "notte", "orari", "piange", "seno", "biberon", "latte",
             "ciuccio", "braccio", "riaddorment", "partner", "papà", "papa",
             "mamma", "lavor", "matern", "nido", "obiettivo", "voglio", "non voglio",
-            "salute", "reflusso", "dent", "febbre", "pediatra"
+            "salute", "reflusso", "dent", "febbre", "pediatra",
+            "pannolino", "vasino", "water", "pipi", "pipì", "cacca", "incidenti", "nido", "mutandine", "trattiene", "rifiuta"
         ]
         min_len = 100
 
@@ -1456,7 +1793,7 @@ def extract_child_profile_from_history(phone):
         return
     text_history = "\n".join([f"{m['role']}: {m['content']}" for m in history[-80:]])
     messages = [
-        {"role": "system", "content": "Estrai dati strutturati da una chat di consulenza sonno infantile. Rispondi solo JSON valido. Non inventare dati mancanti."},
+        {"role": "system", "content": "Estrai dati strutturati da una chat di consulenza sonno infantile o spannolinamento. Rispondi solo JSON valido. Non inventare dati mancanti."},
         {"role": "user", "content": f"""
 Dalla chat seguente estrai questi campi se presenti:
 mother_name, child_name, child_age, birth_date, main_problem, goal, sleep_association, night_wakings, naps, bedtime, wake_time, sleep_place, feeding, father_role, health_notes, work_stage, admin_notes.
@@ -1466,7 +1803,7 @@ Regole:
 - Se un campo non è chiaro, omettilo.
 - Per child_age usa prima l'età dichiarata esplicitamente dalla mamma in mesi o anni. Non calcolare l'età dalla data di nascita se la mamma ha già scritto l'età. Se l'età non è chiara, ometti child_age.
 - Se la data è ambigua, copiala come scritta dalla mamma in birth_date senza reinterpretarla.
-- work_stage deve essere una breve etichetta utile tra: osservazione_iniziale, routine_orari, dissociazione_seno_sonno, appoggio_culla, gestione_risvegli, pisolini_diurni, consolidamento, regressione_dentizione_malattia, rientro_lavoro_nido, altro.
+- work_stage deve essere una breve etichetta utile tra: osservazione_iniziale, routine_orari, dissociazione_seno_sonno, appoggio_culla, gestione_risvegli, pisolini_diurni, spannolinamento_prontezza, routine_vasino, gestione_incidenti, gestione_cacca, nido_uscite, consolidamento, regressione_dentizione_malattia, rientro_lavoro_nido, altro.
 
 Chat:
 {text_history}
@@ -1496,6 +1833,7 @@ def classify_message(phone, fase, pending_text, image_url=None):
         {"role": "system", "content": ROUTER_PROMPT},
         {"role": "user", "content": f"""
 Fase attuale: {fase}
+Prodotto salvato: {get_product_type(phone)}
 Ha immagine allegata: {bool(image_url)}
 Link già inviato: {link_gia_inviato(phone)}
 
@@ -1544,8 +1882,11 @@ Ultimi messaggi da classificare:
         return default
 
 
-def get_business_rule(intent, fase, link_sent=False):
+def get_business_rule(intent, fase, link_sent=False, product_type=PRODUCT_UNKNOWN):
     """Regole specifiche passate al generatore solo quando servono."""
+    product_type = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else PRODUCT_UNKNOWN
+    product_name = product_label(product_type)
+
     if intent == "richiesta_differenza_percorsi":
         return f"""
 Spiega la differenza tra i percorsi in modo naturale.
@@ -1568,30 +1909,64 @@ Se dal messaggio è chiaro che vuole la procedura formale, aggiungi questo link:
 Ricorda con delicatezza che il rimborso non è applicabile a chi ha già usufruito in parte o totalmente delle consulenze.
 """
     if intent == "richiesta_info_percorso" and fase == 0:
-        return """
-La persona e ancora lead e ha chiesto informazioni senza descrivere davvero il problema.
+        if product_type == PRODUCT_POTTY:
+            return """
+La persona è ancora lead e chiede informazioni sullo spannolinamento senza descrivere davvero la situazione.
+Non mandare subito il link in modo freddo.
+Chiedi prima età del bambino e se hanno già iniziato a togliere il pannolino o stanno valutando quando partire.
+"""
+        if product_type == PRODUCT_SLEEP:
+            return """
+La persona è ancora lead e ha chiesto informazioni sul sonno senza descrivere davvero il problema.
 Non mandare subito il link e non vendere subito in modo freddo.
-Rispondi breve e chiedi di raccontarti in poche parole qual e la difficolta principale con il sonno del bambino, cosi puoi capire meglio la situazione prima di consigliarle il percorso giusto.
-Se chiede solo il prezzo in modo diretto, puoi accennare che il percorso personalizzato parte da 37 euro e il Premium dura 60 giorni a 67 euro, ma chiudi chiedendo la difficolta principale prima di orientarla.
+Rispondi breve e chiedi di raccontarti in poche parole qual è la difficoltà principale con il sonno del bambino.
+"""
+        return """
+La persona è ancora lead ma non è chiaro se parla di sonno o spannolinamento.
+Chiedi prima a quale percorso si riferisce, senza mandare link.
 """
     if intent in ("descrizione_problema_sonno", "richiesta_consiglio_gratuito") and fase == 0:
         if link_sent:
             return """
-La persona e ancora lead, ha gia raccontato una difficolta concreta e il link e gia stato mandato.
+La persona è ancora lead, ha già raccontato una difficoltà concreta e il link è già stato mandato.
 Non ripetere il link, a meno che lo chieda espressamente.
 Fai una prima lettura breve e personalizzata della situazione, senza dare un piano gratuito completo.
 Accenna alla direzione di lavoro e mantieni la conversazione naturale verso il percorso.
 """
         return f"""
-La persona e ancora lead e ha gia descritto una difficolta concreta del sonno.
+La persona è ancora lead e ha già descritto una difficoltà concreta del sonno.
 Non fare altre domande generiche: fai subito una prima analisi commerciale personalizzata.
-Devi riconoscere la difficolta specifica, spiegare in modo semplice cosa potrebbe esserci dietro, senza diagnosi e senza dare un piano completo gratuito.
+Devi riconoscere la difficoltà specifica, spiegare in modo semplice cosa potrebbe esserci dietro, senza diagnosi e senza dare un piano completo gratuito.
 Accenna alla direzione di lavoro, facendo capire che andrebbe vista su orari, pisolini, addormentamento e risvegli.
 Poi presenta il Percorso Premium: 60 giorni di supporto WhatsApp personalizzato al costo di {OFFERS['premium']['price']} euro, con questionario iniziale, piano su misura e guide PDF.
 Inserisci il link una sola volta: {LINK_PREMIUM}
-Chiudi dicendo che dopo l'ordine puo scriverti su WhatsApp e partite con l'analisi personalizzata.
+Chiudi dicendo che dopo l'ordine può scriverti su WhatsApp e partite con l'analisi personalizzata.
+"""
+    if intent == "descrizione_problema_spannolinamento" and fase == 0:
+        if link_sent:
+            return """
+La persona è ancora lead, ha già raccontato una difficoltà sullo spannolinamento e il link è già stato mandato.
+Non ripetere il link, a meno che lo chieda espressamente.
+Fai una prima lettura breve e personalizzata, senza dare un piano gratuito completo.
+"""
+        return f"""
+La persona è ancora lead e ha già descritto una difficoltà concreta sullo spannolinamento.
+Non fare altre domande generiche: fai subito una prima analisi commerciale personalizzata.
+Devi riconoscere la difficoltà specifica, spiegare in modo semplice cosa può esserci dietro: prontezza, segnali, incidenti, cacca, nido, pressione o routine non chiara.
+Non dare un piano completo gratuito.
+Poi presenta il percorso personalizzato: questionario iniziale, piano su misura e supporto WhatsApp passo passo. Per ora usa il link attuale: {LINK_PREMIUM}
+Chiudi dicendo che dopo l'ordine può scriverti su WhatsApp e partite con l'analisi personalizzata.
 """
     if intent in ("domanda_percorso_attivo", "aggiornamento_percorso_attivo", "richiesta_pratica_immediata") or fase == 4:
+        if product_type == PRODUCT_POTTY:
+            return """
+La persona è in percorso attivo di spannolinamento.
+Rispondi collegandoti al profilo bambino e allo storico recente.
+Dai massimo 1 o 2 indicazioni pratiche su pipì, cacca, vasino/water, incidenti, nido, uscite o pannolino notturno.
+Non cambiare troppe cose insieme. Non forzare, non colpevolizzare e non proporre punizioni.
+Se emergono dolore, stitichezza importante, trattenimento forte o dubbi sanitari, rimanda al pediatra.
+Non parlare di scadenze, rinnovi o fine percorso.
+"""
         return """
 La persona è in percorso attivo.
 Rispondi collegandoti al profilo bambino e allo storico recente.
@@ -1606,10 +1981,11 @@ Non parlare di scadenze, rinnovi o fine percorso.
 Rispondi in modo prudente.
 Non dare diagnosi, non parlare di farmaci, dosi, cause mediche o cure.
 Per la parte sanitaria rimanda al pediatra, soprattutto se il bambino non è ancora in forma.
-Poi, se la domanda riguarda il sonno, dai solo indicazioni di rientro morbido alla routine: aspettare che il bambino stia meglio, non irrigidirsi durante la malattia, riprendere gradualmente le abitudini precedenti e lavorare su latte/contatto senza forzare.
+Poi, se la domanda riguarda il percorso, dai solo indicazioni morbide e graduali.
 """
-    return """
-Rispondi in modo naturale come Paola, rispettando il contesto, senza aggiungere link o offerte se non servono.
+    return f"""
+Rispondi in modo naturale come Paola, rispettando il contesto e il prodotto: {product_name}.
+Non aggiungere link o offerte se non servono.
 """
 
 
@@ -1617,12 +1993,17 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
     """Risposte fisse solo per intenti sicuri. Altrimenti torna None e risponde GPT."""
     intent = router_result.get("intent", "altro") if router_result else "altro"
     confidence = float(router_result.get("confidence", 0) or 0) if router_result else 0
+    product_type = product_from_context_or_text(phone, pending_text)
 
     if intent == "saluto_vago" and fase == 0 and confidence >= 0.75:
-        return "Ciao, sono Paola 😊\n\nSe ti va, scrivimi pure in poche parole qual e la difficolta principale che stai vivendo con il sonno del tuo bimbo, cosi capisco meglio come aiutarti."
+        if product_type == PRODUCT_UNKNOWN:
+            set_awaiting_product_choice(phone, True, "info")
+        return product_specific_first_question(product_type)
 
-    if intent == "richiesta_info_percorso" and fase == 0 and confidence >= 0.70 and not lead_problem_described(pending_text):
-        return "Ciao, sono Paola 😊\n\nCerto, prima di spiegarti bene il percorso mi aiuta capire la situazione: qual e la difficolta principale che stai vivendo con il sonno del tuo bimbo?"
+    if intent == "richiesta_info_percorso" and fase == 0 and confidence >= 0.70 and not lead_problem_described(pending_text) and not potty_problem_described(pending_text):
+        if product_type == PRODUCT_UNKNOWN:
+            set_awaiting_product_choice(phone, True, "info")
+        return product_specific_first_question(product_type)
 
     if intent == "intenzione_acquisto_non_completato" and fase == 0 and confidence >= 0.75:
         return "Perfetto, ti aspetto qui. Effettua l'ordine dal link e poi scrivimi quando hai completato, cosi iniziamo subito 🤍"
@@ -1738,6 +2119,9 @@ Messaggio da riscrivere:
 
 
 def build_ai_context(phone, fase, router_result, pending_text):
+    product_type = product_from_context_or_text(phone, pending_text)
+    if product_type != PRODUCT_UNKNOWN and get_product_type(phone) == PRODUCT_UNKNOWN:
+        set_product_type(phone, product_type)
     link_sent = link_gia_inviato(phone)
     asks_link = user_chiede_link(router_result, pending_text)
     profile = get_child_profile(phone)
@@ -1746,7 +2130,8 @@ def build_ai_context(phone, fase, router_result, pending_text):
         "link_sent": link_sent,
         "asks_link": asks_link,
         "profile_text": profile_to_text(profile),
-        "business_rule": get_business_rule(router_result.get("intent", "altro") if router_result else "altro", fase, link_sent),
+        "product_type": product_type,
+        "business_rule": get_business_rule(router_result.get("intent", "altro") if router_result else "altro", fase, link_sent, product_type),
         "recent_history": get_recent_history(phone, limit=30),
         "pending_text": pending_text
     }
@@ -1790,6 +2175,7 @@ def get_ai_response(phone, image_url=None, router_result=None):
         {"role": "system", "content": f"""
 Contesto operativo:
 Fase: {fase}
+Prodotto: {product_label(context.get('product_type'))}
 Intento rilevato: {router_result.get('intent', 'altro')}
 Confidenza router: {router_result.get('confidence', 0)}
 Tipo messaggio: {router_result.get('message_type', 'altro')}
@@ -1955,10 +2341,12 @@ def generate_personalized_checkup(phone):
 
         profile_text = profile_to_text(get_child_profile(phone))
         recent_history = get_recent_history(phone, limit=45)
+        product_type = get_product_type(phone)
+        checkup_prompt = POTTY_CHECKUP_GENERATION_PROMPT if product_type == PRODUCT_POTTY else CHECKUP_GENERATION_PROMPT
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT_BASE},
-            {"role": "system", "content": CHECKUP_GENERATION_PROMPT},
+            {"role": "system", "content": checkup_prompt},
             {"role": "system", "content": f"Profilo bambino strutturato:\n{profile_text}"}
         ]
         messages.extend(recent_history)
@@ -2035,9 +2423,11 @@ def send_revision(phone, reason="manuale"):
 
     history = get_history(phone)
     profile_text = profile_to_text(get_child_profile(phone))
+    product_type = get_product_type(phone)
+    revision_prompt = POTTY_REVISION_PROMPT if product_type == PRODUCT_POTTY else REVISION_PROMPT
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT_BASE},
-        {"role": "system", "content": REVISION_PROMPT},
+        {"role": "system", "content": revision_prompt},
         {"role": "system", "content": f"Profilo bambino strutturato:\n{profile_text}"}
     ]
     messages.extend(history)
@@ -2182,14 +2572,16 @@ def send_piano(phone):
 
     history = get_history(phone)
     profile_text = profile_to_text(get_child_profile(phone))
+    product_type = get_product_type(phone)
+    plan_prompt = POTTY_PLAN_PROMPT if product_type == PRODUCT_POTTY else PLAN_PROMPT
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT_BASE},
-        {"role": "system", "content": PLAN_PROMPT},
+        {"role": "system", "content": plan_prompt},
         {"role": "system", "content": f"Profilo bambino strutturato:\n{profile_text}"}
     ]
     messages.extend(history)
     messages.append({"role": "user", "content": (
-        "Genera ora il piano personalizzato completo.\n\n"
+        f"Genera ora il piano personalizzato completo per il percorso {product_label(product_type)}.\n\n"
         "[ISTRUZIONE SISTEMA: Genera il piano personalizzato COMPLETO e DETTAGLIATO adesso, "
         "basandoti su tutto quello che la mamma ha raccontato nel questionario. "
         "Inizia direttamente con il piano senza premesse. "
@@ -2222,26 +2614,36 @@ def send_piano(phone):
     set_last_plan_sent_at(phone)
 
 # ─── SEQUENZA ACQUISTO ─────────────────────────────────────────────────────────
-def invia_sequenza_acquisto(phone, intro_text=None):
+def invia_sequenza_acquisto(phone, intro_text=None, product_type=None):
     if get_fase(phone) != 0:
         logger.info(f"Sequenza acquisto gia avviata per {phone} — skip")
         return
 
-    set_fase(phone, 1)
-    logger.info(f"Avvio sequenza acquisto per {phone}")
+    if product_type not in (PRODUCT_SLEEP, PRODUCT_POTTY):
+        product_type = get_product_type(phone)
+    if product_type not in (PRODUCT_SLEEP, PRODUCT_POTTY):
+        # Per compatibilità con il vecchio comando /acquisto, se Paola non ha specificato nulla resta sonno.
+        product_type = PRODUCT_SLEEP
 
-    intro = (intro_text or MSG_BENVENUTO).strip()
+    set_product_type(phone, product_type)
+    set_awaiting_product_choice(phone, False)
+    set_fase(phone, 1)
+    logger.info(f"Avvio sequenza acquisto per {phone} — prodotto {product_type}")
+
+    intro = intro_text or build_contextual_purchase_intro(phone, "", product_type)
     save_message(phone, "assistant", intro)
     send_whatsapp_message(phone, intro)
+    time.sleep(2)
+
+    regole = get_msg_regole(product_type)
+    save_message(phone, "assistant", regole)
+    send_whatsapp_message(phone, regole)
     time.sleep(3)
 
-    save_message(phone, "assistant", MSG_REGOLE)
-    send_whatsapp_message(phone, MSG_REGOLE)
-    time.sleep(3)
-
-    save_message(phone, "assistant", MSG_QUESTIONARIO_1)
-    send_whatsapp_message(phone, MSG_QUESTIONARIO_1)
-    logger.info(f"Sequenza acquisto completata per {phone}")
+    q1 = get_questionario_1(product_type)
+    save_message(phone, "assistant", q1)
+    send_whatsapp_message(phone, q1)
+    logger.info(f"Sequenza acquisto completata per {phone} — prodotto {product_type}")
 
 # ─── ELABORAZIONE RISPOSTA ─────────────────────────────────────────────────────
 def process_response(phone, image_url=None):
@@ -2255,18 +2657,45 @@ def process_response(phone, image_url=None):
     combined_raw = "\n".join(pending)
     combined = combined_raw.lower().strip()
 
-    # Priorità assoluta in fase 0: se la mamma dichiara di aver già acquistato
-    # o di aver scaricato/letto la guida, avvia subito la sequenza senza aspettare GPT.
-    if fase == 0 and acquisto_dichiarato(combined_raw):
-        logger.info(f"Acquisto dichiarato rilevato a codice per {phone}")
-        intro = build_contextual_purchase_intro(phone, combined_raw)
-        invia_sequenza_acquisto(phone, intro_text=intro)
-        return
+    # Multi-prodotto in fase 0: prima capisce se si parla di sonno o spannolinamento.
+    if fase == 0:
+        awaiting_reason = get_awaiting_product_choice_reason(phone)
+        detected_product = detect_product_type_from_text(combined_raw)
+
+        if awaiting_reason and detected_product in (PRODUCT_SLEEP, PRODUCT_POTTY):
+            set_product_type(phone, detected_product)
+            set_awaiting_product_choice(phone, False)
+            if awaiting_reason == "purchase":
+                intro = build_contextual_purchase_intro(phone, combined_raw, detected_product)
+                invia_sequenza_acquisto(phone, intro_text=intro, product_type=detected_product)
+                return
+            risposta = product_specific_first_question(detected_product)
+            save_message(phone, "assistant", risposta)
+            send_whatsapp_message(phone, risposta)
+            return
+
+        # Priorità assoluta: se dichiara acquisto ma il prodotto è generico, chiedi prima quale percorso.
+        if acquisto_dichiarato(combined_raw):
+            logger.info(f"Acquisto dichiarato rilevato a codice per {phone}")
+            product_type = product_from_context_or_text(phone, combined_raw)
+            if product_type == PRODUCT_UNKNOWN:
+                set_awaiting_product_choice(phone, True, "purchase")
+                risposta = build_product_clarification(phone, combined_raw, reason="purchase")
+                save_message(phone, "assistant", risposta)
+                send_whatsapp_message(phone, risposta)
+                return
+            intro = build_contextual_purchase_intro(phone, combined_raw, product_type)
+            invia_sequenza_acquisto(phone, intro_text=intro, product_type=product_type)
+            return
+
+        # Se capisce il prodotto da un messaggio informativo/problema, lo salva per non ripartire da zero.
+        if detected_product in (PRODUCT_SLEEP, PRODUCT_POTTY) and get_product_type(phone) == PRODUCT_UNKNOWN:
+            set_product_type(phone, detected_product)
 
     # Router semantico: non invia nulla, serve solo per decidere meglio.
     router_result = classify_message(phone, fase, combined_raw, image_url=image_url)
     if fase == 0:
-        router_result = normalize_phase0_intent(router_result, combined_raw)
+        router_result = normalize_phase0_intent(router_result, combined_raw, product_from_context_or_text(phone, combined_raw))
     logger.info(f"Router per {phone}: {router_result}")
 
     if should_hold_for_human(router_result):
@@ -2328,8 +2757,15 @@ def process_response(phone, image_url=None):
                 threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore immagine per {phone}: {e}"], daemon=True).start()
 
         if is_acquisto:
-            intro = build_contextual_purchase_intro(phone, combined_raw)
-            invia_sequenza_acquisto(phone, intro_text=intro)
+            product_type = product_from_context_or_text(phone, combined_raw)
+            if product_type == PRODUCT_UNKNOWN:
+                set_awaiting_product_choice(phone, True, "purchase")
+                risposta = build_product_clarification(phone, combined_raw, reason="purchase")
+                save_message(phone, "assistant", risposta)
+                send_whatsapp_message(phone, risposta)
+                return
+            intro = build_contextual_purchase_intro(phone, combined_raw, product_type)
+            invia_sequenza_acquisto(phone, intro_text=intro, product_type=product_type)
             return
 
         ai_reply = get_ai_response(phone, image_url=image_url, router_result=router_result)
@@ -2351,7 +2787,7 @@ def process_response(phone, image_url=None):
                 check_response = openai_chat_completion(
                     model=MODEL_CLASSIFIER,
                     messages=[
-                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO solo se la mamma ha scritto risposte concrete al questionario: dati su mamma/bambino, eta, routine, sonno, orari, addormentamento, dove dorme. NON_HA_RISPOSTO se ha scritto solo cortesia o rinvio tipo ok, grazie, dopo, scrivo più tardi, ti rispondo domani, appena riesco."},
+                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO solo se la mamma ha scritto risposte concrete al questionario: dati su mamma/bambino, eta e situazione iniziale del percorso: per il sonno routine/orari/addormentamento/dove dorme; per spannolinamento pannolino/vasino/pipi/cacca/inizio percorso. NON_HA_RISPOSTO se ha scritto solo cortesia o rinvio tipo ok, grazie, dopo, scrivo più tardi, ti rispondo domani, appena riesco."},
                         {"role": "user", "content": f"Messaggi della mamma: '{combined_raw}'"}
                     ],
                     max_tokens=10,
@@ -2368,474 +2804,8 @@ def process_response(phone, image_url=None):
 
         if ha_risposto:
             time.sleep(300)
-            save_message(phone, "assistant", MSG_QUESTIONARIO_2)
-            send_whatsapp_message(phone, MSG_QUESTIONARIO_2)
-            set_fase(phone, 2)
-            logger.info(f"Questionario parte 2 inviato a {phone}")
-        else:
-            logger.info(f"Fase 1 per {phone} — mamma non ha risposto concretamente, bot in attesa")
-
-    elif fase == 2:
-        # Q2 -> conferma finale: chiedi "hai finito?" solo dopo risposte vere alla seconda parte.
-        if is_questionnaire_deferral(combined_raw):
-            mark_silent_no_reply(phone, "fase 2: rinvio compilazione questionario")
-            logger.info(f"Fase 2 per {phone} — rinvio/cortesia, nessuna conferma inviata")
-            return
-
-        ha_risposto = questionnaire_answer_seems_concrete(combined_raw, part=2)
-        if not ha_risposto:
-            try:
-                check_response = openai_chat_completion(
-                    model=MODEL_CLASSIFIER,
-                    messages=[
-                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO solo se la mamma ha scritto risposte concrete alla seconda parte del questionario: risvegli, orari, cosa succede di notte, riaddormentamento, latte, partner, lavoro/nido, obiettivo, difficoltà, salute. NON_HA_RISPOSTO se ha scritto solo cortesia o rinvio tipo ok, grazie, dopo, scrivo più tardi, ti rispondo domani, appena riesco."},
-                        {"role": "user", "content": f"Messaggi della mamma: '{combined_raw}'"}
-                    ],
-                    max_tokens=10,
-                    temperature=0,
-                    timeout=60
-                )
-                risposta = check_response.choices[0].message.content.strip().upper()
-                ha_risposto = "HA_RISPOSTO" in risposta and not is_questionnaire_deferral(combined_raw)
-                logger.info(f"Classificatore fase 2 per {phone}: {risposta}")
-            except Exception as e:
-                logger.error(f"Errore classificatore fase 2: {e}")
-                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 2 per {phone}: {e}"], daemon=True).start()
-                ha_risposto = questionnaire_answer_seems_concrete(combined_raw, part=2)
-
-        if ha_risposto:
-            save_message(phone, "assistant", MSG_CONFERMA_QUESTIONARIO)
-            send_whatsapp_message(phone, MSG_CONFERMA_QUESTIONARIO)
-            set_fase(phone, 5)
-            logger.info(f"Attesa conferma completamento questionario per {phone}")
-        else:
-            logger.info(f"Fase 2 per {phone} — mamma non ha risposto concretamente, bot in attesa")
-
-    elif fase == 5:
-        if is_questionnaire_deferral(combined_raw):
-            set_fase(phone, 6)
-            mark_silent_no_reply(phone, "fase 5: mamma rimanda conferma fine questionario")
-            logger.info(f"Fase 5 per {phone} — rinvio, passo a silenzio totale senza risposta")
-            return
-
-        parole_finito = [
-            "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto",
-            "risposto", "fatto", "ho fatto", "ecco tutto", "tutto",
-            "completato", "ho completato", "pronta", "sono pronta", "yes"
-        ]
-        ha_finito = any(combined == p or combined.startswith(p + " ") or combined.startswith(p + ",") for p in parole_finito)
-        if router_result.get("intent") == "conferma_questionario_finito" and float(router_result.get("confidence", 0) or 0) >= 0.65:
-            ha_finito = True
-
-        if not ha_finito:
-            try:
-                check_response = openai_chat_completion(
-                    model=MODEL_CLASSIFIER,
-                    messages=[
-                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO. SI se la persona indica in qualsiasi modo che ha finito, completato, risposto a tutto, o e pronta. NO in tutti gli altri casi."},
-                        {"role": "user", "content": f"Messaggio: '{combined}'"}
-                    ],
-                    max_tokens=5,
-                    temperature=0,
-                    timeout=60
-                )
-                ha_finito = check_response.choices[0].message.content.strip().lower().startswith("si")
-            except Exception as e:
-                logger.error(f"Errore check conferma: {e}")
-                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 5 per {phone}: {e}"], daemon=True).start()
-                ha_finito = False
-
-        if ha_finito:
-            try:
-                extract_child_profile_from_history(phone)
-            except Exception as e:
-                logger.error(f"Errore estrazione profilo in fase 5: {e}")
-            piano_time = datetime.now() + timedelta(hours=1)
-            set_fase(phone, 3, piano_scheduled_at=piano_time)
-            logger.info(f"Piano schedulato per {phone} alle {piano_time}")
-        else:
-            risposta = "Ok, tranquilla. Quando hai finito scrivimi 'ho finito' cosi so che posso iniziare a prepararti il piano 🤍"
-            save_message(phone, "assistant", risposta)
-            send_whatsapp_message(phone, risposta)
-            set_fase(phone, 6)
-            logger.info(f"Fase 6 per {phone} — silenzio totale")
-
-    elif fase == 6:
-        parole_finito = [
-            "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto",
-            "risposto", "fatto", "ho fatto", "ecco tutto", "tutto",
-            "completato", "ho completato", "pronta", "sono pronta", "yes"
-        ]
-        ha_finito = any(combined == p or combined.startswith(p + " ") or combined.startswith(p + ",") for p in parole_finito)
-        if router_result.get("intent") == "conferma_questionario_finito" and float(router_result.get("confidence", 0) or 0) >= 0.65:
-            ha_finito = True
-
-        if not ha_finito:
-            try:
-                check_response = openai_chat_completion(
-                    model=MODEL_CLASSIFIER,
-                    messages=[
-                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO. SI se la persona indica in qualsiasi modo che ha finito, completato, risposto a tutto, o e pronta. NO in tutti gli altri casi."},
-                        {"role": "user", "content": f"Messaggio: '{combined}'"}
-                    ],
-                    max_tokens=5,
-                    temperature=0,
-                    timeout=60
-                )
-                ha_finito = check_response.choices[0].message.content.strip().lower().startswith("si")
-            except Exception as e:
-                logger.error(f"Errore check conferma fase 6: {e}")
-                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 6 per {phone}: {e}"], daemon=True).start()
-                ha_finito = False
-
-        if ha_finito:
-            try:
-                extract_child_profile_from_history(phone)
-            except Exception as e:
-                logger.error(f"Errore estrazione profilo in fase 6: {e}")
-            piano_time = datetime.now() + timedelta(hours=1)
-            set_fase(phone, 3, piano_scheduled_at=piano_time)
-            logger.info(f"Piano schedulato per {phone} alle {piano_time}")
-        else:
-            logger.info(f"Fase 6 per {phone} — silenzio totale, mamma non ha ancora finito")
-
-    elif fase == 3:
-        logger.info(f"Fase 3 per {phone} — bot in attesa del piano")
-
-    elif fase == 4:
-        maybe_send_post_plan_alert(phone, router_result, combined_raw)
-        # Se emergono nuovi dati utili, prova ad aggiornare il profilo senza bloccare la risposta.
-        if len(combined_raw) > 120:
-            threading.Thread(target=extract_child_profile_from_history, args=[phone], daemon=True).start()
-        ai_reply = get_ai_response(phone, image_url=image_url, router_result=router_result)
-        if ai_reply:
-            save_message(phone, "assistant", ai_reply)
-            send_whatsapp_message(phone, ai_reply)
-
-# ─── WEBHOOK WHATSAPP ──────────────────────────────────────────────────────────
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    phone      = request.form.get("From", "").replace("whatsapp:", "")
-    body       = request.form.get("Body", "").strip()
-    num_media  = int(request.form.get("NumMedia", 0))
-    media_type = request.form.get("MediaContentType0", "")
-    media_url  = request.form.get("MediaUrl0", "")
-
-    logger.info(f"Messaggio da {phone}: '{body}' | media: {num_media}")
-
-    message_sid = request.form.get("MessageSid", "")
-    if message_sid:
-        with processed_sids_lock:
-            if message_sid in processed_sids:
-                logger.info(f"Duplicato ignorato: {message_sid}")
-                return Response("OK", status=200)
-            processed_sids.add(message_sid)
-            if len(processed_sids) > 1000:
-                processed_sids.clear()
-
-    # ── Comandi admin ──────────────────────────────────────────────────────────
-    if body.startswith("/inizia"):
-        parts = body.strip().split()
-        if len(parts) == 2:
-            target = parts[1].replace("+", "").replace(" ", "")
-            set_start_date(target, datetime.now().date())
-            set_fase(target, 4)
-            # Cancella timer attivo se presente
-            with active_timers_lock:
-                if target in active_timers:
-                    active_timers[target].cancel()
-                    active_timers.pop(target, None)
-        return Response("OK", status=200)
-
-    if body.startswith("/pausa"):
-        parts = body.strip().split()
-        if len(parts) == 2:
-            target = parts[1].replace("+", "").replace(" ", "")
-            set_fase(target, 99)
-        return Response("OK", status=200)
-
-    if body.startswith("/riprendi"):
-        parts = body.strip().split()
-        if len(parts) == 2:
-            target = parts[1].replace("+", "").replace(" ", "")
-            set_fase(target, 4)
-        return Response("OK", status=200)
-
-    if body.startswith("/acquisto"):
-        parts = body.strip().split()
-        if len(parts) == 2:
-            target = parts[1].replace("+", "").replace(" ", "")
-            threading.Thread(target=invia_sequenza_acquisto, args=[target], daemon=True).start()
-        return Response("OK", status=200)
-
-    if body.startswith("/nota"):
-        parts = body.strip().split(None, 2)
-        if len(parts) >= 3:
-            target = parts[1].replace("+", "").replace(" ", "")
-            nota = parts[2]
-            save_message(target, "user", f"[NOTA ADMIN: {nota}]")
-        return Response("OK", status=200)
-
-    if body.startswith("/scrivi"):
-        parts = body.strip().split(None, 2)
-        if len(parts) >= 3:
-            target = parts[1].replace("+", "").replace(" ", "")
-            testo = parts[2]
-            save_message(target, "assistant", testo)
-            send_whatsapp_message(target, testo)
-            logger.info(f"Messaggio admin inviato a {target}")
-        return Response("OK", status=200)
-
-    if body.startswith("/piano"):
-        parts = body.strip().split()
-        if len(parts) == 2:
-            target = parts[1].replace("+", "").replace(" ", "")
-            with active_timers_lock:
-                if target in active_timers:
-                    active_timers[target].cancel()
-                    active_timers.pop(target, None)
-            threading.Thread(target=send_piano, args=[target], daemon=True).start()
-        return Response("OK", status=200)
-
-    if body.startswith("/checkup") or body.startswith("/chekup") or body.startswith("/check") or body.startswith("/ceckup"):
-        parts = body.strip().split()
-        if len(parts) == 2:
-            target = parts[1].replace("+", "").replace(" ", "")
-            with active_timers_lock:
-                if target in active_timers:
-                    active_timers[target].cancel()
-                    active_timers.pop(target, None)
-            send_checkup(target)
-        return Response("OK", status=200)
-
-    if body.startswith("/revisione"):
-        parts = body.strip().split()
-        if len(parts) == 2:
-            target = parts[1].replace("+", "").replace(" ", "")
-            with active_timers_lock:
-                if target in active_timers:
-                    active_timers[target].cancel()
-                    active_timers.pop(target, None)
-            threading.Thread(target=send_revision, args=[target, "manuale"], daemon=True).start()
-        return Response("OK", status=200)
-
-    if body.startswith("/continua"):
-        parts = body.strip().split()
-        if len(parts) == 2:
-            target = parts[1].replace("+", "").replace(" ", "")
-            with active_timers_lock:
-                if target in active_timers:
-                    active_timers[target].cancel()
-                    active_timers.pop(target, None)
-            threading.Thread(target=generate_forced_reply, args=[target, "continua"], daemon=True).start()
-        return Response("OK", status=200)
-
-    if body.startswith("/rispondi"):
-        parts = body.strip().split()
-        if len(parts) == 2:
-            target = parts[1].replace("+", "").replace(" ", "")
-            with active_timers_lock:
-                if target in active_timers:
-                    active_timers[target].cancel()
-                    active_timers.pop(target, None)
-            threading.Thread(target=generate_forced_reply, args=[target, "rispondi"], daemon=True).start()
-        return Response("OK", status=200)
-
-    if body.startswith("/q1"):
-        parts = body.strip().split()
-        if len(parts) == 2:
-            target = parts[1].replace("+", "").replace(" ", "")
-            set_fase(target, 1)
-            save_message(target, "assistant", MSG_QUESTIONARIO_1)
-            send_whatsapp_message(target, MSG_QUESTIONARIO_1)
-        return Response("OK", status=200)
-
-    if body.startswith("/q2"):
-        parts = body.strip().split()
-        if len(parts) == 2:
-            target = parts[1].replace("+", "").replace(" ", "")
-            set_fase(target, 2)
-            save_message(target, "assistant", MSG_QUESTIONARIO_2)
-            send_whatsapp_message(target, MSG_QUESTIONARIO_2)
-        return Response("OK", status=200)
-
-    if body.startswith("/fase"):
-        parts = body.strip().split()
-        if len(parts) == 3:
-            target = parts[1].replace("+", "").replace(" ", "")
-            try:
-                nuova_fase = int(parts[2])
-                set_fase(target, nuova_fase)
-                with active_timers_lock:
-                    if target in active_timers:
-                        active_timers[target].cancel()
-                        active_timers.pop(target, None)
-                logger.info(f"Fase {nuova_fase} impostata per {target}")
-            except ValueError:
-                pass
-        return Response("OK", status=200)
-
-    # Se la chat è in pausa, NON deve partire nessuna risposta automatica.
-    # Però il messaggio della mamma deve comunque essere salvato e inoltrato nel topic Telegram,
-    # così Paola può leggerlo e rispondere manualmente dal topic.
-    chat_in_pausa = get_fase(phone) == 99
-
-    text_to_process = body
-    image_url_to_process = None
-
-    if num_media > 0 and media_url:
-        if media_type.startswith("audio/"):
-            transcribed = transcribe_audio(media_url)
-            text_to_process = transcribed if transcribed else "[messaggio vocale non comprensibile]"
-        elif media_type.startswith("image/"):
-            image_url_to_process = media_url
-            text_to_process = body or "[immagine]"
-        elif media_type.startswith("video/"):
-            if chat_in_pausa:
-                text_to_process = body or "[video ricevuto — non elaborato automaticamente]"
-            else:
-                send_whatsapp_message(phone, "Non riesco a vedere i video, scrivimi pure qui in chat 🙏")
-                return Response("OK", status=200)
-
-    if not text_to_process and not image_url_to_process:
-        return Response("OK", status=200)
-
-    saved_content = text_to_process or "[immagine]"
-    save_message(phone, "user", saved_content)
-
-    # Notifica nel topic Telegram anche se la chat è in pausa.
-    threading.Thread(target=send_to_topic, args=[phone, saved_content, False], daemon=True).start()
-
-    if chat_in_pausa:
-        logger.info(f"Chat {phone} in pausa — messaggio salvato e inoltrato a Telegram, nessun timer")
-        return Response("OK", status=200)
-
-    fase_corrente = get_fase(phone)
-    if fase_corrente in (0, 4) and not image_url_to_process and is_obvious_closing_message(text_to_process):
-        mark_silent_no_reply(phone, "chiusura breve rilevata prima del timer")
-        return Response("OK", status=200)
-
-    # ── Orario silenzio (23:00 - 07:00 ora italiana) ──────────────────────────
-    if in_orario_silenzio():
-        logger.info(f"Orario silenzio — messaggio di {phone} salvato nel DB, nessun timer")
-        return Response("OK", status=200)
-
-    with active_timers_lock:
-        if phone in active_timers:
-            logger.info(f"Timer gia attivo per {phone} — messaggio salvato nel DB")
-            return Response("OK", status=200)
-
-        fase = get_fase(phone)
-        if fase == 0:
-            delay = 300
-        elif fase == 1:
-            delay = 600
-        elif fase == 2:
-            delay = 1800
-        elif fase == 5:
-            delay = 1800   # 30 minuti — aspetta la conferma della mamma
-        elif fase == 6:
-            delay = 1800   # 30 minuti — silenzio totale, aspetta solo conferma
-        elif fase == 4:
-            if is_immediate_question(text_to_process):
-                delay = random.randint(180, 420)
-            else:
-                delay = random.randint(1800, 2400)
-        else:
-            delay = 5
-
-        timer = threading.Timer(delay, process_response, args=[phone, image_url_to_process])
-        active_timers[phone] = timer
-        timer.start()
-        logger.info(f"Timer avviato per {phone} — delay {delay}s — fase {fase}")
-
-    return Response("OK", status=200)
-
-# ─── JOB BACKGROUND ────────────────────────────────────────────────────────────
-def background_job():
-    risveglio_fatto = False
-    while True:
-        try:
-            # Invia piani schedulati solo fuori orario silenzio
-            if not in_orario_silenzio():
-                for phone in get_pianos_to_send():
-                    send_piano(phone)
-
-            # Risveglio mattutino — alle 07:00 crea timer per messaggi notturni
-            try:
-                tz = pytz.timezone(TIMEZONE)
-                ora_locale = datetime.now(tz)
-                ora = ora_locale.hour
-                if ora >= 7 and not risveglio_fatto:
-                    risveglio_fatto = True
-                    logger.info("Risveglio mattutino — controllo messaggi notturni")
-                    conn = get_db()
-                    cur = conn.cursor()
-                    cur.execute("""
-                        SELECT DISTINCT m.phone FROM messages m
-                        LEFT JOIN consultations c ON c.phone = m.phone
-                        WHERE m.role = 'user'
-                        AND (c.fase IS NULL OR c.fase NOT IN (3, 99))
-                        AND m.timestamp > NOW() - INTERVAL '12 hours'
-                        AND m.timestamp > COALESCE(
-                            (SELECT MAX(timestamp) FROM messages m2
-                             WHERE m2.phone = m.phone AND m2.role = 'assistant'),
-                            NOW() - INTERVAL '30 days'
-                        )
-                    """)
-                    phones_da_rispondere = [r[0] for r in cur.fetchall()]
-                    cur.close()
-                    conn.close()
-                    for p in phones_da_rispondere:
-                        with active_timers_lock:
-                            if p not in active_timers:
-                                fase = get_fase(p)
-                                if fase == 0:
-                                    delay = 60
-                                elif fase == 4:
-                                    delay = random.randint(300, 600)
-                                else:
-                                    delay = 30
-                                timer = threading.Timer(delay, process_response, args=[p, None])
-                                active_timers[p] = timer
-                                timer.start()
-                                logger.info(f"Timer risveglio mattutino per {p} — delay {delay}s")
-                elif ora < 7:
-                    risveglio_fatto = False
-            except Exception as e:
-                logger.error(f"Errore risveglio mattutino: {e}")
-
-        except Exception as e:
-            logger.error(f"Errore background job: {e}")
-        time.sleep(300)
-
-def setup_telegram_webhook():
-    """Registra il webhook Telegram per ricevere risposte dal topic."""
-    if not TELEGRAM_BOT_TOKEN:
-        return
-    try:
-        webhook_url = f"https://whatsapp-bot-production-a276.up.railway.app/telegram_webhook"
-        resp = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook",
-            json={"url": webhook_url, "allowed_updates": ["message"]},
-            timeout=10
-        )
-        logger.info(f"Telegram webhook impostato: {resp.json()}")
-    except Exception as e:
-        logger.error(f"Errore setup telegram webhook: {e}")
-
-# ─── AVVIO ─────────────────────────────────────────────────────────────────────
-def startup():
-    init_db()
-    threading.Thread(target=background_job, daemon=True).start()
-    setup_telegram_webhook()
-    logger.info("Bot avviato")
-
-if __name__ == "__main__":
-    startup()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-else:
-    startup()
-
-
-
+            q2 = get_questionario_2(get_product_type(phone))
+            save_message(phone, "assistant", q2)
+            send_whatsapp_message(phone, q2)
+           
+Anteprima troncata per file di grandi dimensioni
