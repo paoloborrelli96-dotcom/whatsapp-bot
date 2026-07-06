@@ -2807,5 +2807,505 @@ def process_response(phone, image_url=None):
             q2 = get_questionario_2(get_product_type(phone))
             save_message(phone, "assistant", q2)
             send_whatsapp_message(phone, q2)
-           
-Anteprima troncata per file di grandi dimensioni
+            set_fase(phone, 2)
+            logger.info(f"Questionario parte 2 inviato a {phone}")
+        else:
+            logger.info(f"Fase 1 per {phone} — mamma non ha risposto concretamente, bot in attesa")
+
+    elif fase == 2:
+        # Q2 -> conferma finale: chiedi "hai finito?" solo dopo risposte vere alla seconda parte.
+        if is_questionnaire_deferral(combined_raw):
+            mark_silent_no_reply(phone, "fase 2: rinvio compilazione questionario")
+            logger.info(f"Fase 2 per {phone} — rinvio/cortesia, nessuna conferma inviata")
+            return
+
+        ha_risposto = questionnaire_answer_seems_concrete(combined_raw, part=2)
+        if not ha_risposto:
+            try:
+                check_response = openai_chat_completion(
+                    model=MODEL_CLASSIFIER,
+                    messages=[
+                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO solo se la mamma ha scritto risposte concrete alla seconda parte del questionario: dettagli concreti della seconda parte: per il sonno risvegli/orari/riaddormentamento/latte/obiettivo/salute; per spannolinamento vasino/water/incidenti/cacca/nido/notte/premi/rifiuti/obiettivo. NON_HA_RISPOSTO se ha scritto solo cortesia o rinvio tipo ok, grazie, dopo, scrivo più tardi, ti rispondo domani, appena riesco."},
+                        {"role": "user", "content": f"Messaggi della mamma: '{combined_raw}'"}
+                    ],
+                    max_tokens=10,
+                    temperature=0,
+                    timeout=60
+                )
+                risposta = check_response.choices[0].message.content.strip().upper()
+                ha_risposto = "HA_RISPOSTO" in risposta and not is_questionnaire_deferral(combined_raw)
+                logger.info(f"Classificatore fase 2 per {phone}: {risposta}")
+            except Exception as e:
+                logger.error(f"Errore classificatore fase 2: {e}")
+                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 2 per {phone}: {e}"], daemon=True).start()
+                ha_risposto = questionnaire_answer_seems_concrete(combined_raw, part=2)
+
+        if ha_risposto:
+            save_message(phone, "assistant", MSG_CONFERMA_QUESTIONARIO)
+            send_whatsapp_message(phone, MSG_CONFERMA_QUESTIONARIO)
+            set_fase(phone, 5)
+            logger.info(f"Attesa conferma completamento questionario per {phone}")
+        else:
+            logger.info(f"Fase 2 per {phone} — mamma non ha risposto concretamente, bot in attesa")
+
+    elif fase == 5:
+        if is_questionnaire_deferral(combined_raw):
+            set_fase(phone, 6)
+            mark_silent_no_reply(phone, "fase 5: mamma rimanda conferma fine questionario")
+            logger.info(f"Fase 5 per {phone} — rinvio, passo a silenzio totale senza risposta")
+            return
+
+        parole_finito = [
+            "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto",
+            "risposto", "fatto", "ho fatto", "ecco tutto", "tutto",
+            "completato", "ho completato", "pronta", "sono pronta", "yes"
+        ]
+        ha_finito = any(combined == p or combined.startswith(p + " ") or combined.startswith(p + ",") for p in parole_finito)
+        if router_result.get("intent") == "conferma_questionario_finito" and float(router_result.get("confidence", 0) or 0) >= 0.65:
+            ha_finito = True
+
+        if not ha_finito:
+            try:
+                check_response = openai_chat_completion(
+                    model=MODEL_CLASSIFIER,
+                    messages=[
+                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO. SI se la persona indica in qualsiasi modo che ha finito, completato, risposto a tutto, o e pronta. NO in tutti gli altri casi."},
+                        {"role": "user", "content": f"Messaggio: '{combined}'"}
+                    ],
+                    max_tokens=5,
+                    temperature=0,
+                    timeout=60
+                )
+                ha_finito = check_response.choices[0].message.content.strip().lower().startswith("si")
+            except Exception as e:
+                logger.error(f"Errore check conferma: {e}")
+                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 5 per {phone}: {e}"], daemon=True).start()
+                ha_finito = False
+
+        if ha_finito:
+            try:
+                extract_child_profile_from_history(phone)
+            except Exception as e:
+                logger.error(f"Errore estrazione profilo in fase 5: {e}")
+            piano_time = datetime.now() + timedelta(hours=1)
+            set_fase(phone, 3, piano_scheduled_at=piano_time)
+            logger.info(f"Piano schedulato per {phone} alle {piano_time}")
+        else:
+            risposta = "Ok, tranquilla. Quando hai finito scrivimi 'ho finito' cosi so che posso iniziare a prepararti il piano 🤍"
+            save_message(phone, "assistant", risposta)
+            send_whatsapp_message(phone, risposta)
+            set_fase(phone, 6)
+            logger.info(f"Fase 6 per {phone} — silenzio totale")
+
+    elif fase == 6:
+        parole_finito = [
+            "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto",
+            "risposto", "fatto", "ho fatto", "ecco tutto", "tutto",
+            "completato", "ho completato", "pronta", "sono pronta", "yes"
+        ]
+        ha_finito = any(combined == p or combined.startswith(p + " ") or combined.startswith(p + ",") for p in parole_finito)
+        if router_result.get("intent") == "conferma_questionario_finito" and float(router_result.get("confidence", 0) or 0) >= 0.65:
+            ha_finito = True
+
+        if not ha_finito:
+            try:
+                check_response = openai_chat_completion(
+                    model=MODEL_CLASSIFIER,
+                    messages=[
+                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO. SI se la persona indica in qualsiasi modo che ha finito, completato, risposto a tutto, o e pronta. NO in tutti gli altri casi."},
+                        {"role": "user", "content": f"Messaggio: '{combined}'"}
+                    ],
+                    max_tokens=5,
+                    temperature=0,
+                    timeout=60
+                )
+                ha_finito = check_response.choices[0].message.content.strip().lower().startswith("si")
+            except Exception as e:
+                logger.error(f"Errore check conferma fase 6: {e}")
+                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 6 per {phone}: {e}"], daemon=True).start()
+                ha_finito = False
+
+        if ha_finito:
+            try:
+                extract_child_profile_from_history(phone)
+            except Exception as e:
+                logger.error(f"Errore estrazione profilo in fase 6: {e}")
+            piano_time = datetime.now() + timedelta(hours=1)
+            set_fase(phone, 3, piano_scheduled_at=piano_time)
+            logger.info(f"Piano schedulato per {phone} alle {piano_time}")
+        else:
+            logger.info(f"Fase 6 per {phone} — silenzio totale, mamma non ha ancora finito")
+
+    elif fase == 3:
+        logger.info(f"Fase 3 per {phone} — bot in attesa del piano")
+
+    elif fase == 4:
+        maybe_send_post_plan_alert(phone, router_result, combined_raw)
+        # Se emergono nuovi dati utili, prova ad aggiornare il profilo senza bloccare la risposta.
+        if len(combined_raw) > 120:
+            threading.Thread(target=extract_child_profile_from_history, args=[phone], daemon=True).start()
+        ai_reply = get_ai_response(phone, image_url=image_url, router_result=router_result)
+        if ai_reply:
+            save_message(phone, "assistant", ai_reply)
+            send_whatsapp_message(phone, ai_reply)
+
+# ─── WEBHOOK WHATSAPP ──────────────────────────────────────────────────────────
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    phone      = request.form.get("From", "").replace("whatsapp:", "")
+    body       = request.form.get("Body", "").strip()
+    num_media  = int(request.form.get("NumMedia", 0))
+    media_type = request.form.get("MediaContentType0", "")
+    media_url  = request.form.get("MediaUrl0", "")
+
+    logger.info(f"Messaggio da {phone}: '{body}' | media: {num_media}")
+
+    message_sid = request.form.get("MessageSid", "")
+    if message_sid:
+        with processed_sids_lock:
+            if message_sid in processed_sids:
+                logger.info(f"Duplicato ignorato: {message_sid}")
+                return Response("OK", status=200)
+            processed_sids.add(message_sid)
+            if len(processed_sids) > 1000:
+                processed_sids.clear()
+
+    # ── Comandi admin ──────────────────────────────────────────────────────────
+    if body.startswith("/inizia"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            set_start_date(target, datetime.now().date())
+            set_fase(target, 4)
+            # Cancella timer attivo se presente
+            with active_timers_lock:
+                if target in active_timers:
+                    active_timers[target].cancel()
+                    active_timers.pop(target, None)
+        return Response("OK", status=200)
+
+    if body.startswith("/pausa"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            set_fase(target, 99)
+        return Response("OK", status=200)
+
+    if body.startswith("/riprendi"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            set_fase(target, 4)
+        return Response("OK", status=200)
+
+    if body.startswith("/sonno"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            set_product_type(target, PRODUCT_SLEEP)
+            set_awaiting_product_choice(target, False)
+        return Response("OK", status=200)
+
+    if body.startswith("/spannolinamento") or body.startswith("/pannolino"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            set_product_type(target, PRODUCT_POTTY)
+            set_awaiting_product_choice(target, False)
+        return Response("OK", status=200)
+
+    if body.startswith("/acquisto_spannolinamento") or body.startswith("/acquisto_pannolino"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            threading.Thread(target=invia_sequenza_acquisto, args=[target, None, PRODUCT_POTTY], daemon=True).start()
+        return Response("OK", status=200)
+
+    if body.startswith("/acquisto_sonno"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            threading.Thread(target=invia_sequenza_acquisto, args=[target, None, PRODUCT_SLEEP], daemon=True).start()
+        return Response("OK", status=200)
+
+    if body.startswith("/acquisto"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            threading.Thread(target=invia_sequenza_acquisto, args=[target], daemon=True).start()
+        return Response("OK", status=200)
+
+    if body.startswith("/nota"):
+        parts = body.strip().split(None, 2)
+        if len(parts) >= 3:
+            target = parts[1].replace("+", "").replace(" ", "")
+            nota = parts[2]
+            save_message(target, "user", f"[NOTA ADMIN: {nota}]")
+        return Response("OK", status=200)
+
+    if body.startswith("/scrivi"):
+        parts = body.strip().split(None, 2)
+        if len(parts) >= 3:
+            target = parts[1].replace("+", "").replace(" ", "")
+            testo = parts[2]
+            save_message(target, "assistant", testo)
+            send_whatsapp_message(target, testo)
+            logger.info(f"Messaggio admin inviato a {target}")
+        return Response("OK", status=200)
+
+    if body.startswith("/piano"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            with active_timers_lock:
+                if target in active_timers:
+                    active_timers[target].cancel()
+                    active_timers.pop(target, None)
+            threading.Thread(target=send_piano, args=[target], daemon=True).start()
+        return Response("OK", status=200)
+
+    if body.startswith("/checkup") or body.startswith("/chekup") or body.startswith("/check") or body.startswith("/ceckup"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            with active_timers_lock:
+                if target in active_timers:
+                    active_timers[target].cancel()
+                    active_timers.pop(target, None)
+            send_checkup(target)
+        return Response("OK", status=200)
+
+    if body.startswith("/revisione"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            with active_timers_lock:
+                if target in active_timers:
+                    active_timers[target].cancel()
+                    active_timers.pop(target, None)
+            threading.Thread(target=send_revision, args=[target, "manuale"], daemon=True).start()
+        return Response("OK", status=200)
+
+    if body.startswith("/continua"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            with active_timers_lock:
+                if target in active_timers:
+                    active_timers[target].cancel()
+                    active_timers.pop(target, None)
+            threading.Thread(target=generate_forced_reply, args=[target, "continua"], daemon=True).start()
+        return Response("OK", status=200)
+
+    if body.startswith("/rispondi"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            with active_timers_lock:
+                if target in active_timers:
+                    active_timers[target].cancel()
+                    active_timers.pop(target, None)
+            threading.Thread(target=generate_forced_reply, args=[target, "rispondi"], daemon=True).start()
+        return Response("OK", status=200)
+
+    if body.startswith("/q1"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            product_type = get_product_type(target)
+            set_fase(target, 1)
+            q1 = get_questionario_1(product_type)
+            save_message(target, "assistant", q1)
+            send_whatsapp_message(target, q1)
+        return Response("OK", status=200)
+
+    if body.startswith("/q2"):
+        parts = body.strip().split()
+        if len(parts) == 2:
+            target = parts[1].replace("+", "").replace(" ", "")
+            product_type = get_product_type(target)
+            set_fase(target, 2)
+            q2 = get_questionario_2(product_type)
+            save_message(target, "assistant", q2)
+            send_whatsapp_message(target, q2)
+        return Response("OK", status=200)
+
+    if body.startswith("/fase"):
+        parts = body.strip().split()
+        if len(parts) == 3:
+            target = parts[1].replace("+", "").replace(" ", "")
+            try:
+                nuova_fase = int(parts[2])
+                set_fase(target, nuova_fase)
+                with active_timers_lock:
+                    if target in active_timers:
+                        active_timers[target].cancel()
+                        active_timers.pop(target, None)
+                logger.info(f"Fase {nuova_fase} impostata per {target}")
+            except ValueError:
+                pass
+        return Response("OK", status=200)
+
+    # Se la chat è in pausa, NON deve partire nessuna risposta automatica.
+    # Però il messaggio della mamma deve comunque essere salvato e inoltrato nel topic Telegram,
+    # così Paola può leggerlo e rispondere manualmente dal topic.
+    chat_in_pausa = get_fase(phone) == 99
+
+    text_to_process = body
+    image_url_to_process = None
+
+    if num_media > 0 and media_url:
+        if media_type.startswith("audio/"):
+            transcribed = transcribe_audio(media_url)
+            text_to_process = transcribed if transcribed else "[messaggio vocale non comprensibile]"
+        elif media_type.startswith("image/"):
+            image_url_to_process = media_url
+            text_to_process = body or "[immagine]"
+        elif media_type.startswith("video/"):
+            if chat_in_pausa:
+                text_to_process = body or "[video ricevuto — non elaborato automaticamente]"
+            else:
+                send_whatsapp_message(phone, "Non riesco a vedere i video, scrivimi pure qui in chat 🙏")
+                return Response("OK", status=200)
+
+    if not text_to_process and not image_url_to_process:
+        return Response("OK", status=200)
+
+    saved_content = text_to_process or "[immagine]"
+    save_message(phone, "user", saved_content)
+
+    # Notifica nel topic Telegram anche se la chat è in pausa.
+    threading.Thread(target=send_to_topic, args=[phone, saved_content, False], daemon=True).start()
+
+    if chat_in_pausa:
+        logger.info(f"Chat {phone} in pausa — messaggio salvato e inoltrato a Telegram, nessun timer")
+        return Response("OK", status=200)
+
+    fase_corrente = get_fase(phone)
+    if fase_corrente in (0, 4) and not image_url_to_process and is_obvious_closing_message(text_to_process):
+        mark_silent_no_reply(phone, "chiusura breve rilevata prima del timer")
+        return Response("OK", status=200)
+
+    # ── Orario silenzio (23:00 - 07:00 ora italiana) ──────────────────────────
+    if in_orario_silenzio():
+        logger.info(f"Orario silenzio — messaggio di {phone} salvato nel DB, nessun timer")
+        return Response("OK", status=200)
+
+    with active_timers_lock:
+        if phone in active_timers:
+            logger.info(f"Timer gia attivo per {phone} — messaggio salvato nel DB")
+            return Response("OK", status=200)
+
+        fase = get_fase(phone)
+        if fase == 0:
+            delay = 300
+        elif fase == 1:
+            delay = 600
+        elif fase == 2:
+            delay = 1800
+        elif fase == 5:
+            delay = 1800   # 30 minuti — aspetta la conferma della mamma
+        elif fase == 6:
+            delay = 1800   # 30 minuti — silenzio totale, aspetta solo conferma
+        elif fase == 4:
+            if is_immediate_question(text_to_process):
+                delay = random.randint(180, 420)
+            else:
+                delay = random.randint(1800, 2400)
+        else:
+            delay = 5
+
+        timer = threading.Timer(delay, process_response, args=[phone, image_url_to_process])
+        active_timers[phone] = timer
+        timer.start()
+        logger.info(f"Timer avviato per {phone} — delay {delay}s — fase {fase}")
+
+    return Response("OK", status=200)
+
+# ─── JOB BACKGROUND ────────────────────────────────────────────────────────────
+def background_job():
+    risveglio_fatto = False
+    while True:
+        try:
+            # Invia piani schedulati solo fuori orario silenzio
+            if not in_orario_silenzio():
+                for phone in get_pianos_to_send():
+                    send_piano(phone)
+
+            # Risveglio mattutino — alle 07:00 crea timer per messaggi notturni
+            try:
+                tz = pytz.timezone(TIMEZONE)
+                ora_locale = datetime.now(tz)
+                ora = ora_locale.hour
+                if ora >= 7 and not risveglio_fatto:
+                    risveglio_fatto = True
+                    logger.info("Risveglio mattutino — controllo messaggi notturni")
+                    conn = get_db()
+                    cur = conn.cursor()
+                    cur.execute("""
+                        SELECT DISTINCT m.phone FROM messages m
+                        LEFT JOIN consultations c ON c.phone = m.phone
+                        WHERE m.role = 'user'
+                        AND (c.fase IS NULL OR c.fase NOT IN (3, 99))
+                        AND m.timestamp > NOW() - INTERVAL '12 hours'
+                        AND m.timestamp > COALESCE(
+                            (SELECT MAX(timestamp) FROM messages m2
+                             WHERE m2.phone = m.phone AND m2.role = 'assistant'),
+                            NOW() - INTERVAL '30 days'
+                        )
+                    """)
+                    phones_da_rispondere = [r[0] for r in cur.fetchall()]
+                    cur.close()
+                    conn.close()
+                    for p in phones_da_rispondere:
+                        with active_timers_lock:
+                            if p not in active_timers:
+                                fase = get_fase(p)
+                                if fase == 0:
+                                    delay = 60
+                                elif fase == 4:
+                                    delay = random.randint(300, 600)
+                                else:
+                                    delay = 30
+                                timer = threading.Timer(delay, process_response, args=[p, None])
+                                active_timers[p] = timer
+                                timer.start()
+                                logger.info(f"Timer risveglio mattutino per {p} — delay {delay}s")
+                elif ora < 7:
+                    risveglio_fatto = False
+            except Exception as e:
+                logger.error(f"Errore risveglio mattutino: {e}")
+
+        except Exception as e:
+            logger.error(f"Errore background job: {e}")
+        time.sleep(300)
+
+def setup_telegram_webhook():
+    """Registra il webhook Telegram per ricevere risposte dal topic."""
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    try:
+        webhook_url = f"https://whatsapp-bot-production-a276.up.railway.app/telegram_webhook"
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook",
+            json={"url": webhook_url, "allowed_updates": ["message"]},
+            timeout=10
+        )
+        logger.info(f"Telegram webhook impostato: {resp.json()}")
+    except Exception as e:
+        logger.error(f"Errore setup telegram webhook: {e}")
+
+# ─── AVVIO ─────────────────────────────────────────────────────────────────────
+def startup():
+    init_db()
+    threading.Thread(target=background_job, daemon=True).start()
+    setup_telegram_webhook()
+    logger.info("Bot avviato")
+
+if __name__ == "__main__":
+    startup()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+else:
+    startup()
+
+
