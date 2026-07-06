@@ -48,6 +48,7 @@ TEMP_PLAN              = float(os.environ.get("TEMP_PLAN", "0.65"))
 
 LINK_PREMIUM           = os.environ.get("LINK_PREMIUM", "https://genitorinarmonia.com/products/metodo-paola-premium")
 LINK_BASE              = os.environ.get("LINK_BASE", "https://genitorinarmonia.com/products/sonno-magico")
+LINK_POTTY             = os.environ.get("LINK_POTTY", "https://genitorinarmonia.com/products/spannolinamento-dolce-in-9-giorni")
 LINK_REFUND            = os.environ.get("LINK_REFUND", "https://genitorinarmonia.com/policies/refund-policy")
 
 OFFERS = {
@@ -88,6 +89,13 @@ PRODUCT_LABELS = {
 
 def product_label(product_type):
     return PRODUCT_LABELS.get(product_type or PRODUCT_UNKNOWN, "percorso")
+
+
+def get_product_link(product_type):
+    """Restituisce il link checkout corretto in base al prodotto."""
+    if product_type == PRODUCT_POTTY:
+        return LINK_POTTY
+    return LINK_PREMIUM
 
 def in_orario_silenzio():
     """Controlla se siamo nell'orario di silenzio (23:00 - 07:00 ora italiana)."""
@@ -1292,19 +1300,31 @@ def get_recent_history(phone, limit=30):
         return []
 
 
-def link_gia_inviato(phone):
-    """Controlla se uno dei link del percorso è già stato inviato."""
+def link_gia_inviato(phone, product_type=PRODUCT_UNKNOWN):
+    """Controlla se il link del percorso è già stato inviato.
+    Se il prodotto è noto, controlla soprattutto il link di quel prodotto.
+    """
     try:
+        links = []
+        if product_type == PRODUCT_POTTY:
+            links = [LINK_POTTY]
+        elif product_type == PRODUCT_SLEEP:
+            links = [LINK_PREMIUM, LINK_BASE]
+        else:
+            links = [LINK_BASE, LINK_PREMIUM, LINK_POTTY]
+
+        patterns = [f"%{link.replace('https://', '')}%" for link in links if link]
+        if not patterns:
+            return False
+
+        conditions = " OR ".join(["content LIKE %s" for _ in patterns])
         conn = get_db()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(f"""
             SELECT COUNT(*) FROM messages
             WHERE phone = %s AND role = 'assistant'
-            AND (
-                content LIKE %s OR
-                content LIKE %s
-            )
-        """, (phone, f"%{LINK_BASE.replace('https://', '')}%", f"%{LINK_PREMIUM.replace('https://', '')}%"))
+            AND ({conditions})
+        """, [phone] + patterns)
         result = cur.fetchone()
         cur.close()
         conn.close()
@@ -1312,7 +1332,6 @@ def link_gia_inviato(phone):
     except Exception as e:
         logger.error(f"Errore link_gia_inviato: {e}")
         return True
-
 
 def user_chiede_link(router_result, pending_text):
     if router_result and router_result.get("intent") == "richiesta_link":
@@ -1835,7 +1854,7 @@ def classify_message(phone, fase, pending_text, image_url=None):
 Fase attuale: {fase}
 Prodotto salvato: {get_product_type(phone)}
 Ha immagine allegata: {bool(image_url)}
-Link già inviato: {link_gia_inviato(phone)}
+Link già inviato: {link_gia_inviato(phone, get_product_type(phone))}
 
 Profilo bambino:
 {profile_text}
@@ -1954,7 +1973,7 @@ La persona è ancora lead e ha già descritto una difficoltà concreta sullo spa
 Non fare altre domande generiche: fai subito una prima analisi commerciale personalizzata.
 Devi riconoscere la difficoltà specifica, spiegare in modo semplice cosa può esserci dietro: prontezza, segnali, incidenti, cacca, nido, pressione o routine non chiara.
 Non dare un piano completo gratuito.
-Poi presenta il percorso personalizzato: questionario iniziale, piano su misura e supporto WhatsApp passo passo. Per ora usa il link attuale: {LINK_PREMIUM}
+Poi presenta il percorso personalizzato sullo spannolinamento: questionario iniziale, piano su misura e supporto WhatsApp passo passo. Inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
 Chiudi dicendo che dopo l'ordine può scriverti su WhatsApp e partite con l'analisi personalizzata.
 """
     if intent in ("domanda_percorso_attivo", "aggiornamento_percorso_attivo", "richiesta_pratica_immediata") or fase == 4:
@@ -2006,10 +2025,17 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
         return product_specific_first_question(product_type)
 
     if intent == "intenzione_acquisto_non_completato" and fase == 0 and confidence >= 0.75:
-        return "Perfetto, ti aspetto qui. Effettua l'ordine dal link e poi scrivimi quando hai completato, cosi iniziamo subito 🤍"
+        if product_type == PRODUCT_UNKNOWN:
+            set_awaiting_product_choice(phone, True, "info")
+            return "Certo cara, prima ti mando il link giusto: ti riferisci al percorso sonno o al percorso spannolinamento?"
+        link = get_product_link(product_type)
+        return f"Perfetto cara, ti lascio il link per procedere:\n{link}\n\nAppena hai completato, scrivimi qui e iniziamo subito 🤍"
 
     if intent == "richiesta_link" and confidence >= 0.75:
-        return f"Certo, ti lascio il link: {LINK_PREMIUM}"
+        if product_type == PRODUCT_UNKNOWN:
+            set_awaiting_product_choice(phone, True, "info")
+            return "Certo cara, te lo mando volentieri. Mi confermi solo se ti riferisci al percorso sonno o allo spannolinamento?"
+        return f"Certo, ti lascio il link:\n{get_product_link(product_type)}"
 
     if intent == "richiesta_bonifico" and confidence >= 0.85:
         return (
@@ -2122,7 +2148,7 @@ def build_ai_context(phone, fase, router_result, pending_text):
     product_type = product_from_context_or_text(phone, pending_text)
     if product_type != PRODUCT_UNKNOWN and get_product_type(phone) == PRODUCT_UNKNOWN:
         set_product_type(phone, product_type)
-    link_sent = link_gia_inviato(phone)
+    link_sent = link_gia_inviato(phone, product_type)
     asks_link = user_chiede_link(router_result, pending_text)
     profile = get_child_profile(phone)
     return {
