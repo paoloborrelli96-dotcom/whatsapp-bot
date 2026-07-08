@@ -48,7 +48,7 @@ TEMP_PLAN              = float(os.environ.get("TEMP_PLAN", "0.65"))
 
 LINK_PREMIUM           = os.environ.get("LINK_PREMIUM", "https://genitorinarmonia.com/products/metodo-paola-premium")
 LINK_BASE              = os.environ.get("LINK_BASE", "https://genitorinarmonia.com/products/sonno-magico")
-LINK_POTTY             = os.environ.get("LINK_POTTY", "https://genitorinarmonia.com/products/spannolinamento-dolce-in-9-giorni")
+LINK_POTTY             = os.environ.get("LINK_POTTY", "https://shop.genitorinarmonia.com/spannolinamento/")
 LINK_REFUND            = os.environ.get("LINK_REFUND", "https://genitorinarmonia.com/policies/refund-policy")
 
 OFFERS = {
