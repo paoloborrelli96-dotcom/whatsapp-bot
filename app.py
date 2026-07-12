@@ -51,6 +51,23 @@ LINK_BASE              = os.environ.get("LINK_BASE", "https://genitorinarmonia.c
 LINK_POTTY             = os.environ.get("LINK_POTTY", "https://shop.genitorinarmonia.com/spannolinamento/")
 LINK_REFUND            = os.environ.get("LINK_REFUND", "https://genitorinarmonia.com/policies/refund-policy")
 
+# Template WhatsApp approvato per ricontatto lead sonno da Meta/telefono.
+# Puoi sovrascriverlo da Railway con TWILIO_TEMPLATE_SONNO_LEAD.
+TWILIO_TEMPLATE_SONNO_LEAD = os.environ.get("TWILIO_TEMPLATE_SONNO_LEAD", "HX65c772e26934cb7bf322e6c3da877fb5")
+
+LEAD_FLOW_NONE = "none"
+LEAD_FLOW_SLEEP_MANUAL = "sleep_manual_outreach"
+LEAD_STATUS_NONE = "none"
+LEAD_STATUS_TEMPLATE_SENT = "template_sent"
+LEAD_STATUS_WAITING_ANSWERS = "waiting_answers"
+LEAD_STATUS_ANALYSIS_DONE = "analysis_done"
+
+POTTY_OFFER_DETAILS = (
+    "Il percorso spannolinamento comprende un piano alimentare pratico, una guida e un PDF dedicato allo spannolinamento, "
+    "piu il supporto WhatsApp con Paola. Dopo l'ordine la guida arriva in automatico; poi la mamma scrive qui su WhatsApp "
+    "e si parte con il questionario iniziale, l'analisi della situazione e un piano personalizzato per iniziare lo spannolinamento nel modo giusto."
+)
+
 OFFERS = {
     "base": {
         "price": 37,
@@ -135,10 +152,9 @@ topic_cache_lock = threading.Lock()
 
 # ─── TESTI FISSI ───────────────────────────────────────────────────────────────
 MSG_BENVENUTO = (
-    "Grazie per la fiducia, molto piacere 😇\n\n"
-    "Facciamo cosi: per capire bene la vostra situazione, ti mando un questionario dettagliato "
-    "e da li ti preparo un piano personalizzato.\n"
-    "Ti mando anche un messaggio che invio a tutti con delle semplici regole per la chat e le consulenze."
+    "Grazie per la fiducia, iniziamo subito 😇\n\n"
+    "Per prepararti un piano davvero su misura ti mando prima le semplici regole della chat "
+    "e subito dopo il questionario iniziale. Da li raccolgo tutte le informazioni e preparo il lavoro personalizzato per voi."
 )
 
 MSG_REGOLE = (
@@ -236,6 +252,42 @@ MSG_CHECKUP = """Ok, allora rivediamo un attimo la situazione cosi capisco bene 
 9. Qual e la cosa che ti pesa di piu in questo momento?
 
 Rispondimi con calma, poi rivedo il piano in base a quello che mi scrivi 🤍"""
+
+MSG_LEAD_SONNO_DOMANDE = (
+    "Certo cara, ti riporto qui le 3 domande cosi riesco a farmi un quadro più chiaro:\n\n"
+    "1. Come si addormenta di solito? Seno, braccio, lettone, ciuccio, presenza o altro?\n\n"
+    "2. Quando si sveglia di notte, cosa serve per farlo riaddormentare?\n\n"
+    "3. Qual è la cosa che in questo momento ti pesa di più: addormentamento, risvegli, seno, braccio, contatto o stanchezza generale?\n\n"
+    "Appena mi rispondi, provo a darti una prima lettura della situazione e ti dico da dove partirei."
+)
+
+MSG_TEMPLATE_SONNO_LEAD = (
+    "Ciao, sono Paola di Genitori in Armonia 😊\n\n"
+    "Valentina mi ha detto che non siete riuscite a sentirvi al telefono. Immagino che tra bambino, casa e giornate piene non sia sempre semplice trovare un momento tranquillo.\n\n"
+    "Ho visto comunque le risposte che avevi lasciato nel modulo e, se ti fa piacere, posso provare a darti una prima valutazione anche da qui.\n\n"
+    "Per capire meglio la situazione, rispondimi pure a queste domande:\n\n"
+    "1. Come si addormenta di solito? Seno, braccio, lettone, ciuccio, presenza o altro?\n\n"
+    "2. Quando si sveglia di notte, cosa serve per farlo riaddormentare?\n\n"
+    "3. Qual è la cosa che in questo momento ti pesa di più: addormentamento, risvegli, seno, braccio, contatto o stanchezza generale?\n\n"
+    "Appena mi rispondi, provo a darti una prima lettura della situazione e ti dico da dove partirei."
+)
+
+SLEEP_LEAD_ANALYSIS_PROMPT = """
+Scrivi una prima valutazione gratuita come Paola per una mamma che ha risposto alle 3 domande iniziali sul sonno.
+
+Obiettivo: farla sentire capita, darle una lettura utile della situazione e accompagnarla verso il percorso personalizzato, senza regalare un piano completo.
+
+Regole:
+- Tono WhatsApp, umano, caldo, concreto.
+- Non essere troppo sintetica: deve sembrare una vera prima analisi.
+- Collega la risposta a quello che ha scritto: addormentamento, risvegli, seno/braccio/contatto/lettone, pisolini o stanchezza.
+- Dai massimo 1 consiglio generale o una direzione iniziale, ma non una sequenza completa gratuita.
+- Spiega che per lavorare bene serve vedere tutta la situazione con questionario, orari, pisolini, routine e risvegli.
+- Invita al Percorso Premium con piano personalizzato e supporto WhatsApp, senza pressione.
+- Inserisci il link una sola volta.
+- Non usare markdown, titoli o grassetti.
+- Non promettere risultati certi e non dare indicazioni mediche.
+"""
 
 # ─── PROMPT MODULARI ───────────────────────────────────────────────────────────
 SYSTEM_PROMPT_BASE = """
@@ -520,6 +572,7 @@ se il bambino sembra pronto o se conviene rallentare,
 obiettivo dei prossimi 7/9 giorni,
 come presentare vasino o water,
 routine pipi,
+indicazioni alimentari pratiche e generali solo se pertinenti, senza trasformarle in dieta clinica o prescrizione medica,
 gestione degli incidenti senza far vivere colpa o pressione,
 gestione della cacca se pertinente,
 uscite,
@@ -530,7 +583,7 @@ quando aggiornare Paola.
 
 Non promettere che in 9 giorni sara tutto risolto. Spiega che i 9 giorni servono a dare una sequenza chiara e adattabile.
 Non forzare mai il bambino, non colpevolizzare la mamma, non usare punizioni.
-Se emergono dubbi sanitari o stitichezza importante, rimanda al pediatra.
+Se emergono dubbi sanitari o stitichezza importante, rimanda al pediatra. Se parli di alimentazione, resta su indicazioni generali e pratiche, non su prescrizioni mediche.
 
 Chiudi sempre e solo con:
 "Aggiornami fra qualche giorno e fammi sapere come va 🤍"
@@ -670,6 +723,12 @@ def telegram_webhook():
         thread_id = message.get("message_thread_id")
         text = message.get("text", "").strip()
 
+        # Comando globale nel gruppo: contatta una lista di lead sonno con template WhatsApp approvato.
+        # Può essere scritto anche fuori dai topic delle mamme.
+        if chat_id == str(TELEGRAM_GROUP_ID) and text.strip().lower().startswith("/contatta_sonno"):
+            threading.Thread(target=handle_contatta_sonno_command, args=[text], daemon=True).start()
+            return Response("OK", status=200)
+
         # Controlla che sia un messaggio nel gruppo forum
         if chat_id != str(TELEGRAM_GROUP_ID) or not thread_id or not text:
             return Response("OK", status=200)
@@ -692,7 +751,9 @@ def telegram_webhook():
         if text.startswith("/"):
             cmd = text.strip().lower().split()[0]
 
-            if cmd in ("/sonno", "/sleep"):
+            if cmd == "/contatta_sonno":
+                threading.Thread(target=handle_contatta_sonno_command, args=[text], daemon=True).start()
+            elif cmd in ("/sonno", "/sleep"):
                 set_product_type(phone, PRODUCT_SLEEP)
                 set_awaiting_product_choice(phone, False)
             elif cmd in ("/spannolinamento", "/pannolino", "/potty"):
@@ -832,6 +893,9 @@ def init_db():
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS product_type TEXT DEFAULT 'unknown'")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS awaiting_product_choice BOOLEAN DEFAULT FALSE")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS awaiting_product_choice_reason TEXT")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS lead_flow TEXT DEFAULT 'none'")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS lead_status TEXT DEFAULT 'none'")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS lead_contacted_at TIMESTAMPTZ")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS telegram_topics (
@@ -1007,6 +1071,50 @@ def get_awaiting_product_choice_reason(phone):
         logger.error(f"Errore get_awaiting_product_choice_reason: {e}")
         return None
 
+
+
+
+def set_lead_state(phone, lead_flow=LEAD_FLOW_NONE, lead_status=LEAD_STATUS_NONE):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO consultations (phone, lead_flow, lead_status, lead_contacted_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (phone) DO UPDATE
+            SET lead_flow = EXCLUDED.lead_flow,
+                lead_status = EXCLUDED.lead_status,
+                lead_contacted_at = CASE
+                    WHEN EXCLUDED.lead_status = %s THEN NOW()
+                    ELSE consultations.lead_contacted_at
+                END
+        """, (phone, lead_flow, lead_status, LEAD_STATUS_TEMPLATE_SENT))
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"Lead state per {phone}: {lead_flow}/{lead_status}")
+    except Exception as e:
+        logger.error(f"Errore set_lead_state: {e}")
+
+
+def get_lead_state(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT COALESCE(lead_flow, 'none'), COALESCE(lead_status, 'none') FROM consultations WHERE phone = %s", (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if row:
+            return row[0] or LEAD_FLOW_NONE, row[1] or LEAD_STATUS_NONE
+        return LEAD_FLOW_NONE, LEAD_STATUS_NONE
+    except Exception as e:
+        logger.error(f"Errore get_lead_state: {e}")
+        return LEAD_FLOW_NONE, LEAD_STATUS_NONE
+
+
+def clear_lead_state(phone):
+    set_lead_state(phone, LEAD_FLOW_NONE, LEAD_STATUS_NONE)
 
 
 def set_fase(phone, fase, piano_scheduled_at=None):
@@ -1585,6 +1693,13 @@ def contextual_purchase_fallback(trigger_text="", product_type=PRODUCT_SLEEP):
     """Fallback umano se GPT non riesce a generare l'introduzione acquisto."""
     t = (trigger_text or "").lower()
     if any(x in t for x in ["cosa", "che cosa", "integrato", "include", "compreso", "dentro", "nel percorso"]):
+        if product_type == PRODUCT_POTTY:
+            return (
+                "Certo cara, ti spiego subito.\n\n"
+                "Nel percorso spannolinamento hai incluso il piano alimentare pratico, la guida, il PDF dedicato allo spannolinamento e il mio supporto WhatsApp.\n\n"
+                "La parte più importante è che non resti con una guida generica: partiamo dal questionario iniziale, guardo bene la vostra situazione e preparo un piano personalizzato per accompagnare l'inizio dello spannolinamento.\n\n"
+                "La guida arriva in automatico dopo l'ordine. Ora, per partire bene qui insieme, ti mando le regole della chat e poi il questionario dettagliato."
+            )
         return (
             "Certo cara, ti spiego subito.\n\n"
             "Nel percorso hai incluso il supporto WhatsApp, il questionario iniziale, il piano personalizzato costruito sulla vostra situazione e il materiale pratico da consultare.\n\n"
@@ -1622,6 +1737,7 @@ def build_contextual_purchase_intro(phone, trigger_text="", product_type=PRODUCT
                 "Sei Paola di Genitori in Armonia. Devi scrivere un breve messaggio WhatsApp naturale.\n"
                 "La mamma ha appena fatto capire che ha già acquistato o ha già accesso al percorso/guida.\n"
                 f"Il prodotto/percorso è: {product_label(product_type)}.\n"
+                "Se il prodotto è spannolinamento e chiede cosa comprende, spiega che include piano alimentare pratico, guida, PDF dedicato allo spannolinamento e supporto WhatsApp con piano personalizzato da questionario.\n"
                 "Rispondi in modo coerente all'ultimo messaggio: se ha fatto una domanda, rispondi prima a quella domanda.\n"
                 "Poi fai una transizione morbida: ora le manderai le regole della chat e il questionario iniziale corretto per preparare il piano personalizzato.\n"
                 "Non sembrare un messaggio automatico. Non dire 'messaggio automatico'. Non inserire link.\n"
@@ -1929,10 +2045,15 @@ Ricorda con delicatezza che il rimborso non è applicabile a chi ha già usufrui
 """
     if intent == "richiesta_info_percorso" and fase == 0:
         if product_type == PRODUCT_POTTY:
-            return """
-La persona è ancora lead e chiede informazioni sullo spannolinamento senza descrivere davvero la situazione.
-Non mandare subito il link in modo freddo.
-Chiedi prima età del bambino e se hanno già iniziato a togliere il pannolino o stanno valutando quando partire.
+            return f"""
+La persona è ancora lead e chiede informazioni sul percorso spannolinamento.
+Rispondi in modo naturale e contestuale, senza sembrare un messaggio copia-incolla.
+Se chiede cosa comprende o come funziona, spiega che il percorso comprende: un piano alimentare pratico, una guida e un PDF dedicato allo spannolinamento, più il supporto WhatsApp con Paola.
+Spiega che il supporto serve per preparare un piano personalizzato partendo da un questionario iniziale, così l'avvio dello spannolinamento viene adattato alla situazione reale del bambino.
+Chiarisci che dopo l'ordine la guida arriva automaticamente; poi la mamma scrive qui su WhatsApp e si parte subito analizzando la sua situazione.
+Non presentare il piano alimentare come prescrizione medica o dieta clinica.
+Se non ha ancora raccontato la situazione, dopo la spiegazione chiedi età del bambino e se hanno già iniziato a togliere il pannolino o stanno valutando quando partire.
+Se chiede il link o sembra pronta a procedere, inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
 """
         if product_type == PRODUCT_SLEEP:
             return """
@@ -1973,8 +2094,10 @@ La persona è ancora lead e ha già descritto una difficoltà concreta sullo spa
 Non fare altre domande generiche: fai subito una prima analisi commerciale personalizzata.
 Devi riconoscere la difficoltà specifica, spiegare in modo semplice cosa può esserci dietro: prontezza, segnali, incidenti, cacca, nido, pressione o routine non chiara.
 Non dare un piano completo gratuito.
-Poi presenta il percorso personalizzato sullo spannolinamento: questionario iniziale, piano su misura e supporto WhatsApp passo passo. Inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
-Chiudi dicendo che dopo l'ordine può scriverti su WhatsApp e partite con l'analisi personalizzata.
+Poi presenta il percorso spannolinamento in modo chiaro: comprende un piano alimentare pratico, una guida e un PDF dedicato allo spannolinamento, più il supporto WhatsApp con Paola.
+Spiega che il supporto non è una guida generica: dopo l'ordine la guida arriva automaticamente, poi la mamma scrive qui su WhatsApp, compila il questionario iniziale e da lì viene analizzata la situazione per preparare un piano personalizzato sull'inizio dello spannolinamento.
+Non presentare il piano alimentare come prescrizione medica o dieta clinica.
+Inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
 """
     if intent in ("domanda_percorso_attivo", "aggiornamento_percorso_attivo", "richiesta_pratica_immediata") or fase == 4:
         if product_type == PRODUCT_POTTY:
@@ -2330,6 +2453,90 @@ def send_whatsapp_message(phone, text):
             logger.error(f"Errore invio a {phone}: {e}")
             threading.Thread(target=send_telegram, args=[f"⚠️ Errore Twilio per {phone}: {e}"], daemon=True).start()
 
+
+def send_whatsapp_template_message(phone, content_sid, template_label="template"):
+    """Invia un template WhatsApp approvato via Twilio ContentSid."""
+    if not content_sid:
+        raise ValueError(f"ContentSid mancante per {template_label}")
+    try:
+        twilio_client.messages.create(
+            from_=f"whatsapp:{TWILIO_WHATSAPP_NUMBER}",
+            to=f"whatsapp:{phone}",
+            content_sid=content_sid
+        )
+        logger.info(f"Template {template_label} inviato a {phone} — {content_sid}")
+        return True
+    except Exception as e:
+        logger.error(f"Errore invio template {template_label} a {phone}: {e}")
+        threading.Thread(target=send_telegram, args=[f"⚠️ Errore invio template {template_label} a {phone}: {e}"], daemon=True).start()
+        return False
+
+
+def normalize_phone_number(raw):
+    """Normalizza numeri italiani per WhatsApp/Twilio in formato +39..."""
+    if not raw:
+        return None
+    raw = str(raw).strip()
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return None
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if digits.startswith("39") and len(digits) >= 11:
+        return "+" + digits
+    if digits.startswith("3") and len(digits) == 10:
+        return "+39" + digits
+    if raw.startswith("+") and len(digits) >= 10:
+        return "+" + digits
+    return None
+
+
+def extract_phones_from_text(text):
+    body = re.sub(r"^/contatta_sonno\b", "", text.strip(), flags=re.I).strip()
+    candidates = re.findall(r"(?:\+?39)?[\s\-.()]*3[\d\s\-.()]{8,}", body)
+    phones = []
+    seen = set()
+    for c in candidates:
+        phone = normalize_phone_number(c)
+        if phone and phone not in seen:
+            seen.add(phone)
+            phones.append(phone)
+    return phones
+
+
+def contact_sleep_lead(phone):
+    """Prepara il lead sonno e invia il template approvato."""
+    phone = normalize_phone_number(phone) or phone
+    set_product_type(phone, PRODUCT_SLEEP)
+    set_awaiting_product_choice(phone, False)
+    set_fase(phone, 0)
+    set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_TEMPLATE_SENT)
+    save_message(phone, "assistant", "[TEMPLATE LEAD SONNO INVIATO]\n" + MSG_TEMPLATE_SONNO_LEAD)
+    ok = send_whatsapp_template_message(phone, TWILIO_TEMPLATE_SONNO_LEAD, "lead_sonno_valentina")
+    if ok:
+        threading.Thread(target=send_to_topic, args=[phone, "[Template lead sonno inviato]\n" + MSG_TEMPLATE_SONNO_LEAD, True], daemon=True).start()
+    return ok
+
+
+def handle_contatta_sonno_command(text):
+    phones = extract_phones_from_text(text)
+    if not phones:
+        send_telegram("⚠️ /contatta_sonno: non ho trovato numeri validi. Usa ad esempio:\n/contatta_sonno\n+393331234567\n+393441234567")
+        return
+    ok_count = 0
+    failed = []
+    for phone in phones:
+        if contact_sleep_lead(phone):
+            ok_count += 1
+            time.sleep(0.5)
+        else:
+            failed.append(phone)
+    msg = f"✅ /contatta_sonno completato: template inviato a {ok_count}/{len(phones)} numeri."
+    if failed:
+        msg += "\nNon riusciti: " + ", ".join(failed)
+    send_telegram(msg)
+
+
 def quick_commands_text(include_checkup=True):
     lines = [
         "",
@@ -2653,6 +2860,7 @@ def invia_sequenza_acquisto(phone, intro_text=None, product_type=None):
 
     set_product_type(phone, product_type)
     set_awaiting_product_choice(phone, False)
+    clear_lead_state(phone)
     set_fase(phone, 1)
     logger.info(f"Avvio sequenza acquisto per {phone} — prodotto {product_type}")
 
@@ -2671,6 +2879,87 @@ def invia_sequenza_acquisto(phone, intro_text=None, product_type=None):
     send_whatsapp_message(phone, q1)
     logger.info(f"Sequenza acquisto completata per {phone} — prodotto {product_type}")
 
+
+def classify_sleep_lead_answers(text):
+    default = {"status": "incomplete", "confidence": 0.0, "missing": "le risposte alle 3 domande", "reason": "fallback"}
+    if not text or is_questionnaire_deferral(text) or is_obvious_closing_message(text):
+        return {"status": "defer", "confidence": 0.9, "missing": "", "reason": "rinvio o risposta breve"}
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CLASSIFIER,
+            messages=[
+                {"role": "system", "content": "Sei un classificatore. Devi capire se la mamma ha risposto in modo sufficiente alle 3 domande iniziali sul sonno. Restituisci solo JSON valido con status sufficient|defer|incomplete, confidence, missing, reason. sufficient solo se dà informazioni utili su almeno 2 aspetti tra addormentamento, risvegli/riaddormentamento, difficoltà principale o stanchezza. defer se dice solo sì, ok, dopo, appena posso, grazie. incomplete se risponde troppo poco."},
+                {"role": "user", "content": text}
+            ],
+            max_tokens=250,
+            temperature=0,
+            response_format={"type": "json_object"},
+            timeout=60
+        )
+        data = parse_json_safely(response.choices[0].message.content, default)
+        if not isinstance(data, dict):
+            return default
+        data.setdefault("status", "incomplete")
+        data.setdefault("confidence", 0.0)
+        data.setdefault("missing", "qualche dettaglio")
+        data.setdefault("reason", "")
+        return data
+    except Exception as e:
+        logger.error(f"Errore classificatore lead sonno: {e}")
+        t = normalize_text(text)
+        keywords = ["seno", "braccio", "lettone", "ciuccio", "risvegl", "addor", "pisolin", "stanche", "contatto", "latte", "notte"]
+        hits = sum(1 for k in keywords if k in t)
+        if len(t) > 80 or hits >= 2:
+            return {"status": "sufficient", "confidence": 0.65, "missing": "", "reason": "euristica"}
+        return default
+
+
+def format_history_for_prompt(history_items, max_chars=8000):
+    lines = []
+    for item in history_items or []:
+        role = item.get("role", "")
+        content = (item.get("content", "") or "").strip()
+        if not content or content == SILENT_NO_REPLY_MARKER:
+            continue
+        prefix = "Mamma" if role == "user" else "Paola"
+        lines.append(f"{prefix}: {content}")
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        text = text[-max_chars:]
+    return text or "nessuno storico utile"
+
+
+def generate_sleep_lead_analysis(phone, lead_answers):
+    history = get_history(phone, days=30)
+    profile = get_child_profile(phone)
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_BASE + "\n\n" + SLEEP_LEAD_ANALYSIS_PROMPT},
+        {"role": "user", "content": f"Profilo noto:\n{json.dumps(profile, ensure_ascii=False) if profile else 'non disponibile'}\n\nStorico recente:\n{format_history_for_prompt(history[-20:])}\n\nRisposte della mamma alle 3 domande iniziali:\n{lead_answers}\n\nLink percorso da inserire una sola volta: {LINK_PREMIUM}"}
+    ]
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=messages,
+            max_tokens=1300,
+            temperature=TEMP_CHAT,
+            timeout=90
+        )
+        risposta = response.choices[0].message.content.strip()
+        context = {"link_sent": False, "asks_link": True}
+        risposta, issue = validate_reply(risposta, context)
+        if issue:
+            risposta = rewrite_reply_if_needed(risposta, issue, context)
+        if LINK_PREMIUM not in risposta:
+            risposta = risposta.rstrip() + f"\n\nSe senti che è il momento di farti aiutare, puoi iniziare da qui:\n{LINK_PREMIUM}"
+        save_message(phone, "assistant", risposta)
+        send_whatsapp_message(phone, risposta)
+        set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_ANALYSIS_DONE)
+        logger.info(f"Analisi gratuita lead sonno inviata a {phone}")
+    except Exception as e:
+        logger.error(f"Errore analisi lead sonno per {phone}: {e}")
+        threading.Thread(target=send_telegram, args=[f"⚠️ Errore analisi lead sonno per {phone}: {e}"], daemon=True).start()
+
+
 # ─── ELABORAZIONE RISPOSTA ─────────────────────────────────────────────────────
 def process_response(phone, image_url=None):
     with active_timers_lock:
@@ -2682,6 +2971,24 @@ def process_response(phone, image_url=None):
     pending = get_messages_since_last_reply(phone)
     combined_raw = "\n".join(pending)
     combined = combined_raw.lower().strip()
+
+    # Lead sonno contattato manualmente con template: appena risponde alle 3 domande,
+    # facciamo una prima valutazione gratuita e poi lo portiamo alla fase 0 commerciale.
+    lead_flow, lead_status = get_lead_state(phone)
+    if fase == 0 and lead_flow == LEAD_FLOW_SLEEP_MANUAL and lead_status in (LEAD_STATUS_TEMPLATE_SENT, LEAD_STATUS_WAITING_ANSWERS):
+        lead_check = classify_sleep_lead_answers(combined_raw)
+        logger.info(f"Lead sonno check per {phone}: {lead_check}")
+        status = lead_check.get("status", "incomplete")
+        confidence = float(lead_check.get("confidence", 0) or 0)
+        if status == "sufficient" and confidence >= 0.55:
+            generate_sleep_lead_analysis(phone, combined_raw)
+            return
+        if status in ("defer", "incomplete"):
+            set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_WAITING_ANSWERS)
+            risposta = MSG_LEAD_SONNO_DOMANDE
+            save_message(phone, "assistant", risposta)
+            send_whatsapp_message(phone, risposta)
+            return
 
     # Multi-prodotto in fase 0: prima capisce se si parla di sonno o spannolinamento.
     if fase == 0:
@@ -2997,6 +3304,10 @@ def webhook():
                 processed_sids.clear()
 
     # ── Comandi admin ──────────────────────────────────────────────────────────
+    if body.strip().lower().startswith("/contatta_sonno"):
+        threading.Thread(target=handle_contatta_sonno_command, args=[body], daemon=True).start()
+        return Response("OK", status=200)
+
     if body.startswith("/inizia"):
         parts = body.strip().split()
         if len(parts) == 2:
