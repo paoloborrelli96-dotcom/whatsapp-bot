@@ -288,6 +288,37 @@ Regole:
 - Non promettere risultati certi e non dare indicazioni mediche.
 """
 
+SLEEP_LEAD_FOLLOWUP_PROMPT = """
+Gestisci la risposta di una mamma contattata con il template lead sonno.
+
+Contesto importante:
+- Nel messaggio precedente Paola ha gia mandato 3 domande sul sonno.
+- Le domande sono gia visibili nello storico: NON riscriverle automaticamente.
+- Devi comportarti come Paola in una conversazione reale, non come un flusso a blocchi.
+
+Devi restituire SOLO JSON valido con questo schema:
+{
+  "action": "analysis|soft_prompt|info_reply|defer|no_reply",
+  "reply": "testo da inviare oppure __NO_REPLY__",
+  "reason": "breve motivo interno"
+}
+
+Come scegliere action:
+- analysis: se la mamma ha dato anche pochi indizi concreti sul sonno, anche monosillabi o parole singole come seno, braccia, lettone, ciuccio, risvegli, notte, contatto, latte, pisolini, stanchezza, sono distrutta. In questo caso fai una prima valutazione gratuita: empatia, lettura della dinamica, massimo una direzione generale, poi spiega il Percorso Premium a 67 euro con questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp con Paola. Inserisci il link una sola volta.
+- soft_prompt: se la mamma non ha ancora risposto alle domande ma scrive cose come sì, ok, ci eravamo sentite, avevo parlato con Valentina, va bene, dimmi. In questo caso non ripetere le domande: rispondi in 2-4 righe, collegandoti al fatto che le domande sono nel messaggio sopra e può rispondere anche in modo semplice.
+- info_reply: se chiede prezzo, cosa comprende, come funziona, link, tempi o fa una piccola obiezione. Rispondi alla domanda e, se naturale, ricorda che per darle una valutazione più precisa può rispondere alle domande sopra. Se è opportuno, presenta il Percorso Premium a 67 euro e il link.
+- defer: se dice che risponde dopo, che ora non può, che lo farà più tardi. Rispondi al massimo con una frase breve e naturale, senza ripetere le domande.
+- no_reply: se è solo una chiusura/cortesia senza bisogno di risposta.
+
+Regole di scrittura:
+- Mai ripetere tutto il blocco delle 3 domande, a meno che la mamma lo chieda esplicitamente.
+- Se devi invitarla a rispondere, scrivi "rispondimi pure alle domande che ti ho scritto sopra" oppure simile.
+- Non dire "come bot" o "automatico".
+- Tono WhatsApp Paola, caldo, naturale, concreto.
+- Non usare markdown, titoli, grassetti o elenchi lunghi.
+- Non promettere risultati certi e non dare indicazioni mediche.
+"""
+
 # ─── PROMPT MODULARI ───────────────────────────────────────────────────────────
 SYSTEM_PROMPT_BASE = """
 Sei Paola, consulente di Genitori in Armonia.
@@ -3037,6 +3068,80 @@ def generate_sleep_lead_analysis(phone, lead_answers):
         threading.Thread(target=send_telegram, args=[f"⚠️ Errore analisi lead sonno per {phone}: {e}"], daemon=True).start()
 
 
+def handle_sleep_lead_followup(phone, latest_message):
+    """Gestisce in modo contestuale le risposte al template /contatta_sonno.
+    Non rimanda automaticamente le domande: GPT legge lo storico e decide cosa dire.
+    """
+    history = get_history(phone, days=30)
+    profile = get_child_profile(phone)
+    default_reply = (
+        "Sì cara, ci sono. Quando riesci rispondimi pure alle domande che ti ho scritto sopra, "
+        "anche in modo semplice, così riesco a farmi una prima idea della situazione."
+    )
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_BASE + "\n\n" + SLEEP_LEAD_FOLLOWUP_PROMPT},
+        {"role": "user", "content": (
+            f"Profilo noto:\n{json.dumps(profile, ensure_ascii=False) if profile else 'non disponibile'}\n\n"
+            f"Storico recente, comprese le domande gia inviate:\n{format_history_for_prompt(history[-24:])}\n\n"
+            f"Ultimo messaggio della mamma:\n{latest_message}\n\n"
+            f"Link percorso Premium da usare se serve: {LINK_PREMIUM}\n"
+            "Ricorda: se fa una risposta breve ma concreta come seno/braccia/risvegli, fai analisi. "
+            "Se invece è solo conferma tipo ci eravamo sentite, non ripetere le domande, rimandala a quelle sopra."
+        )}
+    ]
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=messages,
+            max_tokens=1500,
+            temperature=TEMP_CHAT,
+            response_format={"type": "json_object"},
+            timeout=90
+        )
+        data = parse_json_safely(response.choices[0].message.content, {"action": "soft_prompt", "reply": default_reply, "reason": "fallback"})
+        if not isinstance(data, dict):
+            data = {"action": "soft_prompt", "reply": default_reply, "reason": "fallback non dict"}
+        action = (data.get("action") or "soft_prompt").strip().lower()
+        reply = (data.get("reply") or "").strip()
+        logger.info(f"Lead sonno followup per {phone}: action={action}, reason={data.get('reason', '')}")
+
+        if action not in ("analysis", "soft_prompt", "info_reply", "defer", "no_reply"):
+            action = "soft_prompt"
+        if not reply:
+            reply = default_reply
+
+        if action == "no_reply" or reply == NO_REPLY:
+            mark_silent_no_reply(phone, "lead sonno: nessuna risposta necessaria")
+            set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_WAITING_ANSWERS)
+            return
+
+        context = {"link_sent": LINK_PREMIUM in format_history_for_prompt(history[-10:]), "asks_link": True}
+        reply, issue = validate_reply(reply, context)
+        if issue:
+            reply = rewrite_reply_if_needed(reply, issue, context)
+
+        # Se GPT ha fatto analisi ma ha dimenticato di spiegare il percorso, aggiungiamo una chiusura commerciale chiara.
+        if action == "analysis" and LINK_PREMIUM not in reply:
+            reply = reply.rstrip() + (
+                "\n\nPer lavorarci bene io parto sempre da un questionario iniziale, poi preparo un piano personalizzato "
+                "e per 60 giorni ti seguo qui su WhatsApp passo passo. Il percorso Premium ora è in offerta a 67 euro.\n\n"
+                f"Se senti che è il momento di farti aiutare, puoi iniziare da qui:\n{LINK_PREMIUM}"
+            )
+
+        save_message(phone, "assistant", reply)
+        send_whatsapp_message(phone, reply)
+        if action == "analysis":
+            set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_ANALYSIS_DONE)
+        else:
+            set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_WAITING_ANSWERS)
+    except Exception as e:
+        logger.error(f"Errore followup lead sonno per {phone}: {e}")
+        # Fallback umano, senza ripetere il blocco delle domande.
+        save_message(phone, "assistant", default_reply)
+        send_whatsapp_message(phone, default_reply)
+        set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_WAITING_ANSWERS)
+
+
 # ─── ELABORAZIONE RISPOSTA ─────────────────────────────────────────────────────
 def process_response(phone, image_url=None):
     with active_timers_lock:
@@ -3049,23 +3154,11 @@ def process_response(phone, image_url=None):
     combined_raw = "\n".join(pending)
     combined = combined_raw.lower().strip()
 
-    # Lead sonno contattato manualmente con template: appena risponde alle 3 domande,
-    # facciamo una prima valutazione gratuita e poi lo portiamo alla fase 0 commerciale.
+    # Lead sonno contattato manualmente con template: tutto passa da GPT usando lo storico.
+    # Le domande sono già state salvate nel database, quindi non le rimandiamo in modo meccanico.
     lead_flow, lead_status = get_lead_state(phone)
     if fase == 0 and lead_flow == LEAD_FLOW_SLEEP_MANUAL and lead_status in (LEAD_STATUS_TEMPLATE_SENT, LEAD_STATUS_WAITING_ANSWERS):
-        lead_check = classify_sleep_lead_answers(combined_raw)
-        logger.info(f"Lead sonno check per {phone}: {lead_check}")
-        status = lead_check.get("status", "incomplete")
-        confidence = float(lead_check.get("confidence", 0) or 0)
-        if status == "defer":
-            set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_WAITING_ANSWERS)
-            risposta = MSG_LEAD_SONNO_DOMANDE
-            save_message(phone, "assistant", risposta)
-            send_whatsapp_message(phone, risposta)
-            return
-        # Se ha scritto anche poche parole utili, non ripetiamo le domande: facciamo comunque la prima analisi.
-        # In caso di incomplete il prompt farà una valutazione prudente basata sugli indizi disponibili.
-        generate_sleep_lead_analysis(phone, combined_raw)
+        handle_sleep_lead_followup(phone, combined_raw)
         return
 
     # Multi-prodotto in fase 0: prima capisce se si parla di sonno o spannolinamento.
