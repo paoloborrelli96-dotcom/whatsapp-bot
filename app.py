@@ -1163,6 +1163,15 @@ def get_lead_state(phone):
         return LEAD_FLOW_NONE, LEAD_STATUS_NONE
 
 
+def is_sleep_manual_lead(phone):
+    """Ritorna True se il numero è stato contattato con /contatta_sonno.
+    Serve solo come contesto commerciale: NON deve creare un flusso separato.
+    Dopo il template, la chat resta in fase 0 sonno e le risposte passano da GPT.
+    """
+    lead_flow, _ = get_lead_state(phone)
+    return lead_flow == LEAD_FLOW_SLEEP_MANUAL
+
+
 def clear_lead_state(phone):
     set_lead_state(phone, LEAD_FLOW_NONE, LEAD_STATUS_NONE)
 
@@ -2199,6 +2208,12 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
     confidence = float(router_result.get("confidence", 0) or 0) if router_result else 0
     product_type = product_from_context_or_text(phone, pending_text)
 
+    # Se il numero è stato contattato con /contatta_sonno, le domande sono già nello storico.
+    # In fase 0 non dare risposte meccaniche tipo "raccontami la difficoltà" o reinvii:
+    # lascia sempre decidere GPT leggendo la coerenza della conversazione.
+    if fase == 0 and is_sleep_manual_lead(phone):
+        return None
+
     if intent == "saluto_vago" and fase == 0 and confidence >= 0.75:
         if product_type == PRODUCT_UNKNOWN:
             set_awaiting_product_choice(phone, True, "info")
@@ -2336,13 +2351,31 @@ def build_ai_context(phone, fase, router_result, pending_text):
     link_sent = link_gia_inviato(phone, product_type)
     asks_link = user_chiede_link(router_result, pending_text)
     profile = get_child_profile(phone)
+    intent = router_result.get("intent", "altro") if router_result else "altro"
+    business_rule = get_business_rule(intent, fase, link_sent, product_type)
+
+    if fase == 0 and product_type == PRODUCT_SLEEP and is_sleep_manual_lead(phone):
+        business_rule = f"""
+La persona è stata contattata con il template sonno tramite /contatta_sonno.
+Il prodotto è già chiaro: sonno infantile. Non chiedere se parla di sonno o spannolinamento.
+Nel messaggio precedente Paola ha già mandato le 3 domande sul sonno e quel testo è nello storico.
+Gestisci la risposta con naturalezza, usando lo storico:
+- se ha risposto anche in modo breve ma concreto alle domande, fai una prima valutazione gratuita utile e personalizzata;
+- se scrive solo sì, ok, ci eravamo sentite o una conferma simile, non ripetere il blocco domande: dille solo, in modo naturale, che può rispondere alle domande scritte sopra anche in modo semplice;
+- se chiede in cosa consiste, quanto costa, come funziona o il link, rispondi alla domanda commerciale senza chiedere da zero la difficoltà;
+- se dice che risponderà dopo, rispondi poco o niente;
+- se dice che ha acquistato, il codice avvierà la sequenza acquisto, quindi non trattarlo come lead generica.
+Quando fai la valutazione o spieghi il percorso, chiarisci che il Percorso Premium è in offerta a {OFFERS['premium']['price']} euro e comprende questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp con Paola.
+Inserisci il link solo se naturale o se serve: {LINK_PREMIUM}
+"""
+
     return {
         "fase": fase,
         "link_sent": link_sent,
         "asks_link": asks_link,
         "profile_text": profile_to_text(profile),
         "product_type": product_type,
-        "business_rule": get_business_rule(router_result.get("intent", "altro") if router_result else "altro", fase, link_sent, product_type),
+        "business_rule": business_rule,
         "recent_history": get_recent_history(phone, limit=30),
         "pending_text": pending_text
     }
@@ -3154,12 +3187,9 @@ def process_response(phone, image_url=None):
     combined_raw = "\n".join(pending)
     combined = combined_raw.lower().strip()
 
-    # Lead sonno contattato manualmente con template: tutto passa da GPT usando lo storico.
-    # Le domande sono già state salvate nel database, quindi non le rimandiamo in modo meccanico.
-    lead_flow, lead_status = get_lead_state(phone)
-    if fase == 0 and lead_flow == LEAD_FLOW_SLEEP_MANUAL and lead_status in (LEAD_STATUS_TEMPLATE_SENT, LEAD_STATUS_WAITING_ANSWERS):
-        handle_sleep_lead_followup(phone, combined_raw)
-        return
+    # Se il contatto è partito con /contatta_sonno, NON usiamo un flusso separato.
+    # Il template con le domande è salvato nello storico e il prodotto è già sleep:
+    # da qui in poi la risposta passa dalla fase 0 normale e da GPT, con il contesto giusto.
 
     # Multi-prodotto in fase 0: prima capisce se si parla di sonno o spannolinamento.
     if fase == 0:
