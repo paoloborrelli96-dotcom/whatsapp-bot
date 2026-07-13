@@ -279,11 +279,13 @@ Obiettivo: farla sentire capita, darle una lettura utile della situazione e acco
 
 Regole:
 - Tono WhatsApp, umano, caldo, concreto.
-- Non essere troppo sintetica: deve sembrare una vera prima analisi.
+- Non essere troppo sintetica: deve sembrare una vera prima analisi, non una risposta fredda di vendita.
+- Se la mamma ha risposto in modo breve o a parole singole, ad esempio "seno", "braccio", "lettone", "risvegli", "sono distrutta", NON ripetere le domande: usa comunque quelle parole come indizi e fai una prima lettura prudente.
 - Collega la risposta a quello che ha scritto: addormentamento, risvegli, seno/braccio/contatto/lettone, pisolini o stanchezza.
 - Dai massimo 1 consiglio generale o una direzione iniziale, ma non una sequenza completa gratuita.
-- Spiega che per lavorare bene serve vedere tutta la situazione con questionario, orari, pisolini, routine e risvegli.
-- Invita al Percorso Premium con piano personalizzato e supporto WhatsApp, senza pressione.
+- Spiega chiaramente che io lavoro con percorsi personalizzati: si parte da un questionario iniziale, poi preparo un piano su misura e per 60 giorni la seguo qui su WhatsApp passo passo.
+- Presenta il Percorso Premium in offerta a 67 euro, spiegando che include piano personalizzato e 60 giorni di supporto/contatto WhatsApp con me.
+- Usa un tono naturale, senza pressione, ma deve essere chiaro cosa comprende il percorso e perché è utile.
 - Inserisci il link una sola volta.
 - Non usare markdown, titoli o grassetti.
 - Non promettere risultati certi e non dare indicazioni mediche.
@@ -645,7 +647,7 @@ def get_or_create_topic(phone):
         resp = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/createForumTopic",
             json={"chat_id": TELEGRAM_GROUP_ID, "name": phone},
-            timeout=10
+            timeout=30
         )
         data = resp.json()
         if data.get("ok"):
@@ -664,26 +666,46 @@ def get_or_create_topic(phone):
     return None
 
 def send_to_topic(phone, message, is_bot=False):
-    """Manda un messaggio nel topic della mamma."""
+    """Manda un messaggio nel topic della mamma, con retry per evitare timeout Telegram temporanei."""
+    if not TELEGRAM_GROUP_ID or not TELEGRAM_BOT_TOKEN:
+        return False
+
     thread_id = get_or_create_topic(phone)
     if not thread_id:
-        return
-    try:
-        prefix = "🤖 Bot: " if is_bot else "📩 Mamma: "
-        chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
-        for chunk in chunks:
-            requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                json={
-                    "chat_id": TELEGRAM_GROUP_ID,
-                    "message_thread_id": thread_id,
-                    "text": f"{prefix}{chunk}",
-                    "parse_mode": "HTML"
-                },
-                timeout=10
-            )
-    except Exception as e:
-        logger.error(f"Errore send_to_topic per {phone}: {e}")
+        logger.warning(f"Topic Telegram non disponibile per {phone}")
+        return False
+
+    prefix = "🤖 Bot: " if is_bot else "📩 Mamma: "
+    chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
+
+    for chunk in chunks:
+        sent = False
+        for attempt in range(1, 4):
+            try:
+                resp = requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                    json={
+                        "chat_id": TELEGRAM_GROUP_ID,
+                        "message_thread_id": thread_id,
+                        "text": f"{prefix}{chunk}",
+                        "parse_mode": "HTML"
+                    },
+                    timeout=30
+                )
+                if resp.status_code == 200:
+                    sent = True
+                    break
+                logger.warning(f"Telegram send_to_topic status {resp.status_code} per {phone}, tentativo {attempt}/3: {resp.text[:200]}")
+            except Exception as e:
+                logger.warning(f"Errore send_to_topic per {phone}, tentativo {attempt}/3: {e}")
+
+            time.sleep(1.5 * attempt)
+
+        if not sent:
+            logger.error(f"Telegram non aggiornato per {phone} dopo 3 tentativi")
+            return False
+
+    return True
 
 def send_telegram(message):
     """Notifica personale (chat diretta con il bot)."""
@@ -695,7 +717,7 @@ def send_telegram(message):
             requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
                 json={"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "HTML"},
-                timeout=10
+                timeout=30
             )
     except Exception as e:
         logger.error(f"Errore Telegram: {e}")
@@ -2528,9 +2550,10 @@ def handle_contatta_sonno_command(text):
     for phone in phones:
         if contact_sleep_lead(phone):
             ok_count += 1
-            time.sleep(0.5)
         else:
             failed.append(phone)
+        # Piccola pausa tra un numero e l'altro: evita picchi su Telegram/Twilio quando invii liste.
+        time.sleep(1.5)
     msg = f"✅ /contatta_sonno completato: template inviato a {ok_count}/{len(phones)} numeri."
     if failed:
         msg += "\nNon riusciti: " + ", ".join(failed)
@@ -2882,13 +2905,19 @@ def invia_sequenza_acquisto(phone, intro_text=None, product_type=None):
 
 def classify_sleep_lead_answers(text):
     default = {"status": "incomplete", "confidence": 0.0, "missing": "le risposte alle 3 domande", "reason": "fallback"}
-    if not text or is_questionnaire_deferral(text) or is_obvious_closing_message(text):
-        return {"status": "defer", "confidence": 0.9, "missing": "", "reason": "rinvio o risposta breve"}
+    t = normalize_text(text or "")
+    sleep_keywords = ["seno", "tetta", "braccio", "braccia", "lettone", "ciuccio", "risvegl", "sveglia", "addor", "pisolin", "nanna", "stanche", "distrutta", "contatto", "latte", "notte", "piange", "culla", "lettino"]
+
+    # Solo rinvio/cortesia pura: qui ha senso rimandare le domande.
+    # Se invece dentro ci sono parole concrete tipo "seno" o "braccia", anche se poche, va fatta l'analisi.
+    has_sleep_clues = any(k in t for k in sleep_keywords)
+    if not text or ((is_questionnaire_deferral(text) or is_obvious_closing_message(text)) and not has_sleep_clues):
+        return {"status": "defer", "confidence": 0.9, "missing": "", "reason": "rinvio o cortesia senza contenuto sul sonno"}
     try:
         response = openai_chat_completion(
             model=MODEL_CLASSIFIER,
             messages=[
-                {"role": "system", "content": "Sei un classificatore. Devi capire se la mamma ha risposto in modo sufficiente alle 3 domande iniziali sul sonno. Restituisci solo JSON valido con status sufficient|defer|incomplete, confidence, missing, reason. sufficient solo se dà informazioni utili su almeno 2 aspetti tra addormentamento, risvegli/riaddormentamento, difficoltà principale o stanchezza. defer se dice solo sì, ok, dopo, appena posso, grazie. incomplete se risponde troppo poco."},
+                {"role": "system", "content": "Sei un classificatore. Devi capire se la mamma ha risposto alle 3 domande iniziali sul sonno, anche con parole molto brevi. Restituisci solo JSON valido con status sufficient|defer|incomplete, confidence, missing, reason. Usa sufficient se dà anche solo indizi concreti sul sonno, per esempio parole come seno, braccio/braccia, lettone, ciuccio, risvegli, notte, piange, stanchezza, contatto, latte, pisolini, anche se non risponde in forma completa. Usa defer solo se dice semplicemente sì, ok, dimmi, dopo, appena posso, grazie, senza alcuna informazione sul problema. Usa incomplete solo se il messaggio non è rinvio ma è davvero impossibile ricavare una lettura minima."},
                 {"role": "user", "content": text}
             ],
             max_tokens=250,
@@ -2903,16 +2932,18 @@ def classify_sleep_lead_answers(text):
         data.setdefault("confidence", 0.0)
         data.setdefault("missing", "qualche dettaglio")
         data.setdefault("reason", "")
+        # Protezione codice: se ci sono indizi concreti di sonno, non ripetiamo le domande.
+        if has_sleep_clues and data.get("status") in ("defer", "incomplete"):
+            data["status"] = "sufficient"
+            data["confidence"] = max(float(data.get("confidence", 0) or 0), 0.58)
+            data["reason"] = (data.get("reason", "") + " | override: risposta breve ma contiene indizi concreti sul sonno").strip()
         return data
     except Exception as e:
         logger.error(f"Errore classificatore lead sonno: {e}")
-        t = normalize_text(text)
-        keywords = ["seno", "braccio", "lettone", "ciuccio", "risvegl", "addor", "pisolin", "stanche", "contatto", "latte", "notte"]
-        hits = sum(1 for k in keywords if k in t)
-        if len(t) > 80 or hits >= 2:
-            return {"status": "sufficient", "confidence": 0.65, "missing": "", "reason": "euristica"}
+        hits = sum(1 for k in sleep_keywords if k in t)
+        if len(t) > 30 or hits >= 1:
+            return {"status": "sufficient", "confidence": 0.60, "missing": "", "reason": "euristica: risposta breve con indizi sonno"}
         return default
-
 
 def format_history_for_prompt(history_items, max_chars=8000):
     lines = []
@@ -2950,7 +2981,7 @@ def generate_sleep_lead_analysis(phone, lead_answers):
         if issue:
             risposta = rewrite_reply_if_needed(risposta, issue, context)
         if LINK_PREMIUM not in risposta:
-            risposta = risposta.rstrip() + f"\n\nSe senti che è il momento di farti aiutare, puoi iniziare da qui:\n{LINK_PREMIUM}"
+            risposta = risposta.rstrip() + f"\n\nIl percorso che ti consiglierei è il Premium, ora in offerta a 67 euro: partiamo da un questionario iniziale, preparo un piano personalizzato e poi per 60 giorni ti seguo qui su WhatsApp passo passo.\n\nSe senti che è il momento di farti aiutare, puoi iniziare da qui:\n{LINK_PREMIUM}"
         save_message(phone, "assistant", risposta)
         send_whatsapp_message(phone, risposta)
         set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_ANALYSIS_DONE)
@@ -2980,15 +3011,16 @@ def process_response(phone, image_url=None):
         logger.info(f"Lead sonno check per {phone}: {lead_check}")
         status = lead_check.get("status", "incomplete")
         confidence = float(lead_check.get("confidence", 0) or 0)
-        if status == "sufficient" and confidence >= 0.55:
-            generate_sleep_lead_analysis(phone, combined_raw)
-            return
-        if status in ("defer", "incomplete"):
+        if status == "defer":
             set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_WAITING_ANSWERS)
             risposta = MSG_LEAD_SONNO_DOMANDE
             save_message(phone, "assistant", risposta)
             send_whatsapp_message(phone, risposta)
             return
+        # Se ha scritto anche poche parole utili, non ripetiamo le domande: facciamo comunque la prima analisi.
+        # In caso di incomplete il prompt farà una valutazione prudente basata sugli indizi disponibili.
+        generate_sleep_lead_analysis(phone, combined_raw)
+        return
 
     # Multi-prodotto in fase 0: prima capisce se si parla di sonno o spannolinamento.
     if fase == 0:
