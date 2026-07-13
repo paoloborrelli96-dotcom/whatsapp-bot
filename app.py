@@ -163,15 +163,12 @@ MSG_REGOLE = (
     "Non sostituiscono in alcun modo il parere di medici, pediatri o altri professionisti sanitari, "
     "che restano sempre il riferimento principale in presenza di dubbi clinici o problematiche di salute. "
     "Ogni genitore e libera/o di decidere se applicarli, modificarli o non seguirli, in totale autonomia, consapevolezza e tranquillita. "
-    "Per rendere la comunicazione piu chiara, ordinata e veloce, alcuni messaggi possono essere gestiti tramite un'app esterna "
-    "che utilizza strumenti di Intelligenza Artificiale a supporto della scrittura. "
+    "Per rendere la comunicazione piu chiara, ordinata e veloce, alcuni messaggi possono essere gestiti con strumenti digitali "
+    "a supporto dell'organizzazione e della scrittura. "
     "Tutti i contenuti inviati restano comunque sotto la mia supervisione e responsabilita professionale. "
-    "Ti chiedo inoltre, quando possibile, di evitare messaggi eccessivamente lunghi e di suddividerli in piu messaggi brevi. "
-    "L'app utilizzata potrebbe infatti avere difficolta a ricevere correttamente testi molto lunghi inviati in un unico messaggio.\n\n"
-    "Il servizio di consulenza e un servizio aggiuntivo ed esclusivo. "
-    "Una volta avviato, non sara' più previsto richiedere il rimborso. "
-    "Il rimborso e previsto esclusivamente per chi ha acquistato il pacchetto ma non ha ancora usufruito di alcuna consulenza, "
-    "limitatamente al metodo contenuto nelle guide in PDF.\n\n"
+    "Ti chiedo inoltre, quando possibile, di evitare messaggi eccessivamente lunghi e di suddividerli in piu messaggi brevi, "
+    "cosi riesco a seguirti meglio e a mantenere la chat ordinata.\n\n"
+    "Per condizioni di acquisto, garanzia e rimborsi fa fede quanto indicato nella pagina del prodotto e nella policy del sito.\n\n"
     "Rispondo dal lunedi al venerdi, dalle 9 alle 17. "
     "Il weekend mi fermo — se mi scrivi sabato o domenica ti rispondo lunedi.\n\n"
     "Se accetti queste condizioni, compila il questionario e iniziamo 🤍"
@@ -1607,6 +1604,18 @@ def get_msg_regole(product_type):
     return MSG_REGOLE
 
 
+def get_msg_regole_parts(product_type):
+    """Divide le regole in due messaggi fissi e ordinati, senza tagli automatici brutti."""
+    full = get_msg_regole(product_type)
+    marker = "Per condizioni di acquisto"
+    idx = full.find(marker)
+    if idx != -1:
+        part1 = full[:idx].strip()
+        part2 = full[idx:].strip()
+        return [p for p in (part1, part2) if p]
+    return smart_split_message(full, max_chars=1500)
+
+
 def product_specific_first_question(product_type):
     if product_type == PRODUCT_POTTY:
         return "Certo cara 😊\n\nPer capire bene come aiutarti, raccontami solo una cosa: quanti anni ha il tuo bimbo e avete gia iniziato a togliere il pannolino oppure state ancora valutando quando partire?"
@@ -2450,17 +2459,52 @@ def mark_silent_no_reply(phone, reason=""):
         logger.error(f"Errore marker no-reply per {phone}: {e}")
 
 # ─── INVIO ─────────────────────────────────────────────────────────────────────
-def send_whatsapp_message(phone, text):
+def smart_split_message(text, max_chars=1450):
+    """Spezza messaggi lunghi in blocchi ordinati, senza tagliare parole o frasi quando possibile."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
     chunks = []
-    while len(text) > 1000:
-        split_point = text.rfind('\n', 0, 1000)
-        if split_point == -1:
-            split_point = 1000
-        chunks.append(text[:split_point].strip())
-        text = text[split_point:].strip()
-    if text:
-        chunks.append(text)
-    for chunk in chunks:
+    remaining = text
+    while len(remaining) > max_chars:
+        window = remaining[:max_chars]
+
+        split_point = window.rfind("\n\n")
+        if split_point < int(max_chars * 0.45):
+            split_point = max(window.rfind(". "), window.rfind("? "), window.rfind("! "))
+            if split_point != -1:
+                split_point += 1
+
+        if split_point < int(max_chars * 0.45):
+            split_point = window.rfind("\n")
+
+        if split_point < int(max_chars * 0.45):
+            split_point = max(window.rfind(", "), window.rfind("; "), window.rfind(": "))
+            if split_point != -1:
+                split_point += 1
+
+        if split_point < int(max_chars * 0.45):
+            split_point = window.rfind(" ")
+
+        if split_point == -1 or split_point < int(max_chars * 0.30):
+            split_point = max_chars
+
+        chunk = remaining[:split_point].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_point:].strip()
+
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+def send_whatsapp_message(phone, text):
+    chunks = smart_split_message(text, max_chars=1450)
+    for index, chunk in enumerate(chunks):
         try:
             twilio_client.messages.create(
                 from_=f"whatsapp:{TWILIO_WHATSAPP_NUMBER}",
@@ -2469,8 +2513,8 @@ def send_whatsapp_message(phone, text):
             )
             # Notifica nel topic
             threading.Thread(target=send_to_topic, args=[phone, chunk, True], daemon=True).start()
-            if len(chunks) > 1:
-                time.sleep(1)
+            if index < len(chunks) - 1:
+                time.sleep(0.9)
         except Exception as e:
             logger.error(f"Errore invio a {phone}: {e}")
             threading.Thread(target=send_telegram, args=[f"⚠️ Errore Twilio per {phone}: {e}"], daemon=True).start()
@@ -2894,8 +2938,10 @@ def invia_sequenza_acquisto(phone, intro_text=None, product_type=None):
 
     regole = get_msg_regole(product_type)
     save_message(phone, "assistant", regole)
-    send_whatsapp_message(phone, regole)
-    time.sleep(3)
+    for regole_part in get_msg_regole_parts(product_type):
+        send_whatsapp_message(phone, regole_part)
+        time.sleep(1.0)
+    time.sleep(2)
 
     q1 = get_questionario_1(product_type)
     save_message(phone, "assistant", q1)
