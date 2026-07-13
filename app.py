@@ -53,7 +53,7 @@ LINK_REFUND            = os.environ.get("LINK_REFUND", "https://genitorinarmonia
 
 # Template WhatsApp approvato per ricontatto lead sonno da Meta/telefono.
 # Puoi sovrascriverlo da Railway con TWILIO_TEMPLATE_SONNO_LEAD.
-TWILIO_TEMPLATE_SONNO_LEAD = os.environ.get("TWILIO_TEMPLATE_SONNO_LEAD", "HX65c772e26934cb7bf322e6c3da877fb5")
+TWILIO_TEMPLATE_SONNO_LEAD = os.environ.get("TWILIO_TEMPLATE_SONNO_LEAD", "HXa847f9caf69b24b33127bf693f07e3fc")
 
 LEAD_FLOW_NONE = "none"
 LEAD_FLOW_SLEEP_MANUAL = "sleep_manual_outreach"
@@ -251,26 +251,29 @@ MSG_CHECKUP = """Ok, allora rivediamo un attimo la situazione cosi capisco bene 
 Rispondimi con calma, poi rivedo il piano in base a quello che mi scrivi 🤍"""
 
 MSG_LEAD_SONNO_DOMANDE = (
-    "Certo cara, ti riporto qui le 3 domande cosi riesco a farmi un quadro più chiaro:\n\n"
-    "1. Come si addormenta di solito? Seno, braccio, lettone, ciuccio, presenza o altro?\n\n"
-    "2. Quando si sveglia di notte, cosa serve per farlo riaddormentare?\n\n"
-    "3. Qual è la cosa che in questo momento ti pesa di più: addormentamento, risvegli, seno, braccio, contatto o stanchezza generale?\n\n"
-    "Appena mi rispondi, provo a darti una prima lettura della situazione e ti dico da dove partirei."
+    "Certo cara, ti riporto qui le domande così riesco a farmi un quadro più chiaro:\n\n"
+    "Puoi rispondermi anche in modo semplice e libero, senza preoccuparti di scrivere tutto perfetto.\n\n"
+    "1. Quanti mesi o anni ha il tuo bimbo e da quanto tempo il sonno è diventato difficile?\n\n"
+    "2. Raccontami com'è una notte tipo: come si addormenta, quante volte si sveglia circa e cosa serve per farlo riaddormentare?\n\n"
+    "3. Di giorno come vanno i pisolini e come arrivate alla sera: tranquilli, molto stanchi, nervosi o molto attaccati?\n\n"
+    "4. Qual è la cosa che ti pesa di più in questo momento e cosa vorresti riuscire a cambiare per prima?\n\n"
+    "Appena mi rispondi, ti do una prima lettura della situazione e ti dico da dove partirei."
 )
 
 MSG_TEMPLATE_SONNO_LEAD = (
     "Ciao, sono Paola di Genitori in Armonia 😊\n\n"
-    "Valentina mi ha detto che non siete riuscite a sentirvi al telefono. Immagino che tra bambino, casa e giornate piene non sia sempre semplice trovare un momento tranquillo.\n\n"
-    "Ho visto comunque le risposte che avevi lasciato nel modulo e, se ti fa piacere, posso provare a darti una prima valutazione anche da qui.\n\n"
-    "Per capire meglio la situazione, rispondimi pure a queste domande:\n\n"
-    "1. Come si addormenta di solito? Seno, braccio, lettone, ciuccio, presenza o altro?\n\n"
-    "2. Quando si sveglia di notte, cosa serve per farlo riaddormentare?\n\n"
-    "3. Qual è la cosa che in questo momento ti pesa di più: addormentamento, risvegli, seno, braccio, contatto o stanchezza generale?\n\n"
-    "Appena mi rispondi, provo a darti una prima lettura della situazione e ti dico da dove partirei."
+    "Ho visto il modulo che hai compilato sul sonno del tuo bimbo.\n\n"
+    "Per capire meglio la vostra situazione e darti una prima valutazione gratuita, mi aiuti con qualche dettaglio in più?\n\n"
+    "Puoi rispondermi anche in modo semplice e libero, senza preoccuparti di scrivere tutto perfetto.\n\n"
+    "1. Quanti mesi o anni ha il tuo bimbo e da quanto tempo il sonno è diventato difficile?\n\n"
+    "2. Raccontami com'è una notte tipo: come si addormenta, quante volte si sveglia circa e cosa serve per farlo riaddormentare?\n\n"
+    "3. Di giorno come vanno i pisolini e come arrivate alla sera: tranquilli, molto stanchi, nervosi o molto attaccati?\n\n"
+    "4. Qual è la cosa che ti pesa di più in questo momento e cosa vorresti riuscire a cambiare per prima?\n\n"
+    "Appena mi rispondi, ti do una prima lettura della situazione e ti dico da dove partirei."
 )
 
 SLEEP_LEAD_ANALYSIS_PROMPT = """
-Scrivi una prima valutazione gratuita come Paola per una mamma che ha risposto alle 3 domande iniziali sul sonno.
+Scrivi una prima valutazione gratuita come Paola per una mamma che ha risposto alle domande iniziali sul sonno.
 
 Obiettivo: farla sentire capita, darle una lettura utile della situazione e accompagnarla verso il percorso personalizzato, senza regalare un piano completo.
 
@@ -292,7 +295,7 @@ SLEEP_LEAD_FOLLOWUP_PROMPT = """
 Gestisci la risposta di una mamma contattata con il template lead sonno.
 
 Contesto importante:
-- Nel messaggio precedente Paola ha gia mandato 3 domande sul sonno.
+- Nel messaggio precedente Paola ha gia mandato le domande iniziali sul sonno.
 - Le domande sono gia visibili nello storico: NON riscriverle automaticamente.
 - Devi comportarti come Paola in una conversazione reale, non come un flusso a blocchi.
 
@@ -305,13 +308,13 @@ Devi restituire SOLO JSON valido con questo schema:
 
 Come scegliere action:
 - analysis: se la mamma ha dato anche pochi indizi concreti sul sonno, anche monosillabi o parole singole come seno, braccia, lettone, ciuccio, risvegli, notte, contatto, latte, pisolini, stanchezza, sono distrutta. In questo caso fai una prima valutazione gratuita: empatia, lettura della dinamica, massimo una direzione generale, poi spiega il Percorso Premium a 67 euro con questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp con Paola. Inserisci il link una sola volta.
-- soft_prompt: se la mamma non ha ancora risposto alle domande ma scrive cose come sì, ok, ci eravamo sentite, avevo parlato con Valentina, va bene, dimmi. In questo caso non ripetere le domande: rispondi in 2-4 righe, collegandoti al fatto che le domande sono nel messaggio sopra e può rispondere anche in modo semplice.
+- soft_prompt: se la mamma non ha ancora risposto alle domande ma scrive cose come sì, ok, ci eravamo sentite, va bene, dimmi. In questo caso non ripetere le domande: rispondi in 2-4 righe, collegandoti al fatto che le domande sono nel messaggio sopra e può rispondere anche in modo semplice.
 - info_reply: se chiede prezzo, cosa comprende, come funziona, link, tempi o fa una piccola obiezione. Rispondi alla domanda e, se naturale, ricorda che per darle una valutazione più precisa può rispondere alle domande sopra. Se è opportuno, presenta il Percorso Premium a 67 euro e il link.
 - defer: se dice che risponde dopo, che ora non può, che lo farà più tardi. Rispondi al massimo con una frase breve e naturale, senza ripetere le domande.
 - no_reply: se è solo una chiusura/cortesia senza bisogno di risposta.
 
 Regole di scrittura:
-- Mai ripetere tutto il blocco delle 3 domande, a meno che la mamma lo chieda esplicitamente.
+- Mai ripetere tutto il blocco delle domande, a meno che la mamma lo chieda esplicitamente.
 - Se devi invitarla a rispondere, scrivi "rispondimi pure alle domande che ti ho scritto sopra" oppure simile.
 - Non dire "come bot" o "automatico".
 - Tono WhatsApp Paola, caldo, naturale, concreto.
@@ -2358,7 +2361,7 @@ def build_ai_context(phone, fase, router_result, pending_text):
         business_rule = f"""
 La persona è stata contattata con il template sonno tramite /contatta_sonno.
 Il prodotto è già chiaro: sonno infantile. Non chiedere se parla di sonno o spannolinamento.
-Nel messaggio precedente Paola ha già mandato le 3 domande sul sonno e quel testo è nello storico.
+Nel messaggio precedente Paola ha già mandato le domande iniziali sul sonno e quel testo è nello storico.
 Gestisci la risposta con naturalezza, usando lo storico:
 - se ha risposto anche in modo breve ma concreto alle domande, fai una prima valutazione gratuita utile e personalizzata;
 - se scrive solo sì, ok, ci eravamo sentite o una conferma simile, non ripetere il blocco domande: dille solo, in modo naturale, che può rispondere alle domande scritte sopra anche in modo semplice;
@@ -2642,7 +2645,7 @@ def contact_sleep_lead(phone):
     set_fase(phone, 0)
     set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_TEMPLATE_SENT)
     save_message(phone, "assistant", "[TEMPLATE LEAD SONNO INVIATO]\n" + MSG_TEMPLATE_SONNO_LEAD)
-    ok = send_whatsapp_template_message(phone, TWILIO_TEMPLATE_SONNO_LEAD, "lead_sonno_valentina")
+    ok = send_whatsapp_template_message(phone, TWILIO_TEMPLATE_SONNO_LEAD, "lead_sonno_paola_modulo")
     if ok:
         threading.Thread(target=send_to_topic, args=[phone, "[Template lead sonno inviato]\n" + MSG_TEMPLATE_SONNO_LEAD, True], daemon=True).start()
     return ok
@@ -3014,7 +3017,7 @@ def invia_sequenza_acquisto(phone, intro_text=None, product_type=None):
 
 
 def classify_sleep_lead_answers(text):
-    default = {"status": "incomplete", "confidence": 0.0, "missing": "le risposte alle 3 domande", "reason": "fallback"}
+    default = {"status": "incomplete", "confidence": 0.0, "missing": "le risposte alle domande iniziali", "reason": "fallback"}
     t = normalize_text(text or "")
     sleep_keywords = ["seno", "tetta", "braccio", "braccia", "lettone", "ciuccio", "risvegl", "sveglia", "addor", "pisolin", "nanna", "stanche", "distrutta", "contatto", "latte", "notte", "piange", "culla", "lettino"]
 
@@ -3027,7 +3030,7 @@ def classify_sleep_lead_answers(text):
         response = openai_chat_completion(
             model=MODEL_CLASSIFIER,
             messages=[
-                {"role": "system", "content": "Sei un classificatore. Devi capire se la mamma ha risposto alle 3 domande iniziali sul sonno, anche con parole molto brevi. Restituisci solo JSON valido con status sufficient|defer|incomplete, confidence, missing, reason. Usa sufficient se dà anche solo indizi concreti sul sonno, per esempio parole come seno, braccio/braccia, lettone, ciuccio, risvegli, notte, piange, stanchezza, contatto, latte, pisolini, anche se non risponde in forma completa. Usa defer solo se dice semplicemente sì, ok, dimmi, dopo, appena posso, grazie, senza alcuna informazione sul problema. Usa incomplete solo se il messaggio non è rinvio ma è davvero impossibile ricavare una lettura minima."},
+                {"role": "system", "content": "Sei un classificatore. Devi capire se la mamma ha risposto alle domande iniziali sul sonno, anche con parole molto brevi. Restituisci solo JSON valido con status sufficient|defer|incomplete, confidence, missing, reason. Usa sufficient se dà anche solo indizi concreti sul sonno, per esempio parole come seno, braccio/braccia, lettone, ciuccio, risvegli, notte, piange, stanchezza, contatto, latte, pisolini, anche se non risponde in forma completa. Usa defer solo se dice semplicemente sì, ok, dimmi, dopo, appena posso, grazie, senza alcuna informazione sul problema. Usa incomplete solo se il messaggio non è rinvio ma è davvero impossibile ricavare una lettura minima."},
                 {"role": "user", "content": text}
             ],
             max_tokens=250,
@@ -3075,7 +3078,7 @@ def generate_sleep_lead_analysis(phone, lead_answers):
     profile = get_child_profile(phone)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT_BASE + "\n\n" + SLEEP_LEAD_ANALYSIS_PROMPT},
-        {"role": "user", "content": f"Profilo noto:\n{json.dumps(profile, ensure_ascii=False) if profile else 'non disponibile'}\n\nStorico recente:\n{format_history_for_prompt(history[-20:])}\n\nRisposte della mamma alle 3 domande iniziali:\n{lead_answers}\n\nLink percorso da inserire una sola volta: {LINK_PREMIUM}"}
+        {"role": "user", "content": f"Profilo noto:\n{json.dumps(profile, ensure_ascii=False) if profile else 'non disponibile'}\n\nStorico recente:\n{format_history_for_prompt(history[-20:])}\n\nRisposte della mamma alle domande iniziali:\n{lead_answers}\n\nLink percorso da inserire una sola volta: {LINK_PREMIUM}"}
     ]
     try:
         response = openai_chat_completion(
