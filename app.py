@@ -3577,13 +3577,35 @@ def normalize_product_from_payload(product_raw, campaign_raw=""):
     return PRODUCT_UNKNOWN
 
 
+def merge_ghl_custom_data(data):
+    """GHL spesso invia i campi aggiunti dentro customData.
+    Questa funzione crea un payload unico in cui phone/name/product possono arrivare
+    sia al primo livello sia dentro customData. I valori in customData hanno priorità
+    perché sono quelli impostati manualmente nel workflow.
+    """
+    if not isinstance(data, dict):
+        return {}
+    merged = dict(data)
+    custom = data.get("customData") or data.get("custom_data") or {}
+    if isinstance(custom, dict):
+        for key, value in custom.items():
+            if value not in (None, ""):
+                merged[key] = value
+    return merged
+
+
 def build_ghl_source_note(data, product_type):
-    name = (data.get("name") or data.get("first_name") or data.get("firstName") or "").strip()
-    last_name = (data.get("last_name") or data.get("lastName") or "").strip()
+    data = merge_ghl_custom_data(data)
+    name = (data.get("name") or data.get("first_name") or data.get("firstName") or data.get("full_name") or "").strip()
+    last_name = (data.get("last_name") or data.get("lastname") or data.get("lastName") or "").strip()
     email = (data.get("email") or "").strip()
     campaign = (data.get("campaign") or data.get("campaign_name") or "").strip()
     source = (data.get("source") or "ghl").strip()
     notes = (data.get("notes") or data.get("message") or data.get("risposte_modulo") or "").strip()
+    workflow = data.get("workflow")
+    workflow_name = ""
+    if isinstance(workflow, dict):
+        workflow_name = (workflow.get("name") or "").strip()
     pieces = [f"origine={source}", f"prodotto={product_label(product_type)}"]
     if name or last_name:
         pieces.append(f"nome={(name + ' ' + last_name).strip()}")
@@ -3591,6 +3613,8 @@ def build_ghl_source_note(data, product_type):
         pieces.append(f"email={email}")
     if campaign:
         pieces.append(f"campagna={campaign}")
+    if workflow_name:
+        pieces.append(f"workflow={workflow_name}")
     if notes:
         pieces.append(f"risposte_modulo={notes[:700]}")
     return "; ".join(pieces)
@@ -3610,22 +3634,24 @@ def ghl_lead():
         if not isinstance(data, dict):
             data = request.form.to_dict() if request.form else {}
 
+        merged_data = merge_ghl_custom_data(data)
+
         raw_phone = (
-            data.get("phone") or data.get("telefono") or data.get("mobile") or
-            data.get("contact_phone") or data.get("contact.phone") or ""
+            merged_data.get("phone") or merged_data.get("telefono") or merged_data.get("mobile") or
+            merged_data.get("contact_phone") or merged_data.get("contact.phone") or ""
         )
         phone = normalize_phone_number(raw_phone)
         if not phone:
             return jsonify({"ok": False, "error": "missing_phone"}), 400
 
-        product_type = normalize_product_from_payload(data.get("product"), data.get("campaign"))
+        product_type = normalize_product_from_payload(merged_data.get("product"), merged_data.get("campaign"))
         if product_type == PRODUCT_UNKNOWN:
             alert = f"⚠️ Lead GHL ricevuto ma prodotto non chiaro per {phone}. Manca product=sleep o product=potty. Payload: {json.dumps(data, ensure_ascii=False)[:900]}"
             logger.warning(alert)
             threading.Thread(target=send_telegram, args=[alert], daemon=True).start()
             return jsonify({"ok": False, "error": "missing_product"}), 400
 
-        source_note = build_ghl_source_note(data, product_type)
+        source_note = build_ghl_source_note(merged_data, product_type)
         logger.info(f"Lead GHL ricevuto: {phone} — prodotto={product_type}")
 
         if product_type == PRODUCT_SLEEP:
