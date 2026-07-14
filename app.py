@@ -4,7 +4,7 @@ import random
 import threading
 import logging
 from datetime import datetime, timedelta
-from flask import Flask, request, Response
+from flask import Flask, request, Response, jsonify
 from twilio.rest import Client
 import openai
 import psycopg2
@@ -51,21 +51,30 @@ LINK_BASE              = os.environ.get("LINK_BASE", "https://genitorinarmonia.c
 LINK_POTTY             = os.environ.get("LINK_POTTY", "https://shop.genitorinarmonia.com/spannolinamento/")
 LINK_REFUND            = os.environ.get("LINK_REFUND", "https://genitorinarmonia.com/policies/refund-policy")
 
-# Template WhatsApp approvato per ricontatto lead sonno da Meta/telefono.
-# Puoi sovrascriverlo da Railway con TWILIO_TEMPLATE_SONNO_LEAD.
-TWILIO_TEMPLATE_SONNO_LEAD = os.environ.get("TWILIO_TEMPLATE_SONNO_LEAD", "HXa847f9caf69b24b33127bf693f07e3fc")
+# Template WhatsApp approvati per ricontatto lead da Meta/GHL/telefono.
+# Puoi sovrascriverli da Railway senza modificare il codice.
+TWILIO_TEMPLATE_SONNO_LEAD = os.environ.get("TWILIO_TEMPLATE_SONNO_LEAD") or "HXa847f9caf69b24b33127bf693f07e3fc"
+TWILIO_TEMPLATE_SPANNOLINAMENTO_LEAD = os.environ.get("TWILIO_TEMPLATE_SPANNOLINAMENTO_LEAD") or "HXa8577915f036b0939c396f7be0d89430"
+GHL_WEBHOOK_SECRET = os.environ.get("GHL_WEBHOOK_SECRET", "").strip()
 
 LEAD_FLOW_NONE = "none"
 LEAD_FLOW_SLEEP_MANUAL = "sleep_manual_outreach"
+LEAD_FLOW_SLEEP_GHL = "sleep_ghl"
+LEAD_FLOW_POTTY_GHL = "potty_ghl"
 LEAD_STATUS_NONE = "none"
 LEAD_STATUS_TEMPLATE_SENT = "template_sent"
 LEAD_STATUS_WAITING_ANSWERS = "waiting_answers"
 LEAD_STATUS_ANALYSIS_DONE = "analysis_done"
 
+POTTY_BASE_PRICE = 47
+POTTY_PREMIUM_PRICE = 67
+
 POTTY_OFFER_DETAILS = (
-    "Il percorso spannolinamento comprende un piano alimentare pratico, una guida e un PDF dedicato allo spannolinamento, "
-    "piu il supporto WhatsApp con Paola. Dopo l'ordine la guida arriva in automatico; poi la mamma scrive qui su WhatsApp "
-    "e si parte con il questionario iniziale, l'analisi della situazione e un piano personalizzato per iniziare lo spannolinamento nel modo giusto."
+    "Per lo spannolinamento ci sono due opzioni. Il Base a 47 euro comprende la guida PDF Metodo Paola: "
+    "Spannolinamento Dolce di Paola, quindi è indicato per chi vuole leggere il metodo e provare in autonomia. "
+    "Il Premium a 67 euro è il percorso consigliato: comprende la guida PDF, il questionario iniziale, "
+    "il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola, così il lavoro viene adattato "
+    "a come reagisce davvero il bambino durante pipì, cacca, vasino, nido, uscite e prime difficoltà."
 )
 
 OFFERS = {
@@ -269,6 +278,18 @@ MSG_TEMPLATE_SONNO_LEAD = (
     "2. Raccontami com'è una notte tipo: come si addormenta, quante volte si sveglia circa e cosa serve per farlo riaddormentare?\n\n"
     "3. Di giorno come vanno i pisolini e come arrivate alla sera: tranquilli, molto stanchi, nervosi o molto attaccati?\n\n"
     "4. Qual è la cosa che ti pesa di più in questo momento e cosa vorresti riuscire a cambiare per prima?\n\n"
+    "Appena mi rispondi, ti do una prima lettura della situazione e ti dico da dove partirei."
+)
+
+MSG_TEMPLATE_SPANNOLINAMENTO_LEAD = (
+    "Ciao, sono Paola di Genitori in Armonia 😊\n\n"
+    "Ho visto il modulo che hai compilato sullo spannolinamento.\n\n"
+    "Per capire meglio la situazione del tuo bimbo e darti una prima valutazione gratuita, mi aiuti con qualche dettaglio in più?\n\n"
+    "Puoi rispondermi anche in modo semplice e libero.\n\n"
+    "1. Quanti anni ha il tuo bimbo e avete già iniziato a togliere il pannolino oppure state ancora valutando quando partire?\n\n"
+    "2. Cosa sta succedendo adesso con pipì, cacca, vasino o water?\n\n"
+    "3. Qual è la cosa che ti preoccupa o ti pesa di più in questo momento?\n\n"
+    "4. C'è qualcosa che avete già provato? Com'è andata?\n\n"
     "Appena mi rispondi, ti do una prima lettura della situazione e ti dico da dove partirei."
 )
 
@@ -781,6 +802,9 @@ def telegram_webhook():
         if chat_id == str(TELEGRAM_GROUP_ID) and text.strip().lower().startswith("/contatta_sonno"):
             threading.Thread(target=handle_contatta_sonno_command, args=[text], daemon=True).start()
             return Response("OK", status=200)
+        if chat_id == str(TELEGRAM_GROUP_ID) and text.strip().lower().startswith(("/contatta_spannolinamento", "/contatta_pannolino")):
+            threading.Thread(target=handle_contatta_spannolinamento_command, args=[text], daemon=True).start()
+            return Response("OK", status=200)
 
         # Controlla che sia un messaggio nel gruppo forum
         if chat_id != str(TELEGRAM_GROUP_ID) or not thread_id or not text:
@@ -806,6 +830,8 @@ def telegram_webhook():
 
             if cmd == "/contatta_sonno":
                 threading.Thread(target=handle_contatta_sonno_command, args=[text], daemon=True).start()
+            elif cmd in ("/contatta_spannolinamento", "/contatta_pannolino"):
+                threading.Thread(target=handle_contatta_spannolinamento_command, args=[text], daemon=True).start()
             elif cmd in ("/sonno", "/sleep"):
                 set_product_type(phone, PRODUCT_SLEEP)
                 set_awaiting_product_choice(phone, False)
@@ -1770,8 +1796,8 @@ def contextual_purchase_fallback(trigger_text="", product_type=PRODUCT_SLEEP):
         if product_type == PRODUCT_POTTY:
             return (
                 "Certo cara, ti spiego subito.\n\n"
-                "Nel percorso spannolinamento hai incluso il piano alimentare pratico, la guida, il PDF dedicato allo spannolinamento e il mio supporto WhatsApp.\n\n"
-                "La parte più importante è che non resti con una guida generica: partiamo dal questionario iniziale, guardo bene la vostra situazione e preparo un piano personalizzato per accompagnare l'inizio dello spannolinamento.\n\n"
+                "Nel Percorso Premium spannolinamento hai incluso la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul tuo bambino e 30 giorni di supporto WhatsApp con me.\n\n"
+                "La parte più importante è che non resti con una guida generica: guardo bene la vostra situazione e preparo un piano personalizzato per accompagnare l'inizio dello spannolinamento in base a come reagisce davvero il bambino.\n\n"
                 "La guida arriva in automatico dopo l'ordine. Ora, per partire bene qui insieme, ti mando le regole della chat e poi il questionario dettagliato."
             )
         return (
@@ -1811,7 +1837,7 @@ def build_contextual_purchase_intro(phone, trigger_text="", product_type=PRODUCT
                 "Sei Paola di Genitori in Armonia. Devi scrivere un breve messaggio WhatsApp naturale.\n"
                 "La mamma ha appena fatto capire che ha già acquistato o ha già accesso al percorso/guida.\n"
                 f"Il prodotto/percorso è: {product_label(product_type)}.\n"
-                "Se il prodotto è spannolinamento e chiede cosa comprende, spiega che include piano alimentare pratico, guida, PDF dedicato allo spannolinamento e supporto WhatsApp con piano personalizzato da questionario.\n"
+                "Se il prodotto è spannolinamento e chiede cosa comprende, spiega che il Base a 47 euro comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, mentre il Premium a 67 euro è quello consigliato e comprende guida PDF, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.\n"
                 "Rispondi in modo coerente all'ultimo messaggio: se ha fatto una domanda, rispondi prima a quella domanda.\n"
                 "Poi fai una transizione morbida: ora le manderai le regole della chat e il questionario iniziale corretto per preparare il piano personalizzato.\n"
                 "Non sembrare un messaggio automatico. Non dire 'messaggio automatico'. Non inserire link.\n"
@@ -2097,11 +2123,19 @@ def get_business_rule(intent, fase, link_sent=False, product_type=PRODUCT_UNKNOW
     product_name = product_label(product_type)
 
     if intent == "richiesta_differenza_percorsi":
+        if product_type == PRODUCT_POTTY:
+            return f"""
+Spiega la differenza tra i percorsi spannolinamento in modo naturale.
+Il Base a {POTTY_BASE_PRICE} euro comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, quindi è indicato se la mamma vuole leggere il metodo e provare in autonomia.
+Il Premium a {POTTY_PREMIUM_PRICE} euro è quello consigliato: comprende la guida PDF, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Orienta con delicatezza verso il Premium, soprattutto se ci sono dubbi, rifiuti, incidenti, cacca, nido, uscite o paura di sbagliare.
+Non spingere in modo aggressivo.
+"""
         return f"""
 Spiega la differenza tra i percorsi in modo naturale.
 Il percorso da {OFFERS['base']['price']} euro include questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp nei giorni lavorativi.
 Il Premium da {OFFERS['premium']['price']} euro dura 60 giorni, dà maggiore continuità e supporto anche nei weekend.
-Consiglia il Premium se la situazione è complessa o la mamma vuole essere seguita con più continuità, ma rassicura che anche il percorso da 37 euro va bene.
+Consiglia il Premium se la situazione è complessa o la mamma vuole essere seguita con più continuità, ma rassicura che anche il percorso da {OFFERS['base']['price']} euro va bene.
 Non spingere in modo aggressivo.
 """
     if intent == "obiezione_prezzo":
@@ -2122,11 +2156,11 @@ Ricorda con delicatezza che il rimborso non è applicabile a chi ha già usufrui
             return f"""
 La persona è ancora lead e chiede informazioni sul percorso spannolinamento.
 Rispondi in modo naturale e contestuale, senza sembrare un messaggio copia-incolla.
-Se chiede cosa comprende o come funziona, spiega che il percorso comprende: un piano alimentare pratico, una guida e un PDF dedicato allo spannolinamento, più il supporto WhatsApp con Paola.
-Spiega che il supporto serve per preparare un piano personalizzato partendo da un questionario iniziale, così l'avvio dello spannolinamento viene adattato alla situazione reale del bambino.
-Chiarisci che dopo l'ordine la guida arriva automaticamente; poi la mamma scrive qui su WhatsApp e si parte subito analizzando la sua situazione.
-Non presentare il piano alimentare come prescrizione medica o dieta clinica.
-Se non ha ancora raccontato la situazione, dopo la spiegazione chiedi età del bambino e se hanno già iniziato a togliere il pannolino o stanno valutando quando partire.
+Spiega che ci sono due opzioni: il Base a {POTTY_BASE_PRICE} euro comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, quindi è pensato per chi vuole leggere il metodo e provare in autonomia.
+Poi orienta con delicatezza verso il Premium a {POTTY_PREMIUM_PRICE} euro, che è quello consigliato: comprende la guida PDF, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Spiega che il Premium serve proprio per non restare con una guida generica, ma adattare l'inizio dello spannolinamento alla situazione reale del bambino: pipì, cacca, vasino/water, incidenti, nido, uscite e reazioni emotive.
+Chiarisci che dopo l'ordine arriva automaticamente la guida; poi la mamma scrive qui su WhatsApp, compila il questionario e si parte con l'analisi della situazione e il piano personalizzato.
+Se non ha ancora raccontato la situazione, dopo la spiegazione puoi chiederle età del bambino e se hanno già iniziato a togliere il pannolino o stanno valutando quando partire.
 Se chiede il link o sembra pronta a procedere, inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
 """
         if product_type == PRODUCT_SLEEP:
@@ -2168,9 +2202,9 @@ La persona è ancora lead e ha già descritto una difficoltà concreta sullo spa
 Non fare altre domande generiche: fai subito una prima analisi commerciale personalizzata.
 Devi riconoscere la difficoltà specifica, spiegare in modo semplice cosa può esserci dietro: prontezza, segnali, incidenti, cacca, nido, pressione o routine non chiara.
 Non dare un piano completo gratuito.
-Poi presenta il percorso spannolinamento in modo chiaro: comprende un piano alimentare pratico, una guida e un PDF dedicato allo spannolinamento, più il supporto WhatsApp con Paola.
-Spiega che il supporto non è una guida generica: dopo l'ordine la guida arriva automaticamente, poi la mamma scrive qui su WhatsApp, compila il questionario iniziale e da lì viene analizzata la situazione per preparare un piano personalizzato sull'inizio dello spannolinamento.
-Non presentare il piano alimentare come prescrizione medica o dieta clinica.
+Poi presenta il Percorso Premium spannolinamento in modo chiaro: costa {POTTY_PREMIUM_PRICE} euro ed è quello consigliato perché comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Se serve, puoi dire che esiste anche il Base a {POTTY_BASE_PRICE} euro, ma solo come guida PDF da seguire in autonomia; non metterlo come scelta principale se la mamma ha chiesto aiuto o ha già raccontato una difficoltà.
+Spiega che il Premium non è una guida generica: dopo l'ordine la guida arriva automaticamente, poi la mamma scrive qui su WhatsApp, compila il questionario iniziale e da lì viene analizzata la situazione per preparare un piano personalizzato sull'inizio dello spannolinamento.
 Inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
 """
     if intent in ("domanda_percorso_attivo", "aggiornamento_percorso_attivo", "richiesta_pratica_immediata") or fase == 4:
@@ -2241,20 +2275,25 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
         return f"Certo, ti lascio il link:\n{get_product_link(product_type)}"
 
     if intent == "richiesta_bonifico" and confidence >= 0.85:
+        if product_type == PRODUCT_POTTY:
+            amount_text = f"Importo consigliato: {POTTY_PREMIUM_PRICE} euro per il Premium spannolinamento"
+        else:
+            amount_text = f"Importo consigliato: {OFFERS['premium']['price']} euro per il Premium"
         return (
             "Certo, puoi pagare tramite bonifico. Ecco le coordinate:\n\n"
             "Intestatario: P&D Digital\n"
             "IBAN: NL10BUNQ2192297467\n\n"
-            "Importo: 37 euro\n"
+            f"{amount_text}\n"
             "Causale: il tuo nome e cognome\n\n"
             "Dimmi quando hai effettuato il bonifico cosi iniziamo 🤍"
         )
 
     if intent == "problema_checkout_importo" and confidence >= 0.85:
+        expected = POTTY_PREMIUM_PRICE if product_type == PRODUCT_POTTY else OFFERS['premium']['price']
         return (
             "L'unica spiegazione e che hai aggiunto il prodotto piu volte nel carrello.\n"
             "In alto a destra vedi l'icona di una borsetta — cliccaci sopra, guarda quanti articoli ci sono "
-            "e cambia il numero a 1. Poi procedi al pagamento e ti deve uscire 37 euro 🤍"
+            f"e cambia il numero a 1. Poi procedi al pagamento e ti deve uscire {expected} euro 🤍"
         )
 
     if intent == "bonifico_effettuato" and confidence >= 0.80:
@@ -2624,8 +2663,8 @@ def normalize_phone_number(raw):
     return None
 
 
-def extract_phones_from_text(text):
-    body = re.sub(r"^/contatta_sonno\b", "", text.strip(), flags=re.I).strip()
+def extract_phones_from_text(text, command_regex=r"^/contatta_sonno\b"):
+    body = re.sub(command_regex, "", text.strip(), flags=re.I).strip()
     candidates = re.findall(r"(?:\+?39)?[\s\-.()]*3[\d\s\-.()]{8,}", body)
     phones = []
     seen = set()
@@ -2637,13 +2676,15 @@ def extract_phones_from_text(text):
     return phones
 
 
-def contact_sleep_lead(phone):
+def contact_sleep_lead(phone, lead_flow=LEAD_FLOW_SLEEP_MANUAL, source_note=None):
     """Prepara il lead sonno e invia il template approvato."""
     phone = normalize_phone_number(phone) or phone
     set_product_type(phone, PRODUCT_SLEEP)
     set_awaiting_product_choice(phone, False)
     set_fase(phone, 0)
-    set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_TEMPLATE_SENT)
+    set_lead_state(phone, lead_flow, LEAD_STATUS_TEMPLATE_SENT)
+    if source_note:
+        save_message(phone, "user", f"[NOTA LEAD: {source_note}]")
     save_message(phone, "assistant", "[TEMPLATE LEAD SONNO INVIATO]\n" + MSG_TEMPLATE_SONNO_LEAD)
     ok = send_whatsapp_template_message(phone, TWILIO_TEMPLATE_SONNO_LEAD, "lead_sonno_paola_modulo")
     if ok:
@@ -2651,8 +2692,29 @@ def contact_sleep_lead(phone):
     return ok
 
 
+def contact_potty_lead(phone, lead_flow=LEAD_FLOW_POTTY_GHL, source_note=None):
+    """Prepara il lead spannolinamento e invia il template approvato."""
+    phone = normalize_phone_number(phone) or phone
+    set_product_type(phone, PRODUCT_POTTY)
+    set_awaiting_product_choice(phone, False)
+    set_fase(phone, 0)
+    set_lead_state(phone, lead_flow, LEAD_STATUS_TEMPLATE_SENT)
+    if source_note:
+        save_message(phone, "user", f"[NOTA LEAD: {source_note}]")
+    save_message(phone, "assistant", "[TEMPLATE LEAD SPANNOLINAMENTO INVIATO]\n" + MSG_TEMPLATE_SPANNOLINAMENTO_LEAD)
+    if not TWILIO_TEMPLATE_SPANNOLINAMENTO_LEAD:
+        msg = "⚠️ Template spannolinamento mancante: aggiungi TWILIO_TEMPLATE_SPANNOLINAMENTO_LEAD su Railway prima di contattare lead spannolinamento."
+        logger.error(msg)
+        threading.Thread(target=send_telegram, args=[msg], daemon=True).start()
+        return False
+    ok = send_whatsapp_template_message(phone, TWILIO_TEMPLATE_SPANNOLINAMENTO_LEAD, "lead_spannolinamento_paola_modulo")
+    if ok:
+        threading.Thread(target=send_to_topic, args=[phone, "[Template lead spannolinamento inviato]\n" + MSG_TEMPLATE_SPANNOLINAMENTO_LEAD, True], daemon=True).start()
+    return ok
+
+
 def handle_contatta_sonno_command(text):
-    phones = extract_phones_from_text(text)
+    phones = extract_phones_from_text(text, r"^/contatta_sonno\b")
     if not phones:
         send_telegram("⚠️ /contatta_sonno: non ho trovato numeri validi. Usa ad esempio:\n/contatta_sonno\n+393331234567\n+393441234567")
         return
@@ -2666,6 +2728,25 @@ def handle_contatta_sonno_command(text):
         # Piccola pausa tra un numero e l'altro: evita picchi su Telegram/Twilio quando invii liste.
         time.sleep(1.5)
     msg = f"✅ /contatta_sonno completato: template inviato a {ok_count}/{len(phones)} numeri."
+    if failed:
+        msg += "\nNon riusciti: " + ", ".join(failed)
+    send_telegram(msg)
+
+
+def handle_contatta_spannolinamento_command(text):
+    phones = extract_phones_from_text(text, r"^/(contatta_spannolinamento|contatta_pannolino)\b")
+    if not phones:
+        send_telegram("⚠️ /contatta_spannolinamento: non ho trovato numeri validi. Usa ad esempio:\n/contatta_spannolinamento\n+393331234567\n+393441234567")
+        return
+    ok_count = 0
+    failed = []
+    for phone in phones:
+        if contact_potty_lead(phone):
+            ok_count += 1
+        else:
+            failed.append(phone)
+        time.sleep(1.5)
+    msg = f"✅ /contatta_spannolinamento completato: template inviato a {ok_count}/{len(phones)} numeri."
     if failed:
         msg += "\nNon riusciti: " + ", ".join(failed)
     send_telegram(msg)
@@ -3486,6 +3567,86 @@ def process_response(phone, image_url=None):
             save_message(phone, "assistant", ai_reply)
             send_whatsapp_message(phone, ai_reply)
 
+# ─── WEBHOOK GHL / CRM ─────────────────────────────────────────────────────────
+def normalize_product_from_payload(product_raw, campaign_raw=""):
+    text = f"{product_raw or ''} {campaign_raw or ''}".strip().lower()
+    if any(x in text for x in ["sleep", "sonno", "nanna", "risvegli"]):
+        return PRODUCT_SLEEP
+    if any(x in text for x in ["potty", "spannolin", "pannolino", "vasino", "water", "pipi", "pipì", "cacca"]):
+        return PRODUCT_POTTY
+    return PRODUCT_UNKNOWN
+
+
+def build_ghl_source_note(data, product_type):
+    name = (data.get("name") or data.get("first_name") or data.get("firstName") or "").strip()
+    last_name = (data.get("last_name") or data.get("lastName") or "").strip()
+    email = (data.get("email") or "").strip()
+    campaign = (data.get("campaign") or data.get("campaign_name") or "").strip()
+    source = (data.get("source") or "ghl").strip()
+    notes = (data.get("notes") or data.get("message") or data.get("risposte_modulo") or "").strip()
+    pieces = [f"origine={source}", f"prodotto={product_label(product_type)}"]
+    if name or last_name:
+        pieces.append(f"nome={(name + ' ' + last_name).strip()}")
+    if email:
+        pieces.append(f"email={email}")
+    if campaign:
+        pieces.append(f"campagna={campaign}")
+    if notes:
+        pieces.append(f"risposte_modulo={notes[:700]}")
+    return "; ".join(pieces)
+
+
+@app.route("/ghl_lead", methods=["POST"])
+def ghl_lead():
+    """Riceve lead da GoHighLevel e invia il template WhatsApp corretto."""
+    try:
+        if GHL_WEBHOOK_SECRET:
+            api_key = request.headers.get("x-api-key", "").strip()
+            if api_key != GHL_WEBHOOK_SECRET:
+                logger.warning("Webhook GHL rifiutato: x-api-key non valida")
+                return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            data = request.form.to_dict() if request.form else {}
+
+        raw_phone = (
+            data.get("phone") or data.get("telefono") or data.get("mobile") or
+            data.get("contact_phone") or data.get("contact.phone") or ""
+        )
+        phone = normalize_phone_number(raw_phone)
+        if not phone:
+            return jsonify({"ok": False, "error": "missing_phone"}), 400
+
+        product_type = normalize_product_from_payload(data.get("product"), data.get("campaign"))
+        if product_type == PRODUCT_UNKNOWN:
+            alert = f"⚠️ Lead GHL ricevuto ma prodotto non chiaro per {phone}. Manca product=sleep o product=potty. Payload: {json.dumps(data, ensure_ascii=False)[:900]}"
+            logger.warning(alert)
+            threading.Thread(target=send_telegram, args=[alert], daemon=True).start()
+            return jsonify({"ok": False, "error": "missing_product"}), 400
+
+        source_note = build_ghl_source_note(data, product_type)
+        logger.info(f"Lead GHL ricevuto: {phone} — prodotto={product_type}")
+
+        if product_type == PRODUCT_SLEEP:
+            template_sent = contact_sleep_lead(phone, lead_flow=LEAD_FLOW_SLEEP_GHL, source_note=source_note)
+        else:
+            template_sent = contact_potty_lead(phone, lead_flow=LEAD_FLOW_POTTY_GHL, source_note=source_note)
+
+        return jsonify({
+            "ok": True,
+            "message": "lead_received",
+            "phone": phone,
+            "product": product_type,
+            "template_sent": bool(template_sent)
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Errore ghl_lead: {e}")
+        threading.Thread(target=send_telegram, args=[f"⚠️ Errore webhook GHL: {e}"], daemon=True).start()
+        return jsonify({"ok": False, "error": "server_error"}), 500
+
+
 # ─── WEBHOOK WHATSAPP ──────────────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -3510,6 +3671,10 @@ def webhook():
     # ── Comandi admin ──────────────────────────────────────────────────────────
     if body.strip().lower().startswith("/contatta_sonno"):
         threading.Thread(target=handle_contatta_sonno_command, args=[body], daemon=True).start()
+        return Response("OK", status=200)
+
+    if body.strip().lower().startswith(("/contatta_spannolinamento", "/contatta_pannolino")):
+        threading.Thread(target=handle_contatta_spannolinamento_command, args=[body], daemon=True).start()
         return Response("OK", status=200)
 
     if body.startswith("/inizia"):
