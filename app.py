@@ -53,18 +53,54 @@ LINK_REFUND            = os.environ.get("LINK_REFUND", "https://genitorinarmonia
 
 # Template WhatsApp approvati per ricontatto lead da Meta/GHL/telefono.
 # Puoi sovrascriverli da Railway senza modificare il codice.
-TWILIO_TEMPLATE_SONNO_LEAD = os.environ.get("TWILIO_TEMPLATE_SONNO_LEAD") or "HXa847f9caf69b24b33127bf693f07e3fc"
-TWILIO_TEMPLATE_SPANNOLINAMENTO_LEAD = os.environ.get("TWILIO_TEMPLATE_SPANNOLINAMENTO_LEAD") or "HXa8577915f036b0939c396f7be0d89430"
+# Nota: il nome corretto delle variabili è TWILIO_..., ma per sicurezza leggiamo anche il refuso TWINIO_...
+# così il bot non si blocca se su Railway una variabile è stata scritta male.
+def env_first(*names, default=""):
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value.strip()
+    return default
+
+TWILIO_TEMPLATE_SONNO_LEAD = env_first(
+    "TWILIO_TEMPLATE_SONNO_LEAD",
+    "TWINIO_TEMPLATE_SONNO_LEAD",
+    default="HXe19b65128dbbb71a64844b960986d85c"
+)
+TWILIO_TEMPLATE_SPANNOLINAMENTO_LEAD = env_first(
+    "TWILIO_TEMPLATE_SPANNOLINAMENTO_LEAD",
+    "TWINIO_TEMPLATE_SPANNOLINAMENTO_LEAD",
+    default="HX666fced8f654b325b5b1c195af09ccc5"
+)
+TWILIO_TEMPLATE_SONNO_FOLLOWUP = env_first(
+    "TWILIO_TEMPLATE_SONNO_FOLLOWUP",
+    "TWINIO_TEMPLATE_SONNO_FOLLOWUP",
+    default="HX5cd1bc52d3428a6731410658e62312bc"
+)
+TWILIO_TEMPLATE_SPANNOLINAMENTO_FOLLOWUP = env_first(
+    "TWILIO_TEMPLATE_SPANNOLINAMENTO_FOLLOWUP",
+    "TWINIO_TEMPLATE_SPANNOLINAMENTO_FOLLOWUP",
+    default="HX93f8b9f65cef58854ab70160e5c29314"
+)
+
+FOLLOWUP_TEMPLATE_AFTER_HOURS = float(os.environ.get("FOLLOWUP_TEMPLATE_AFTER_HOURS", "8"))
+FOLLOWUP_QUESTION_AFTER_HOURS = float(os.environ.get("FOLLOWUP_QUESTION_AFTER_HOURS", "8"))
+FOLLOWUP_LINK_AFTER_HOURS = float(os.environ.get("FOLLOWUP_LINK_AFTER_HOURS", "18"))
+
 GHL_WEBHOOK_SECRET = os.environ.get("GHL_WEBHOOK_SECRET", "").strip()
 
 LEAD_FLOW_NONE = "none"
 LEAD_FLOW_SLEEP_MANUAL = "sleep_manual_outreach"
+LEAD_FLOW_POTTY_MANUAL = "potty_manual_outreach"
 LEAD_FLOW_SLEEP_GHL = "sleep_ghl"
 LEAD_FLOW_POTTY_GHL = "potty_ghl"
 LEAD_STATUS_NONE = "none"
 LEAD_STATUS_TEMPLATE_SENT = "template_sent"
 LEAD_STATUS_WAITING_ANSWERS = "waiting_answers"
 LEAD_STATUS_ANALYSIS_DONE = "analysis_done"
+LEAD_STATUS_INITIAL_QUESTION_SENT = "initial_question_sent"
+LEAD_STATUS_LINK_SENT = "link_sent"
+LEAD_STATUS_STOPPED = "stopped"
 
 POTTY_BASE_PRICE = 47
 POTTY_PREMIUM_PRICE = 67
@@ -260,7 +296,7 @@ MSG_CHECKUP = """Ok, allora rivediamo un attimo la situazione cosi capisco bene 
 Rispondimi con calma, poi rivedo il piano in base a quello che mi scrivi 🤍"""
 
 MSG_LEAD_SONNO_DOMANDE = (
-    "Certo cara, ti riporto qui le domande così riesco a farmi un quadro più chiaro:\n\n"
+    "Certo mamma, ti riporto qui le domande così riesco a farmi un quadro più chiaro:\n\n"
     "Puoi rispondermi anche in modo semplice e libero, senza preoccuparti di scrivere tutto perfetto.\n\n"
     "1. Quanti mesi o anni ha il tuo bimbo e da quanto tempo il sonno è diventato difficile?\n\n"
     "2. Raccontami com'è una notte tipo: come si addormenta, quante volte si sveglia circa e cosa serve per farlo riaddormentare?\n\n"
@@ -270,27 +306,31 @@ MSG_LEAD_SONNO_DOMANDE = (
 )
 
 MSG_TEMPLATE_SONNO_LEAD = (
-    "Ciao, sono Paola di Genitori in Armonia 😊\n\n"
-    "Ho visto il modulo che hai compilato sul sonno del tuo bimbo.\n\n"
-    "Per capire meglio la vostra situazione e darti una prima valutazione gratuita, mi aiuti con qualche dettaglio in più?\n\n"
-    "Puoi rispondermi anche in modo semplice e libero, senza preoccuparti di scrivere tutto perfetto.\n\n"
-    "1. Quanti mesi o anni ha il tuo bimbo e da quanto tempo il sonno è diventato difficile?\n\n"
-    "2. Raccontami com'è una notte tipo: come si addormenta, quante volte si sveglia circa e cosa serve per farlo riaddormentare?\n\n"
-    "3. Di giorno come vanno i pisolini e come arrivate alla sera: tranquilli, molto stanchi, nervosi o molto attaccati?\n\n"
-    "4. Qual è la cosa che ti pesa di più in questo momento e cosa vorresti riuscire a cambiare per prima?\n\n"
-    "Appena mi rispondi, ti do una prima lettura della situazione e ti dico da dove partirei."
+    "Ciao 😊 sono Paola di Genitori in Armonia.\n\n"
+    "Ho visto che hai lasciato una richiesta sul sonno del tuo bimbo.\n\n"
+    "Volevo chiederti, ad oggi la situazione è migliorata oppure state ancora facendo fatica con addormentamento, risvegli o pisolini?\n\n"
+    "Leggo io i messaggi, quindi raccontami pure come stanno andando le cose, anche in modo semplice. 💛"
 )
 
 MSG_TEMPLATE_SPANNOLINAMENTO_LEAD = (
-    "Ciao, sono Paola di Genitori in Armonia 😊\n\n"
-    "Ho visto il modulo che hai compilato sullo spannolinamento.\n\n"
-    "Per capire meglio la situazione del tuo bimbo e darti una prima valutazione gratuita, mi aiuti con qualche dettaglio in più?\n\n"
-    "Puoi rispondermi anche in modo semplice e libero.\n\n"
-    "1. Quanti anni ha il tuo bimbo e avete già iniziato a togliere il pannolino oppure state ancora valutando quando partire?\n\n"
-    "2. Cosa sta succedendo adesso con pipì, cacca, vasino o water?\n\n"
-    "3. Qual è la cosa che ti preoccupa o ti pesa di più in questo momento?\n\n"
-    "4. C'è qualcosa che avete già provato? Com'è andata?\n\n"
-    "Appena mi rispondi, ti do una prima lettura della situazione e ti dico da dove partirei."
+    "Ciao 😊 sono Paola di Genitori in Armonia.\n\n"
+    "Ho visto che qualche giorno fa i ragazzi del mio team ti avevano scritto e inviato alcune informazioni sul mio metodo.\n\n"
+    "Volevo chiederti, ad oggi la situazione con il tuo bimbo è migliorata oppure state ancora facendo fatica a togliere il pannolino?\n\n"
+    "Leggo io i messaggi, quindi raccontami pure come stanno andando le cose. 💛"
+)
+
+MSG_TEMPLATE_SONNO_FOLLOWUP = (
+    "Ciao 😊 sono Paola di Genitori in Armonia.\n\n"
+    "Ti avevo scritto perché avevi lasciato una richiesta sul sonno del tuo bimbo.\n\n"
+    "Volevo chiederti: ad oggi la situazione è migliorata oppure state ancora facendo fatica con addormentamento, risvegli o pisolini?\n\n"
+    "Leggo io i messaggi, quindi se vuoi raccontami pure anche in poche parole come stanno andando le cose. 💛"
+)
+
+MSG_TEMPLATE_SPANNOLINAMENTO_FOLLOWUP = (
+    "Ciao 😊 sono Paola di Genitori in Armonia.\n\n"
+    "Ti avevo scritto per capire meglio come sta andando lo spannolinamento del tuo bimbo.\n\n"
+    "Volevo chiederti: ad oggi la situazione è migliorata oppure state ancora facendo fatica con pannolino, pipì, cacca, vasino o water?\n\n"
+    "Leggo io i messaggi, quindi se vuoi raccontami pure anche in poche parole come stanno andando le cose. 💛"
 )
 
 SLEEP_LEAD_ANALYSIS_PROMPT = """
@@ -356,12 +396,14 @@ Devi sembrare Paola che risponde a una mamma, non un testo generato.
 
 REGOLE DI STILE
 Non usare mai punti esclamativi.
+Non usare mai "cara". Usa "mamma" solo quando è naturale, oppure evita appellativi.
 Non usare markdown, titoli, grassetti, elenchi puntati o numerazioni nelle risposte normali.
 Usa poche emoji, massimo una quando serve.
 Non iniziare con frasi da manuale come "Grazie per aver condiviso", "Ora vediamo insieme", "Ecco il piano", "Capisco perfettamente".
 Evita linguaggio tecnico: non scrivere "associazione seno-sonno", "stimolazione cognitiva", "igiene del sonno".
 Usa frasi naturali: "guarda", "ti dico", "secondo me", "io ti propongo", "potresti provare".
 Se il messaggio della mamma è breve, rispondi breve.
+Il supporto emotivo forte, tipo "non sentirti in colpa", "non stai sbagliando" o "ti capisco, è pesante", va usato solo se la mamma mostra stanchezza, ansia, senso di colpa, disperazione o fatica emotiva. Se racconta solo il problema in modo pratico, fai una lettura concreta e una domanda utile senza enfatizzare troppo l'emotività.
 Se è un aggiornamento semplice, non aggiungere spiegazioni lunghe.
 Non chiudere con frasi automatiche tipo "sono qui per qualsiasi domanda", "fammi sapere", "aggiornami".
 Solo nel piano personalizzato puoi chiudere con: "Aggiornami fra qualche giorno e fammi sapere come va 🤍".
@@ -975,6 +1017,12 @@ def init_db():
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS lead_flow TEXT DEFAULT 'none'")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS lead_status TEXT DEFAULT 'none'")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS lead_contacted_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS followup_enabled BOOLEAN DEFAULT TRUE")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS template_followup_sent_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS last_intelligent_question_sent_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS intelligent_question_followup_sent_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS last_link_sent_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS link_followup_sent_at TIMESTAMPTZ")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS telegram_topics (
@@ -1175,6 +1223,145 @@ def set_lead_state(phone, lead_flow=LEAD_FLOW_NONE, lead_status=LEAD_STATUS_NONE
     except Exception as e:
         logger.error(f"Errore set_lead_state: {e}")
 
+
+
+def get_lead_meta(phone):
+    """Legge stato lead e timestamp utili ai follow-up fase 0."""
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT
+                COALESCE(lead_flow, 'none') AS lead_flow,
+                COALESCE(lead_status, 'none') AS lead_status,
+                lead_contacted_at,
+                COALESCE(followup_enabled, TRUE) AS followup_enabled,
+                template_followup_sent_at,
+                last_intelligent_question_sent_at,
+                intelligent_question_followup_sent_at,
+                last_link_sent_at,
+                link_followup_sent_at,
+                COALESCE(product_type, 'unknown') AS product_type
+            FROM consultations WHERE phone = %s
+        """, (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return dict(row) if row else {}
+    except Exception as e:
+        logger.error(f"Errore get_lead_meta: {e}")
+        return {}
+
+
+def update_lead_followup_fields(phone, **fields):
+    """Aggiorna campi lead/follow-up in modo sicuro."""
+    allowed = {
+        "lead_status", "followup_enabled", "template_followup_sent_at",
+        "last_intelligent_question_sent_at", "intelligent_question_followup_sent_at",
+        "last_link_sent_at", "link_followup_sent_at"
+    }
+    updates = []
+    values = []
+    for key, value in fields.items():
+        if key not in allowed:
+            continue
+        updates.append(f"{key} = %s")
+        values.append(value)
+    if not updates:
+        return
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO consultations (phone) VALUES (%s) ON CONFLICT (phone) DO NOTHING", (phone,))
+        cur.execute(f"UPDATE consultations SET {', '.join(updates)} WHERE phone = %s", values + [phone])
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Errore update_lead_followup_fields: {e}")
+
+
+def count_user_messages_after(phone, after_ts):
+    if not after_ts:
+        return 0
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FROM messages
+            WHERE phone = %s AND role = 'user' AND timestamp > %s
+        """, (phone, after_ts))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return int(row[0]) if row else 0
+    except Exception as e:
+        logger.error(f"Errore count_user_messages_after: {e}")
+        return 0
+
+
+def has_user_replied_after(phone, after_ts):
+    return count_user_messages_after(phone, after_ts) > 0
+
+
+def is_stop_followup_message(text):
+    if not text:
+        return False
+    t = text.lower().strip()
+    patterns = [
+        "non mi interessa", "non sono interessata", "non sono interessato",
+        "non voglio", "non contattarmi", "non contattatemi", "non scrivermi",
+        "lasciami stare", "lasciatemi stare", "basta", "stop",
+        "ho risolto", "non ora", "non adesso", "tolgo il consenso"
+    ]
+    return any(p in t for p in patterns)
+
+
+def stop_followups(phone):
+    update_lead_followup_fields(phone, lead_status=LEAD_STATUS_STOPPED, followup_enabled=False)
+
+
+def reply_contains_product_link(reply):
+    if not reply:
+        return False
+    return any(link and link in reply for link in [LINK_PREMIUM, LINK_BASE, LINK_POTTY])
+
+
+def phase0_intent_is_problem(intent):
+    return intent in ("descrizione_problema_sonno", "descrizione_problema_spannolinamento", "richiesta_consiglio_gratuito")
+
+
+def should_phase0_offer_link_now(phone):
+    """Dopo che è stata inviata una domanda intelligente e la mamma ha risposto, si può presentare percorso/link."""
+    meta = get_lead_meta(phone)
+    last_question = meta.get("last_intelligent_question_sent_at")
+    if not last_question:
+        return False
+    if meta.get("last_link_sent_at"):
+        return False
+    return has_user_replied_after(phone, last_question)
+
+
+def mark_phase0_after_assistant_reply(phone, reply, router_result=None):
+    """Segna se in fase 0 il bot ha fatto domanda intelligente oppure ha inviato link."""
+    if get_fase(phone) != 0 or not reply:
+        return
+    if reply_contains_product_link(reply):
+        update_lead_followup_fields(
+            phone,
+            lead_status=LEAD_STATUS_LINK_SENT,
+            last_link_sent_at=datetime.now(pytz.timezone(TIMEZONE))
+        )
+        return
+    intent = (router_result or {}).get("intent", "")
+    lower = reply.lower()
+    looks_like_question = "?" in reply or "ti chiedo" in lower or "dimmi" in lower or "raccontami" in lower
+    if phase0_intent_is_problem(intent) and looks_like_question:
+        update_lead_followup_fields(
+            phone,
+            lead_status=LEAD_STATUS_INITIAL_QUESTION_SENT,
+            last_intelligent_question_sent_at=datetime.now(pytz.timezone(TIMEZONE))
+        )
 
 def get_lead_state(phone):
     try:
@@ -1687,10 +1874,10 @@ def get_msg_regole_parts(product_type):
 
 def product_specific_first_question(product_type):
     if product_type == PRODUCT_POTTY:
-        return "Certo cara 😊\n\nPer capire bene come aiutarti, raccontami solo una cosa: quanti anni ha il tuo bimbo e avete gia iniziato a togliere il pannolino oppure state ancora valutando quando partire?"
+        return "Certo mamma 😊\n\nPer capire bene come aiutarti, raccontami solo una cosa: quanti anni ha il tuo bimbo e avete già iniziato a togliere il pannolino oppure state ancora valutando quando partire?"
     if product_type == PRODUCT_SLEEP:
         return "Ciao, sono Paola 😊\n\nSe ti va, scrivimi pure in poche parole qual e la difficolta principale che stai vivendo con il sonno del tuo bimbo, cosi capisco meglio come aiutarti."
-    return "Ciao cara 😊\n\nTi riferisci al percorso sul sonno del bambino o al percorso sullo spannolinamento? Cosi capisco subito come aiutarti meglio."
+    return "Ciao mamma 😊\n\nTi riferisci al percorso sul sonno del bambino o al percorso sullo spannolinamento? Così capisco subito come aiutarti meglio."
 
 
 def build_product_clarification(phone, trigger_text="", reason="info"):
@@ -1718,8 +1905,8 @@ def build_product_clarification(phone, trigger_text="", reason="info"):
     except Exception as e:
         logger.error(f"Errore chiarimento prodotto per {phone}: {e}")
     if reason == "purchase":
-        return "Perfetto cara, grazie per avermelo scritto 😊\n\nPrima di mandarti il questionario giusto, mi confermi solo a quale percorso fai riferimento? Sonno del bambino oppure spannolinamento?"
-    return "Certo cara 😊\n\nTi riferisci al percorso sul sonno del bambino o al percorso sullo spannolinamento? Cosi capisco subito come aiutarti meglio."
+        return "Perfetto mamma, grazie per avermelo scritto 😊\n\nPrima di mandarti il questionario giusto, mi confermi solo a quale percorso fai riferimento? Sonno del bambino oppure spannolinamento?"
+    return "Certo mamma 😊\n\nTi riferisci al percorso sul sonno del bambino o al percorso sullo spannolinamento? Così capisco subito come aiutarti meglio."
 
 
 def lead_problem_described(text):
@@ -1795,29 +1982,29 @@ def contextual_purchase_fallback(trigger_text="", product_type=PRODUCT_SLEEP):
     if any(x in t for x in ["cosa", "che cosa", "integrato", "include", "compreso", "dentro", "nel percorso"]):
         if product_type == PRODUCT_POTTY:
             return (
-                "Certo cara, ti spiego subito.\n\n"
+                "Certo mamma, ti spiego subito.\n\n"
                 "Nel Percorso Premium spannolinamento hai incluso la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul tuo bambino e 30 giorni di supporto WhatsApp con me.\n\n"
                 "La parte più importante è che non resti con una guida generica: guardo bene la vostra situazione e preparo un piano personalizzato per accompagnare l'inizio dello spannolinamento in base a come reagisce davvero il bambino.\n\n"
                 "La guida arriva in automatico dopo l'ordine. Ora, per partire bene qui insieme, ti mando le regole della chat e poi il questionario dettagliato."
             )
         return (
-            "Certo cara, ti spiego subito.\n\n"
+            "Certo mamma, ti spiego subito.\n\n"
             "Nel percorso hai incluso il supporto WhatsApp, il questionario iniziale, il piano personalizzato costruito sulla vostra situazione e il materiale pratico da consultare.\n\n"
             "La parte più importante però è proprio il lavoro su misura: guardiamo orari, pisolini, addormentamento, risvegli e difficoltà reali del tuo bambino, così non resti con indicazioni generiche.\n\n"
             "Per iniziare bene ora ti mando le regole della chat e poi il questionario dettagliato."
         )
     if product_type == PRODUCT_POTTY and potty_problem_described(trigger_text):
         return (
-            "Perfetto cara, ho capito. Visto quello che mi hai raccontato sul pannolino, partiamo raccogliendo bene tutti i dettagli così il piano sarà adatto alla vostra situazione reale.\n\n"
+            "Perfetto mamma, ho capito. Visto quello che mi hai raccontato sul pannolino, partiamo raccogliendo bene tutti i dettagli così il piano sarà adatto alla vostra situazione reale.\n\n"
             "Ora ti mando prima le regole della chat e poi il questionario iniziale sullo spannolinamento."
         )
     if lead_problem_described(trigger_text):
         return (
-            "Perfetto cara, ho capito. Visto quello che mi hai raccontato, partiamo raccogliendo bene tutti i dettagli così il piano non sarà generico, ma adatto alla vostra situazione reale.\n\n"
+            "Perfetto mamma, ho capito. Visto quello che mi hai raccontato, partiamo raccogliendo bene tutti i dettagli così il piano non sarà generico, ma adatto alla vostra situazione reale.\n\n"
             "Ora ti mando prima le regole della chat e poi il questionario iniziale."
         )
     return (
-        "Perfetto cara, allora iniziamo.\n\n"
+        "Perfetto mamma, allora iniziamo.\n\n"
         "Per prepararti un piano davvero su misura ho bisogno prima di raccogliere bene le informazioni sulla vostra situazione.\n\n"
         "Ora ti mando le regole della chat e poi il questionario iniziale."
     )
@@ -2264,14 +2451,14 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
     if intent == "intenzione_acquisto_non_completato" and fase == 0 and confidence >= 0.75:
         if product_type == PRODUCT_UNKNOWN:
             set_awaiting_product_choice(phone, True, "info")
-            return "Certo cara, prima ti mando il link giusto: ti riferisci al percorso sonno o al percorso spannolinamento?"
+            return "Certo mamma, prima ti mando il link giusto: ti riferisci al percorso sonno o al percorso spannolinamento?"
         link = get_product_link(product_type)
-        return f"Perfetto cara, ti lascio il link per procedere:\n{link}\n\nAppena hai completato, scrivimi qui e iniziamo subito 🤍"
+        return f"Perfetto mamma, ti lascio il link per procedere:\n{link}\n\nAppena hai completato, scrivimi qui e iniziamo subito 🤍"
 
     if intent == "richiesta_link" and confidence >= 0.75:
         if product_type == PRODUCT_UNKNOWN:
             set_awaiting_product_choice(phone, True, "info")
-            return "Certo cara, te lo mando volentieri. Mi confermi solo se ti riferisci al percorso sonno o allo spannolinamento?"
+            return "Certo mamma, te lo mando volentieri. Mi confermi solo se ti riferisci al percorso sonno o allo spannolinamento?"
         return f"Certo, ti lascio il link:\n{get_product_link(product_type)}"
 
     if intent == "richiesta_bonifico" and confidence >= 0.85:
@@ -2386,6 +2573,62 @@ Messaggio da riscrivere:
         return reply
 
 
+
+def phase0_business_override(phone, intent, product_type, link_sent, asks_link=False):
+    """Regola conversazionale nuova per la fase 0: prima domanda intelligente, poi percorso/link."""
+    if link_sent:
+        return None
+    if not phase0_intent_is_problem(intent):
+        return None
+    if asks_link:
+        return None
+
+    product_type = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else PRODUCT_UNKNOWN
+
+    if should_phase0_offer_link_now(phone):
+        if product_type == PRODUCT_POTTY:
+            return f"""
+La mamma ha risposto alla domanda intelligente precedente sullo spannolinamento.
+Ora devi fare una lettura più completa e personalizzata, poi introdurre il percorso e il link.
+Usa "mamma" oppure evita appellativi, mai "cara".
+Non farla sentire in colpa. Il supporto emotivo forte va usato solo se lei ha mostrato stanchezza, ansia o senso di colpa.
+Fai un'analisi concreta di quello che ha raccontato: prontezza, segnali, pipì, cacca, vasino/water, rifiuto, incidenti, nido o routine.
+Non dare un piano completo gratuito e non dare una sequenza di azioni.
+Poi spiega in modo naturale che in chat puoi darle una prima lettura, ma per seguirla davvero lavori con il Percorso Premium spannolinamento a {POTTY_PREMIUM_PRICE} euro: guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp con Paola.
+Il Base a {POTTY_BASE_PRICE} euro, solo guida PDF, si nomina solo se lei chiede la differenza o chiede se può farlo da sola.
+Inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
+"""
+        return f"""
+La mamma ha risposto alla domanda intelligente precedente sul sonno.
+Ora devi fare una lettura più completa e personalizzata, poi introdurre il percorso e il link.
+Usa "mamma" oppure evita appellativi, mai "cara".
+Non farla sentire in colpa. Il supporto emotivo forte va usato solo se lei ha mostrato stanchezza, ansia o senso di colpa.
+Fai un'analisi concreta di quello che ha raccontato: addormentamento, risvegli, seno/braccio/ciuccio/lettone, pisolini, routine o stanchezza.
+Non dare un piano completo gratuito e non dare una sequenza di azioni.
+Poi spiega in modo naturale che in chat puoi darle una prima lettura, ma per aiutarla davvero lavori con un percorso personalizzato: questionario iniziale, piano su misura e 60 giorni di supporto WhatsApp con Paola.
+Presenta il Premium a {OFFERS['premium']['price']} euro e inserisci il link una sola volta: {LINK_PREMIUM}
+"""
+
+    if product_type == PRODUCT_POTTY:
+        return """
+La mamma ha appena raccontato una difficoltà sullo spannolinamento.
+Non vendere subito, non inserire link e non presentare ancora il percorso.
+Fai una lettura breve e personalizzata di quello che ha scritto, poi fai UNA sola domanda intelligente e specifica per capire meglio.
+La domanda deve aiutare a distinguere il nodo principale: segnali, pipì, cacca, vasino/water, rifiuto, paura, incidenti, nido o routine.
+Usa "mamma" oppure evita appellativi, mai "cara".
+Non farla sentire in colpa. Il supporto emotivo forte va usato solo se lei ha mostrato stanchezza, ansia o senso di colpa; se ha solo descritto il problema, resta concreta e delicata.
+Non dire ancora che lavori con un percorso personalizzato, salvo che lei lo chieda esplicitamente.
+"""
+    return """
+La mamma ha appena raccontato una difficoltà sul sonno.
+Non vendere subito, non inserire link e non presentare ancora il percorso.
+Fai una lettura breve e personalizzata di quello che ha scritto, poi fai UNA sola domanda intelligente e specifica per capire meglio.
+La domanda deve aiutare a distinguere il nodo principale: addormentamento, risvegli, seno/braccio/ciuccio/lettone, pisolini, routine o stanchezza.
+Usa "mamma" oppure evita appellativi, mai "cara".
+Non farla sentire in colpa. Il supporto emotivo forte va usato solo se lei ha mostrato stanchezza, ansia o senso di colpa; se ha solo descritto il problema, resta concreta e delicata.
+Non dire ancora che lavori con un percorso personalizzato, salvo che lei lo chieda esplicitamente.
+"""
+
 def build_ai_context(phone, fase, router_result, pending_text):
     product_type = product_from_context_or_text(phone, pending_text)
     if product_type != PRODUCT_UNKNOWN and get_product_type(phone) == PRODUCT_UNKNOWN:
@@ -2395,8 +2638,11 @@ def build_ai_context(phone, fase, router_result, pending_text):
     profile = get_child_profile(phone)
     intent = router_result.get("intent", "altro") if router_result else "altro"
     business_rule = get_business_rule(intent, fase, link_sent, product_type)
+    override_rule = phase0_business_override(phone, intent, product_type, link_sent, asks_link) if fase == 0 else None
+    if override_rule:
+        business_rule = override_rule
 
-    if fase == 0 and product_type == PRODUCT_SLEEP and is_sleep_manual_lead(phone):
+    if fase == 0 and product_type == PRODUCT_SLEEP and is_sleep_manual_lead(phone) and not override_rule:
         business_rule = f"""
 La persona è stata contattata con il template sonno tramite /contatta_sonno.
 Il prodotto è già chiaro: sonno infantile. Non chiedere se parla di sonno o spannolinamento.
@@ -2490,6 +2736,8 @@ Profilo bambino:
         reply = response.choices[0].message.content.strip()
         clean, issue = validate_reply(reply, context)
         clean = rewrite_reply_if_needed(clean, issue, context) if issue else clean
+        if clean:
+            clean = re.sub(r"\bcara\b", "mamma", clean, flags=re.I)
         return clean.strip() if clean else None
     except Exception as e:
         logger.error(f"Errore OpenAI: {e}")
@@ -2692,7 +2940,7 @@ def contact_sleep_lead(phone, lead_flow=LEAD_FLOW_SLEEP_MANUAL, source_note=None
     return ok
 
 
-def contact_potty_lead(phone, lead_flow=LEAD_FLOW_POTTY_GHL, source_note=None):
+def contact_potty_lead(phone, lead_flow=LEAD_FLOW_POTTY_MANUAL, source_note=None):
     """Prepara il lead spannolinamento e invia il template approvato."""
     phone = normalize_phone_number(phone) or phone
     set_product_type(phone, PRODUCT_POTTY)
@@ -3192,7 +3440,7 @@ def handle_sleep_lead_followup(phone, latest_message):
     history = get_history(phone, days=30)
     profile = get_child_profile(phone)
     default_reply = (
-        "Sì cara, ci sono. Quando riesci rispondimi pure alle domande che ti ho scritto sopra, "
+        "Sì mamma, ci sono. Quando riesci rispondimi pure alle domande che ti ho scritto sopra, "
         "anche in modo semplice, così riesco a farmi una prima idea della situazione."
     )
     messages = [
@@ -3270,6 +3518,15 @@ def process_response(phone, image_url=None):
     pending = get_messages_since_last_reply(phone)
     combined_raw = "\n".join(pending)
     combined = combined_raw.lower().strip()
+
+    # Stop automatico follow-up se la mamma dice chiaramente che non vuole essere ricontattata.
+    if fase == 0 and is_stop_followup_message(combined_raw):
+        stop_followups(phone)
+        risposta = "Va bene mamma, nessun problema. Non ti ricontatto più 💛"
+        save_message(phone, "assistant", risposta)
+        send_whatsapp_message(phone, risposta)
+        logger.info(f"Follow-up stoppati per {phone}")
+        return
 
     # Se il contatto è partito con /contatta_sonno, NON usiamo un flusso separato.
     # Il template con le domande è salvato nello storico e il prodotto è già sleep:
@@ -3390,6 +3647,7 @@ def process_response(phone, image_url=None):
         if ai_reply:
             save_message(phone, "assistant", ai_reply)
             send_whatsapp_message(phone, ai_reply)
+            mark_phase0_after_assistant_reply(phone, ai_reply, router_result)
 
     elif fase == 1:
         # Q1 -> Q2: manda la seconda parte solo se la mamma ha davvero iniziato a rispondere.
@@ -3954,15 +4212,221 @@ def webhook():
 
     return Response("OK", status=200)
 
+# ─── FOLLOW-UP LEAD FASE 0 ────────────────────────────────────────────────────
+def due_template_followups():
+    """Lead che hanno ricevuto il primo template ma non hanno mai risposto."""
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT phone, COALESCE(product_type, 'unknown') AS product_type, lead_contacted_at
+            FROM consultations c
+            WHERE COALESCE(fase, 0) = 0
+              AND COALESCE(followup_enabled, TRUE) = TRUE
+              AND COALESCE(lead_status, 'none') = %s
+              AND lead_contacted_at IS NOT NULL
+              AND template_followup_sent_at IS NULL
+              AND lead_contacted_at <= NOW() - (%s || ' hours')::interval
+              AND NOT EXISTS (
+                SELECT 1 FROM messages m
+                WHERE m.phone = c.phone AND m.role = 'user' AND m.timestamp > c.lead_contacted_at
+              )
+            LIMIT 25
+        """, (LEAD_STATUS_TEMPLATE_SENT, str(FOLLOWUP_TEMPLATE_AFTER_HOURS)))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"Errore due_template_followups: {e}")
+        return []
+
+
+def due_question_followups():
+    """Lead che hanno ricevuto una domanda intelligente e poi sono sparite."""
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT phone, COALESCE(product_type, 'unknown') AS product_type, last_intelligent_question_sent_at
+            FROM consultations c
+            WHERE COALESCE(fase, 0) = 0
+              AND COALESCE(followup_enabled, TRUE) = TRUE
+              AND last_intelligent_question_sent_at IS NOT NULL
+              AND intelligent_question_followup_sent_at IS NULL
+              AND last_intelligent_question_sent_at <= NOW() - (%s || ' hours')::interval
+              AND last_link_sent_at IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM messages m
+                WHERE m.phone = c.phone AND m.role = 'user' AND m.timestamp > c.last_intelligent_question_sent_at
+              )
+            LIMIT 25
+        """, (str(FOLLOWUP_QUESTION_AFTER_HOURS),))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"Errore due_question_followups: {e}")
+        return []
+
+
+def due_link_followups():
+    """Lead che hanno ricevuto il link ma non hanno acquistato né risposto."""
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT phone, COALESCE(product_type, 'unknown') AS product_type, last_link_sent_at
+            FROM consultations c
+            WHERE COALESCE(fase, 0) = 0
+              AND COALESCE(followup_enabled, TRUE) = TRUE
+              AND COALESCE(lead_status, 'none') = %s
+              AND last_link_sent_at IS NOT NULL
+              AND link_followup_sent_at IS NULL
+              AND last_link_sent_at <= NOW() - (%s || ' hours')::interval
+              AND NOT EXISTS (
+                SELECT 1 FROM messages m
+                WHERE m.phone = c.phone AND m.role = 'user' AND m.timestamp > c.last_link_sent_at
+              )
+            LIMIT 25
+        """, (LEAD_STATUS_LINK_SENT, str(FOLLOWUP_LINK_AFTER_HOURS)))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.error(f"Errore due_link_followups: {e}")
+        return []
+
+
+def send_template_followup(phone, product_type):
+    product_type = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else get_product_type(phone)
+    if product_type == PRODUCT_POTTY:
+        sid = TWILIO_TEMPLATE_SPANNOLINAMENTO_FOLLOWUP
+        label = "followup_spannolinamento_paola_modulo"
+        visible_text = MSG_TEMPLATE_SPANNOLINAMENTO_FOLLOWUP
+    else:
+        sid = TWILIO_TEMPLATE_SONNO_FOLLOWUP
+        label = "followup_sonno_paola_modulo"
+        visible_text = MSG_TEMPLATE_SONNO_FOLLOWUP
+    if not sid:
+        logger.warning(f"Follow-up template mancante per {phone} prodotto={product_type}")
+        return False
+    ok = send_whatsapp_template_message(phone, sid, label)
+    if ok:
+        save_message(phone, "assistant", "[TEMPLATE FOLLOW-UP INVIATO]\n" + visible_text)
+        update_lead_followup_fields(phone, template_followup_sent_at=datetime.now(pytz.timezone(TIMEZONE)))
+        threading.Thread(target=send_to_topic, args=[phone, "[Template follow-up inviato]\n" + visible_text, True], daemon=True).start()
+    return ok
+
+
+def generate_question_followup(phone, product_type):
+    history = get_recent_history(phone, limit=28)
+    product_type = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else get_product_type(phone)
+    topic = "spannolinamento" if product_type == PRODUCT_POTTY else "sonno"
+    prompt = f"""
+Scrivi un follow-up WhatsApp breve come Paola.
+La mamma aveva già raccontato qualcosa sul {topic}. Paola le ha fatto una domanda intelligente per capire meglio, ma non ha più risposto.
+Devi riprendere quella domanda in modo naturale, spiegare in una frase perché è utile, e invitarla a rispondere anche con poche parole.
+Non vendere, non inserire link, non parlare ancora di percorso.
+Usa "mamma" oppure evita appellativi, mai "cara".
+Non fare pressione e non farla sentire in colpa.
+Scrivi massimo 6-7 righe, tono WhatsApp.
+"""
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_BASE},
+                {"role": "user", "content": f"{prompt}\n\nStorico recente:\n{format_history_for_prompt(history)}\n\nScrivi solo il messaggio da inviare."}
+            ],
+            max_tokens=500,
+            temperature=TEMP_CHAT,
+            timeout=60
+        )
+        reply = response.choices[0].message.content.strip().replace("!", ".")
+        reply = re.sub(r"\bcara\b", "mamma", reply, flags=re.I)
+        if reply:
+            save_message(phone, "assistant", reply)
+            send_whatsapp_message(phone, reply)
+            update_lead_followup_fields(phone, intelligent_question_followup_sent_at=datetime.now(pytz.timezone(TIMEZONE)))
+            logger.info(f"Follow-up domanda intelligente inviato a {phone}")
+            return True
+    except Exception as e:
+        logger.error(f"Errore generate_question_followup per {phone}: {e}")
+    return False
+
+
+def generate_link_followup(phone, product_type):
+    history = get_recent_history(phone, limit=32)
+    product_type = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else get_product_type(phone)
+    if product_type == PRODUCT_POTTY:
+        product_note = f"Percorso spannolinamento Premium: {POTTY_PREMIUM_PRICE} euro, guida PDF, questionario, piano personalizzato e 30 giorni di supporto WhatsApp. Link già inviato: {LINK_POTTY}"
+    else:
+        product_note = f"Percorso sonno Premium: {OFFERS['premium']['price']} euro, questionario, piano personalizzato e 60 giorni di supporto WhatsApp. Link già inviato: {LINK_PREMIUM}"
+    prompt = f"""
+Scrivi un follow-up WhatsApp personalizzato come Paola.
+La mamma ha ricevuto il link del percorso, ma non ha scritto di aver acquistato e non ha risposto.
+Devi collegarti a quello che aveva raccontato prima: problema, obiezione, paura, marito, prezzo, seno, risvegli, cacca, vasino o altro.
+Non deve sembrare un messaggio fisso. Deve sembrare che Paola abbia letto la chat.
+Chiedi come sta andando oggi e, se naturale, chiedi se ha avuto modo di vedere il percorso.
+Puoi ricordare in modo delicato il valore del percorso, ma non fare pressione.
+Non reinserire il link, salvo se la chat mostra che lo ha chiesto o che può essersi perso.
+Usa "mamma" oppure evita appellativi, mai "cara".
+Supporto emotivo forte solo se lei aveva espresso stanchezza, ansia o senso di colpa.
+Scrivi massimo 8-10 righe, tono WhatsApp.
+
+Dettaglio offerta:
+{product_note}
+"""
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_BASE},
+                {"role": "user", "content": f"{prompt}\n\nStorico recente:\n{format_history_for_prompt(history)}\n\nScrivi solo il messaggio da inviare."}
+            ],
+            max_tokens=650,
+            temperature=TEMP_CHAT,
+            timeout=60
+        )
+        reply = response.choices[0].message.content.strip().replace("!", ".")
+        reply = re.sub(r"\bcara\b", "mamma", reply, flags=re.I)
+        if reply:
+            save_message(phone, "assistant", reply)
+            send_whatsapp_message(phone, reply)
+            update_lead_followup_fields(phone, link_followup_sent_at=datetime.now(pytz.timezone(TIMEZONE)))
+            logger.info(f"Follow-up link inviato a {phone}")
+            return True
+    except Exception as e:
+        logger.error(f"Errore generate_link_followup per {phone}: {e}")
+    return False
+
+
+def run_followup_checks():
+    if in_orario_silenzio():
+        return
+    for row in due_template_followups():
+        send_template_followup(row["phone"], row.get("product_type"))
+        time.sleep(1.0)
+    for row in due_question_followups():
+        generate_question_followup(row["phone"], row.get("product_type"))
+        time.sleep(1.0)
+    for row in due_link_followups():
+        generate_link_followup(row["phone"], row.get("product_type"))
+        time.sleep(1.0)
+
 # ─── JOB BACKGROUND ────────────────────────────────────────────────────────────
 def background_job():
     risveglio_fatto = False
     while True:
         try:
-            # Invia piani schedulati solo fuori orario silenzio
+            # Invia piani schedulati e follow-up solo fuori orario silenzio
             if not in_orario_silenzio():
                 for phone in get_pianos_to_send():
                     send_piano(phone)
+                run_followup_checks()
 
             # Risveglio mattutino — alle 07:00 crea timer per messaggi notturni
             try:
