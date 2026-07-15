@@ -86,6 +86,7 @@ TWILIO_TEMPLATE_SPANNOLINAMENTO_FOLLOWUP = env_first(
 FOLLOWUP_TEMPLATE_AFTER_HOURS = float(os.environ.get("FOLLOWUP_TEMPLATE_AFTER_HOURS", "8"))
 FOLLOWUP_QUESTION_AFTER_HOURS = float(os.environ.get("FOLLOWUP_QUESTION_AFTER_HOURS", "8"))
 FOLLOWUP_LINK_AFTER_HOURS = float(os.environ.get("FOLLOWUP_LINK_AFTER_HOURS", "18"))
+FOLLOWUP_COLD_AFTER_HOURS = float(os.environ.get("FOLLOWUP_COLD_AFTER_HOURS", "24"))
 
 GHL_WEBHOOK_SECRET = os.environ.get("GHL_WEBHOOK_SECRET", "").strip()
 
@@ -101,6 +102,8 @@ LEAD_STATUS_ANALYSIS_DONE = "analysis_done"
 LEAD_STATUS_INITIAL_QUESTION_SENT = "initial_question_sent"
 LEAD_STATUS_LINK_SENT = "link_sent"
 LEAD_STATUS_STOPPED = "stopped"
+LEAD_STATUS_LINK_FOLLOWUP_SENT = "link_followup_sent"
+LEAD_STATUS_COLD = "cold"
 
 POTTY_BASE_PRICE = 47
 POTTY_PREMIUM_PRICE = 67
@@ -2597,7 +2600,7 @@ Poi fai una lettura più completa e personalizzata, introduci il percorso e il l
 Usa "mamma" oppure evita appellativi, mai "cara".
 Non farla sentire in colpa. Il supporto emotivo forte va usato solo se lei ha mostrato stanchezza, ansia o senso di colpa.
 Fai un'analisi concreta di quello che ha raccontato: prontezza, segnali, pipì, cacca, vasino/water, rifiuto, incidenti, nido o routine.
-Non dare un piano completo gratuito e non dare una sequenza di azioni.
+Prima di proporre il percorso, aggiungi SEMPRE una breve direzione di lavoro, personalizzata sul suo caso, spiegando su cosa lavoreresti o da dove partiresti; resta generale e non dare una sequenza di azioni o un piano completo gratuito.
 Quando proponi il percorso, non usare formule tipo "in chat posso darti una prima lettura" o "in chat posso aiutarti fino a un certo punto".
 Dì invece in modo naturale che questa è una prima lettura, ma per aiutarli davvero serve un percorso più personalizzato e collegalo al problema principale che lei ha raccontato.
 Consiglia il Premium come scelta più adatta per il suo caso, spiegando in modo dinamico che non è solo una guida: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
@@ -2613,7 +2616,7 @@ Poi fai una lettura più completa e personalizzata, introduci il percorso e il l
 Usa "mamma" oppure evita appellativi, mai "cara".
 Non farla sentire in colpa. Il supporto emotivo forte va usato solo se lei ha mostrato stanchezza, ansia o senso di colpa.
 Fai un'analisi concreta di quello che ha raccontato: addormentamento, risvegli, seno/braccio/ciuccio/lettone, pisolini, routine o stanchezza.
-Non dare un piano completo gratuito e non dare una sequenza di azioni.
+Prima di proporre il percorso, aggiungi SEMPRE una breve direzione di lavoro, personalizzata sul suo caso, spiegando su cosa lavoreresti o da dove partiresti; resta generale e non dare una sequenza di azioni o un piano completo gratuito.
 Quando proponi il percorso, non usare formule tipo "in chat posso darti una prima lettura" o "in chat posso aiutarti fino a un certo punto".
 Dì invece in modo naturale che questa è una prima lettura, ma per aiutarli davvero serve un percorso più personalizzato e collegalo al problema principale che lei ha raccontato.
 Consiglia il Premium come scelta più adatta per il suo caso, spiegando in modo dinamico che comprende questionario iniziale, piano personalizzato sul bambino e 60 giorni di supporto WhatsApp con Paola.
@@ -4412,12 +4415,44 @@ Dettaglio offerta:
         if reply:
             save_message(phone, "assistant", reply)
             send_whatsapp_message(phone, reply)
-            update_lead_followup_fields(phone, link_followup_sent_at=datetime.now(pytz.timezone(TIMEZONE)))
+            update_lead_followup_fields(phone, link_followup_sent_at=datetime.now(pytz.timezone(TIMEZONE)), lead_status=LEAD_STATUS_LINK_FOLLOWUP_SENT)
             logger.info(f"Follow-up link inviato a {phone}")
             return True
     except Exception as e:
         logger.error(f"Errore generate_link_followup per {phone}: {e}")
     return False
+
+
+def mark_silent_after_link_followup_cold():
+    """Dopo il follow-up post-link, se resta silenzio, chiude i follow-up e segna il lead freddo."""
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            UPDATE consultations c
+            SET lead_status = %s,
+                followup_enabled = FALSE
+            WHERE COALESCE(fase, 0) = 0
+              AND COALESCE(followup_enabled, TRUE) = TRUE
+              AND COALESCE(lead_status, 'none') = %s
+              AND link_followup_sent_at IS NOT NULL
+              AND link_followup_sent_at <= NOW() - (%s || ' hours')::interval
+              AND NOT EXISTS (
+                SELECT 1 FROM messages m
+                WHERE m.phone = c.phone AND m.role = 'user' AND m.timestamp > c.link_followup_sent_at
+              )
+            RETURNING phone
+        """, (LEAD_STATUS_COLD, LEAD_STATUS_LINK_FOLLOWUP_SENT, str(FOLLOWUP_COLD_AFTER_HOURS)))
+        rows = cur.fetchall()
+        conn.commit()
+        cur.close()
+        conn.close()
+        for r in rows:
+            logger.info(f"Lead segnato cold dopo silenzio post-link: {r.get('phone')}")
+        return len(rows)
+    except Exception as e:
+        logger.error(f"Errore mark_silent_after_link_followup_cold: {e}")
+        return 0
 
 
 def run_followup_checks():
@@ -4432,6 +4467,7 @@ def run_followup_checks():
     for row in due_link_followups():
         generate_link_followup(row["phone"], row.get("product_type"))
         time.sleep(1.0)
+    mark_silent_after_link_followup_cold()
 
 # ─── JOB BACKGROUND ────────────────────────────────────────────────────────────
 def background_job():
