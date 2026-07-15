@@ -508,11 +508,14 @@ Scrivi solo il testo da inviare alla mamma.
 Non spiegare il ragionamento.
 Non dire che hai classificato il messaggio.
 Non parlare mai di consulenza scaduta o fine percorso.
+Non usare mai "cara": usa "mamma" solo quando suona naturale, altrimenti evita appellativi.
 
 In fase 0 ci sono casi diversi.
 Se non è chiaro se parla di sonno o spannolinamento, chiedi prima a quale percorso si riferisce.
 Se la persona scrive solo ciao, info, vorrei informazioni, quanto costa o come funziona senza raccontare il problema, non vendere subito: chiedi prima il prodotto o la difficoltà principale specifica del prodotto.
-Se invece non ha ancora acquistato ma descrive già un problema concreto di sonno o spannolinamento, fai una prima analisi breve e personalizzata: falla sentire capita, spiega la dinamica in modo semplice, non dare un piano gratuito e non dare una sequenza completa di azioni. Poi presenta il percorso e il link se non è già stato inviato.
+Se invece non ha ancora acquistato ma descrive per la prima volta un problema concreto di sonno o spannolinamento, non vendere subito e non inserire il link: ringrazia in modo umano se naturale, fai una lettura breve e personalizzata, poi fai una sola domanda intelligente per capire meglio.
+Se la mamma sta rispondendo a una domanda intelligente precedente, allora apri in modo accogliente, ad esempio "Grazie mamma, questo dettaglio mi aiuta a capire meglio", poi fai un'analisi più completa e introduci il percorso/link seguendo la regola business.
+Il supporto emotivo forte va usato solo se lei lo palesa con frasi come "sono distrutta", "non ce la faccio", "mi sento in colpa", "sono disperata". Se racconta solo il problema, resta concreta, calda e professionale.
 Se dichiara di aver già acquistato, il codice avvia la sequenza acquisto corretta; se l'acquisto è generico, prima chiede sonno o spannolinamento.
 
 Se la persona è in percorso attivo, dai indicazioni concrete ma non troppe insieme.
@@ -2589,30 +2592,41 @@ def phase0_business_override(phone, intent, product_type, link_sent, asks_link=F
         if product_type == PRODUCT_POTTY:
             return f"""
 La mamma ha risposto alla domanda intelligente precedente sullo spannolinamento.
-Ora devi fare una lettura più completa e personalizzata, poi introdurre il percorso e il link.
+Apri in modo umano e accogliente, per esempio ringraziandola perché il dettaglio aiuta a capire meglio; non essere fredda e non sembrare automatica.
+Poi fai una lettura più completa e personalizzata, introduci il percorso e il link.
 Usa "mamma" oppure evita appellativi, mai "cara".
 Non farla sentire in colpa. Il supporto emotivo forte va usato solo se lei ha mostrato stanchezza, ansia o senso di colpa.
 Fai un'analisi concreta di quello che ha raccontato: prontezza, segnali, pipì, cacca, vasino/water, rifiuto, incidenti, nido o routine.
 Non dare un piano completo gratuito e non dare una sequenza di azioni.
-Poi spiega in modo naturale che in chat puoi darle una prima lettura, ma per seguirla davvero lavori con il Percorso Premium spannolinamento a {POTTY_PREMIUM_PRICE} euro: guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp con Paola.
+Quando proponi il percorso, non usare formule tipo "in chat posso darti una prima lettura" o "in chat posso aiutarti fino a un certo punto".
+Dì invece in modo naturale che questa è una prima lettura, ma per aiutarli davvero serve un percorso più personalizzato e collegalo al problema principale che lei ha raccontato.
+Consiglia il Premium come scelta più adatta per il suo caso, spiegando in modo dinamico che non è solo una guida: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Spiega che con il Premium può avere un supporto più costante e adattare i passaggi a come reagisce davvero il bambino, senza andare a tentativi e senza forzare.
+Specifica che il Premium è in promozione a {POTTY_PREMIUM_PRICE} euro.
 Il Base a {POTTY_BASE_PRICE} euro, solo guida PDF, si nomina solo se lei chiede la differenza o chiede se può farlo da sola.
 Inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
 """
         return f"""
 La mamma ha risposto alla domanda intelligente precedente sul sonno.
-Ora devi fare una lettura più completa e personalizzata, poi introdurre il percorso e il link.
+Apri in modo umano e accogliente, per esempio ringraziandola perché il dettaglio aiuta a capire meglio; non essere fredda e non sembrare automatica.
+Poi fai una lettura più completa e personalizzata, introduci il percorso e il link.
 Usa "mamma" oppure evita appellativi, mai "cara".
 Non farla sentire in colpa. Il supporto emotivo forte va usato solo se lei ha mostrato stanchezza, ansia o senso di colpa.
 Fai un'analisi concreta di quello che ha raccontato: addormentamento, risvegli, seno/braccio/ciuccio/lettone, pisolini, routine o stanchezza.
 Non dare un piano completo gratuito e non dare una sequenza di azioni.
-Poi spiega in modo naturale che in chat puoi darle una prima lettura, ma per aiutarla davvero lavori con un percorso personalizzato: questionario iniziale, piano su misura e 60 giorni di supporto WhatsApp con Paola.
-Presenta il Premium a {OFFERS['premium']['price']} euro e inserisci il link una sola volta: {LINK_PREMIUM}
+Quando proponi il percorso, non usare formule tipo "in chat posso darti una prima lettura" o "in chat posso aiutarti fino a un certo punto".
+Dì invece in modo naturale che questa è una prima lettura, ma per aiutarli davvero serve un percorso più personalizzato e collegalo al problema principale che lei ha raccontato.
+Consiglia il Premium come scelta più adatta per il suo caso, spiegando in modo dinamico che comprende questionario iniziale, piano personalizzato sul bambino e 60 giorni di supporto WhatsApp con Paola.
+Spiega che con il Premium può avere un supporto più costante e lavorare in modo graduale proprio sul nodo emerso nella chat, per esempio risvegli, seno, addormentamento, pisolini, routine o difficoltà a riaddormentarsi.
+Specifica che il Premium è in promozione a {OFFERS['premium']['price']} euro.
+Inserisci il link una sola volta: {LINK_PREMIUM}
 """
 
     if product_type == PRODUCT_POTTY:
         return """
 La mamma ha appena raccontato una difficoltà sullo spannolinamento.
 Non vendere subito, non inserire link e non presentare ancora il percorso.
+Apri in modo naturale e umano, per esempio con "Grazie mamma, ho letto quello che mi hai scritto" solo se suona spontaneo.
 Fai una lettura breve e personalizzata di quello che ha scritto, poi fai UNA sola domanda intelligente e specifica per capire meglio.
 La domanda deve aiutare a distinguere il nodo principale: segnali, pipì, cacca, vasino/water, rifiuto, paura, incidenti, nido o routine.
 Usa "mamma" oppure evita appellativi, mai "cara".
@@ -2622,6 +2636,7 @@ Non dire ancora che lavori con un percorso personalizzato, salvo che lei lo chie
     return """
 La mamma ha appena raccontato una difficoltà sul sonno.
 Non vendere subito, non inserire link e non presentare ancora il percorso.
+Apri in modo naturale e umano, per esempio con "Grazie mamma, ho letto quello che mi hai scritto" solo se suona spontaneo.
 Fai una lettura breve e personalizzata di quello che ha scritto, poi fai UNA sola domanda intelligente e specifica per capire meglio.
 La domanda deve aiutare a distinguere il nodo principale: addormentamento, risvegli, seno/braccio/ciuccio/lettone, pisolini, routine o stanchezza.
 Usa "mamma" oppure evita appellativi, mai "cara".
@@ -4252,6 +4267,7 @@ def due_question_followups():
             FROM consultations c
             WHERE COALESCE(fase, 0) = 0
               AND COALESCE(followup_enabled, TRUE) = TRUE
+              AND COALESCE(lead_status, 'none') <> 'stopped'
               AND last_intelligent_question_sent_at IS NOT NULL
               AND intelligent_question_followup_sent_at IS NULL
               AND last_intelligent_question_sent_at <= NOW() - (%s || ' hours')::interval
