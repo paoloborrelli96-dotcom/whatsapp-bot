@@ -2874,8 +2874,34 @@ def smart_split_message(text, max_chars=1450):
     return chunks
 
 
+def is_valid_italian_mobile(phone):
+    """Accetta solo numeri mobili italiani in formato +39 seguito da 10 cifre che iniziano per 3."""
+    if not phone:
+        return False
+    return bool(re.fullmatch(r"\+393\d{9}", str(phone).strip()))
+
+
+def mark_invalid_phone_and_stop_followups(phone, reason="numero non valido"):
+    """Evita tentativi ripetuti verso numeri corrotti/uniti tra loro."""
+    logger.warning(f"Numero WhatsApp non valido, stop follow-up per {phone}: {reason}")
+    try:
+        update_lead_followup_fields(
+            phone,
+            lead_status=LEAD_STATUS_STOPPED,
+            followup_enabled=False
+        )
+    except Exception as e:
+        logger.error(f"Errore stop follow-up numero non valido {phone}: {e}")
+
+
 def send_whatsapp_message(phone, text):
+    phone = normalize_phone_number(phone)
+    if not is_valid_italian_mobile(phone):
+        mark_invalid_phone_and_stop_followups(phone, "invio messaggio libero bloccato")
+        threading.Thread(target=send_telegram, args=[f"⚠️ Invio WhatsApp bloccato: numero non valido {phone}"], daemon=True).start()
+        return False
     chunks = smart_split_message(text, max_chars=1450)
+    sent_any = False
     for index, chunk in enumerate(chunks):
         try:
             twilio_client.messages.create(
@@ -2883,6 +2909,7 @@ def send_whatsapp_message(phone, text):
                 to=f"whatsapp:{phone}",
                 body=chunk
             )
+            sent_any = True
             # Notifica nel topic
             threading.Thread(target=send_to_topic, args=[phone, chunk, True], daemon=True).start()
             if index < len(chunks) - 1:
@@ -2890,12 +2917,18 @@ def send_whatsapp_message(phone, text):
         except Exception as e:
             logger.error(f"Errore invio a {phone}: {e}")
             threading.Thread(target=send_telegram, args=[f"⚠️ Errore Twilio per {phone}: {e}"], daemon=True).start()
+    return sent_any
 
 
 def send_whatsapp_template_message(phone, content_sid, template_label="template"):
     """Invia un template WhatsApp approvato via Twilio ContentSid."""
     if not content_sid:
         raise ValueError(f"ContentSid mancante per {template_label}")
+    phone = normalize_phone_number(phone)
+    if not is_valid_italian_mobile(phone):
+        mark_invalid_phone_and_stop_followups(phone, f"template {template_label} bloccato")
+        threading.Thread(target=send_telegram, args=[f"⚠️ Template {template_label} NON inviato: numero non valido {phone}"], daemon=True).start()
+        return False
     try:
         twilio_client.messages.create(
             from_=f"whatsapp:{TWILIO_WHATSAPP_NUMBER}",
@@ -2911,7 +2944,9 @@ def send_whatsapp_template_message(phone, content_sid, template_label="template"
 
 
 def normalize_phone_number(raw):
-    """Normalizza numeri italiani per WhatsApp/Twilio in formato +39..."""
+    """Normalizza numeri mobili italiani per WhatsApp/Twilio in formato +393xxxxxxxxx.
+    Rifiuta numeri troppo lunghi, così evita di unire più numeri insieme.
+    """
     if not raw:
         return None
     raw = str(raw).strip()
@@ -2920,25 +2955,40 @@ def normalize_phone_number(raw):
         return None
     if digits.startswith("00"):
         digits = digits[2:]
-    if digits.startswith("39") and len(digits) >= 11:
+    # +39 / 39 + mobile italiano: totale 12 cifre, 39 + 3 + 9 cifre
+    if re.fullmatch(r"393\d{9}", digits):
         return "+" + digits
-    if digits.startswith("3") and len(digits) == 10:
+    # mobile italiano senza prefisso: 10 cifre, inizia per 3
+    if re.fullmatch(r"3\d{9}", digits):
         return "+39" + digits
-    if raw.startswith("+") and len(digits) >= 10:
-        return "+" + digits
+    # Qualsiasi altra lunghezza/formato viene rifiutata per sicurezza
     return None
 
 
 def extract_phones_from_text(text, command_regex=r"^/contatta_sonno\b"):
+    """Estrae numeri uno per uno da un comando Telegram.
+    Evita il vecchio problema in cui più numeri su righe diverse venivano uniti.
+    """
     body = re.sub(command_regex, "", text.strip(), flags=re.I).strip()
-    candidates = re.findall(r"(?:\+?39)?[\s\-.()]*3[\d\s\-.()]{8,}", body)
     phones = []
     seen = set()
-    for c in candidates:
-        phone = normalize_phone_number(c)
+
+    # Prima prova riga per riga: formato consigliato, un numero per riga.
+    for line in body.splitlines():
+        phone = normalize_phone_number(line)
         if phone and phone not in seen:
             seen.add(phone)
             phones.append(phone)
+
+    # Poi cerca numeri mobili italiani anche se nella riga c'è un nome accanto.
+    # Pattern limitato a 10 cifre mobile o 39+10 cifre, senza attraversare altri numeri completi.
+    pattern = re.compile(r"(?<!\d)(?:\+?39[\s\-.()]*)?3(?:[\s\-.()]*\d){9}(?!\d)")
+    for match in pattern.finditer(body):
+        phone = normalize_phone_number(match.group(0))
+        if phone and phone not in seen:
+            seen.add(phone)
+            phones.append(phone)
+
     return phones
 
 
