@@ -2882,8 +2882,12 @@ def is_valid_italian_mobile(phone):
 
 
 def mark_invalid_phone_and_stop_followups(phone, reason="numero non valido"):
-    """Evita tentativi ripetuti verso numeri corrotti/uniti tra loro."""
+    """Evita tentativi ripetuti verso numeri corrotti/uniti tra loro.
+    Se il numero è None/vuoto, non crea righe sporche nel DB e non genera alert inutili.
+    """
     logger.warning(f"Numero WhatsApp non valido, stop follow-up per {phone}: {reason}")
+    if not phone:
+        return
     try:
         update_lead_followup_fields(
             phone,
@@ -2898,7 +2902,8 @@ def send_whatsapp_message(phone, text):
     phone = normalize_phone_number(phone)
     if not is_valid_italian_mobile(phone):
         mark_invalid_phone_and_stop_followups(phone, "invio messaggio libero bloccato")
-        threading.Thread(target=send_telegram, args=[f"⚠️ Invio WhatsApp bloccato: numero non valido {phone}"], daemon=True).start()
+        if phone:
+            threading.Thread(target=send_telegram, args=[f"⚠️ Invio WhatsApp bloccato: numero non valido {phone}"], daemon=True).start()
         return False
     chunks = smart_split_message(text, max_chars=1450)
     sent_any = False
@@ -2927,7 +2932,8 @@ def send_whatsapp_template_message(phone, content_sid, template_label="template"
     phone = normalize_phone_number(phone)
     if not is_valid_italian_mobile(phone):
         mark_invalid_phone_and_stop_followups(phone, f"template {template_label} bloccato")
-        threading.Thread(target=send_telegram, args=[f"⚠️ Template {template_label} NON inviato: numero non valido {phone}"], daemon=True).start()
+        if phone:
+            threading.Thread(target=send_telegram, args=[f"⚠️ Template {template_label} NON inviato: numero non valido {phone}"], daemon=True).start()
         return False
     try:
         twilio_client.messages.create(
@@ -2994,7 +3000,10 @@ def extract_phones_from_text(text, command_regex=r"^/contatta_sonno\b"):
 
 def contact_sleep_lead(phone, lead_flow=LEAD_FLOW_SLEEP_MANUAL, source_note=None):
     """Prepara il lead sonno e invia il template approvato."""
-    phone = normalize_phone_number(phone) or phone
+    phone = normalize_phone_number(phone)
+    if not is_valid_italian_mobile(phone):
+        logger.warning(f"Lead sonno ignorato: numero non valido {phone}")
+        return False
     set_product_type(phone, PRODUCT_SLEEP)
     set_awaiting_product_choice(phone, False)
     set_fase(phone, 0)
@@ -3010,7 +3019,10 @@ def contact_sleep_lead(phone, lead_flow=LEAD_FLOW_SLEEP_MANUAL, source_note=None
 
 def contact_potty_lead(phone, lead_flow=LEAD_FLOW_POTTY_MANUAL, source_note=None):
     """Prepara il lead spannolinamento e invia il template approvato."""
-    phone = normalize_phone_number(phone) or phone
+    phone = normalize_phone_number(phone)
+    if not is_valid_italian_mobile(phone):
+        logger.warning(f"Lead spannolinamento ignorato: numero non valido {phone}")
+        return False
     set_product_type(phone, PRODUCT_POTTY)
     set_awaiting_product_choice(phone, False)
     set_fase(phone, 0)
@@ -4289,7 +4301,8 @@ def due_template_followups():
         cur.execute("""
             SELECT phone, COALESCE(product_type, 'unknown') AS product_type, lead_contacted_at
             FROM consultations c
-            WHERE COALESCE(fase, 0) = 0
+            WHERE c.phone ~ '^\+393[0-9]{9}$'
+              AND COALESCE(fase, 0) = 0
               AND COALESCE(followup_enabled, TRUE) = TRUE
               AND COALESCE(lead_status, 'none') = %s
               AND lead_contacted_at IS NOT NULL
@@ -4318,7 +4331,8 @@ def due_question_followups():
         cur.execute("""
             SELECT phone, COALESCE(product_type, 'unknown') AS product_type, last_intelligent_question_sent_at
             FROM consultations c
-            WHERE COALESCE(fase, 0) = 0
+            WHERE c.phone ~ '^\+393[0-9]{9}$'
+              AND COALESCE(fase, 0) = 0
               AND COALESCE(followup_enabled, TRUE) = TRUE
               AND COALESCE(lead_status, 'none') <> 'stopped'
               AND last_intelligent_question_sent_at IS NOT NULL
@@ -4348,7 +4362,8 @@ def due_link_followups():
         cur.execute("""
             SELECT phone, COALESCE(product_type, 'unknown') AS product_type, last_link_sent_at
             FROM consultations c
-            WHERE COALESCE(fase, 0) = 0
+            WHERE c.phone ~ '^\+393[0-9]{9}$'
+              AND COALESCE(fase, 0) = 0
               AND COALESCE(followup_enabled, TRUE) = TRUE
               AND COALESCE(lead_status, 'none') = %s
               AND last_link_sent_at IS NOT NULL
@@ -4482,7 +4497,8 @@ def mark_silent_after_link_followup_cold():
             UPDATE consultations c
             SET lead_status = %s,
                 followup_enabled = FALSE
-            WHERE COALESCE(fase, 0) = 0
+            WHERE c.phone ~ '^\+393[0-9]{9}$'
+              AND COALESCE(fase, 0) = 0
               AND COALESCE(followup_enabled, TRUE) = TRUE
               AND COALESCE(lead_status, 'none') = %s
               AND link_followup_sent_at IS NOT NULL
@@ -4505,9 +4521,35 @@ def mark_silent_after_link_followup_cold():
         return 0
 
 
+def cleanup_invalid_lead_phones():
+    """Disattiva follow-up su vecchie righe create con numeri uniti, corrotti o vuoti."""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE consultations
+            SET lead_status = %s,
+                followup_enabled = FALSE
+            WHERE COALESCE(fase, 0) = 0
+              AND COALESCE(followup_enabled, TRUE) = TRUE
+              AND (phone IS NULL OR phone !~ '^\+393[0-9]{9}$')
+        """, (LEAD_STATUS_STOPPED,))
+        changed = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        if changed:
+            logger.warning(f"Cleanup follow-up: disattivati {changed} lead con numero non valido/corrotto")
+        return changed
+    except Exception as e:
+        logger.error(f"Errore cleanup_invalid_lead_phones: {e}")
+        return 0
+
+
 def run_followup_checks():
     if in_orario_silenzio():
         return
+    cleanup_invalid_lead_phones()
     for row in due_template_followups():
         send_template_followup(row["phone"], row.get("product_type"))
         time.sleep(1.0)
