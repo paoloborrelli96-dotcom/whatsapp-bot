@@ -1310,18 +1310,57 @@ def has_user_replied_after(phone, after_ts):
     return count_user_messages_after(phone, after_ts) > 0
 
 
+STOP_FOLLOWUP_CLASSIFIER_PROMPT = """
+Sei un classificatore prudente per una chat WhatsApp di Genitori in Armonia.
+Devi decidere se il messaggio della mamma significa DAVVERO: "non voglio più essere ricontattata / stop ai messaggi / non sono interessata".
+
+Rispondi SOLO in JSON valido con:
+{"stop": true/false, "confidence": 0.0-1.0, "reason": "breve motivo"}
+
+Regole:
+- Metti stop=true SOLO se la mamma chiede chiaramente di non essere più contattata, rifiuta esplicitamente il contatto/percorso, oppure dice in modo chiaro che non è interessata.
+- NON mettere stop=true per parole estrapolate da frasi normali. Esempio: "abbastanza" contiene "basta", ma NON è stop.
+- NON mettere stop=true se sta raccontando una difficoltà, una routine, un problema del bambino, una risposta a una domanda, o un dubbio.
+- "non ora" è stop solo se il senso è chiaramente "non voglio essere ricontattata/non mi interessa ora". Se è parte di una descrizione normale, stop=false.
+- In caso di dubbio, scegli sempre stop=false.
+""".strip()
+
+
 def is_stop_followup_message(text):
+    """Rileva lo stop follow-up usando GPT come giudice finale.
+    Non blocca più per semplice keyword: evita falsi positivi tipo "abbastanza" -> "basta".
+    In caso di errore o dubbio, torna False per non stoppare mamme che stanno rispondendo.
+    """
     if not text:
         return False
-    t = text.lower().strip()
-    patterns = [
-        "non mi interessa", "non sono interessata", "non sono interessato",
-        "non voglio", "non contattarmi", "non contattatemi", "non scrivermi",
-        "lasciami stare", "lasciatemi stare", "basta", "stop",
-        "ho risolto", "non ora", "non adesso", "tolgo il consenso"
-    ]
-    return any(p in t for p in patterns)
 
+    raw = str(text).strip()
+    if not raw:
+        return False
+
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CLASSIFIER,
+            messages=[
+                {"role": "system", "content": STOP_FOLLOWUP_CLASSIFIER_PROMPT},
+                {"role": "user", "content": raw}
+            ],
+            max_tokens=180,
+            temperature=0,
+            response_format={"type": "json_object"},
+            timeout=45
+        )
+        data = parse_json_safely(response.choices[0].message.content, {"stop": False, "confidence": 0.0, "reason": "fallback"})
+        if not isinstance(data, dict):
+            return False
+        stop = bool(data.get("stop", False))
+        confidence = float(data.get("confidence", 0.0) or 0.0)
+        reason = data.get("reason", "")
+        logger.info(f"Classificazione stop follow-up: stop={stop}, confidence={confidence}, reason={reason}")
+        return stop and confidence >= 0.75
+    except Exception as e:
+        logger.error(f"Errore classificazione GPT stop follow-up: {e}")
+        return False
 
 def stop_followups(phone):
     update_lead_followup_fields(phone, lead_status=LEAD_STATUS_STOPPED, followup_enabled=False)
