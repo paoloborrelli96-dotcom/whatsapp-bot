@@ -4442,19 +4442,45 @@ Scrivi massimo 6-7 righe, tono WhatsApp.
     return False
 
 
-def generate_link_followup(phone, product_type):
+def generate_link_followup(phone, product_type, last_link_sent_at=None):
     history = get_recent_history(phone, limit=32)
     product_type = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else get_product_type(phone)
     if product_type == PRODUCT_POTTY:
         product_note = f"Percorso spannolinamento Premium: {POTTY_PREMIUM_PRICE} euro, guida PDF, questionario, piano personalizzato e 30 giorni di supporto WhatsApp. Link già inviato: {LINK_POTTY}"
     else:
         product_note = f"Percorso sonno Premium: {OFFERS['premium']['price']} euro, questionario, piano personalizzato e 60 giorni di supporto WhatsApp. Link già inviato: {LINK_PREMIUM}"
+
+    # Evita follow-up temporalmente strani tipo "in questi giorni" quando il link è stato inviato ieri o poche ore prima.
+    elapsed_hours = None
+    try:
+        if last_link_sent_at:
+            tz = pytz.timezone(TIMEZONE)
+            sent_at = last_link_sent_at
+            if isinstance(sent_at, str):
+                sent_at = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+            if sent_at.tzinfo is None:
+                sent_at = tz.localize(sent_at)
+            now = datetime.now(tz)
+            elapsed_hours = (now - sent_at.astimezone(tz)).total_seconds() / 3600
+    except Exception as e:
+        logger.warning(f"Impossibile calcolare ore da last_link_sent_at per {phone}: {e}")
+
+    if elapsed_hours is None:
+        timing_note = "Non usare frasi temporali specifiche se non sono chiaramente supportate dalla chat. Preferisci: 'hai avuto modo di guardare/pensare al percorso?' e 'come sta andando oggi?'."
+    elif elapsed_hours < 24:
+        timing_note = "Sono passate meno di 24 ore dal link: NON dire 'in questi giorni'. Puoi dire 'hai avuto modo di guardare/pensare al percorso?' e, se naturale, 'com'è andata da ieri?' oppure 'nelle ultime ore?'."
+    elif elapsed_hours < 48:
+        timing_note = "Sono passate circa 24-48 ore dal link: NON dire 'in questi giorni'. Puoi dire 'hai avuto modo di guardare/pensare al percorso?' e 'come sta andando da ieri?' o 'da quando ci siamo sentite?'."
+    else:
+        timing_note = "Sono passati più giorni dal link: puoi usare 'in questi giorni' solo se suona naturale, altrimenti preferisci una domanda più semplice su come sta andando adesso."
+
     prompt = f"""
 Scrivi un follow-up WhatsApp personalizzato come Paola.
 La mamma ha ricevuto il link del percorso, ma non ha scritto di aver acquistato e non ha risposto.
 Devi collegarti a quello che aveva raccontato prima: problema, obiezione, paura, marito, prezzo, seno, risvegli, cacca, vasino o altro.
 Non deve sembrare un messaggio fisso. Deve sembrare che Paola abbia letto la chat.
-Chiedi come sta andando oggi e, se naturale, chiedi se ha avuto modo di vedere il percorso.
+Chiedi se ha avuto modo di guardare o pensare al percorso e riprendi la situazione concreta del bimbo.
+Adatta la domanda sul tempo passato: {timing_note}
 Puoi ricordare in modo delicato il valore del percorso, ma non fare pressione.
 Non reinserire il link, salvo se la chat mostra che lo ha chiesto o che può essersi perso.
 Usa "mamma" oppure evita appellativi, mai "cara".
@@ -4557,7 +4583,7 @@ def run_followup_checks():
         generate_question_followup(row["phone"], row.get("product_type"))
         time.sleep(1.0)
     for row in due_link_followups():
-        generate_link_followup(row["phone"], row.get("product_type"))
+        generate_link_followup(row["phone"], row.get("product_type"), row.get("last_link_sent_at"))
         time.sleep(1.0)
     mark_silent_after_link_followup_cold()
 
