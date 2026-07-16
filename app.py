@@ -424,6 +424,7 @@ Non dare diagnosi mediche e non sostituirti al pediatra.
 Per febbre, crescita, reflusso importante, allergie, difficoltà respiratorie o dubbi sanitari, rimanda al pediatra in modo naturale.
 Per sonno e spannolinamento, Paola resta il riferimento nel proprio ambito.
 Non parlare mai di consulenza scaduta, fine percorso o rinnovi, a meno che sia la mamma a chiedere esplicitamente informazioni sul rinnovo oppure sia Paola/Admin a dirtelo.
+Non dire mai che arriva una mail con il questionario o con il percorso. In questo sistema il questionario, le regole e l'avvio vengono inviati direttamente qui su WhatsApp solo dopo acquisto confermato o comando manuale. Prima dell'acquisto non dare per scontato che la mamma abbia acquistato solo perché manda una conferma, un ok o una emoji.
 
 SE CHIEDONO SE SEI UN BOT
 Rispondi in modo trasparente e naturale:
@@ -526,7 +527,7 @@ Usa il profilo del bambino e lo storico recente.
 Se c'è un miglioramento, valorizzalo in modo specifico.
 Se c'è un passo indietro, normalizzalo senza far sentire la mamma in colpa.
 
-Se il messaggio è una micro-conferma o un grazie, di norma non serve rispondere. Se proprio è necessaria una risposta, deve essere minima.
+Se il messaggio è una micro-conferma, un grazie, una emoji/reazione, oppure frasi tipo "ok guardo", "ora guardo il link", "do uno sguardo", di norma non serve rispondere. Non interpretare mai queste frasi come acquisto completato e non avviare questionari. Se proprio è necessaria una risposta, deve essere minima.
 """
 
 PLAN_PROMPT = """
@@ -2582,6 +2583,17 @@ def validate_reply(reply, context):
         lines = [line for line in clean.splitlines() if "genitorinarmonia.com/products/" not in line]
         clean = "\n".join(lines).strip()
 
+    # Corregge eventuali allucinazioni operative: il questionario non arriva via email.
+    forbidden_email_patterns = [
+        r"tra poco ti arriva una mail[^\n.]*",
+        r"ti arriva una mail[^\n.]*",
+        r"riceverai una mail[^\n.]*",
+        r"arriver[aà] una mail[^\n.]*",
+        r"controlla la mail[^\n.]*"
+    ]
+    for pattern in forbidden_email_patterns:
+        clean = re.sub(pattern, "", clean, flags=re.I).strip()
+
     banned_phrases = [
         "grazie per aver condiviso",
         "capisco perfettamente",
@@ -2847,6 +2859,19 @@ def is_obvious_closing_message(text):
     t = raw.lower()
     t = re.sub(r"[^\w\sàèéìòùÀÈÉÌÒÙ]+", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
+
+    # Emoji/reazioni isolate tipo 👍, 👌, ☝🏻, 🙏, ❤️ non devono attivare GPT:
+    # sono conferme/reazioni, non acquisti e non risposte operative.
+    if not t:
+        return True
+
+    link_view_phrases = [
+        "ok guardo", "ok ora guardo", "ora guardo", "guardo il link", "lo guardo",
+        "do uno sguardo", "ci do uno sguardo", "vedo il link", "lo vedo",
+        "ok vedo", "ok controllo", "controllo", "ci penso", "ci ragiono"
+    ]
+    if any(p in t for p in link_view_phrases) and "?" not in raw:
+        return True
 
     # Non bloccare parole che possono avere valore operativo o commerciale.
     important_terms = [
@@ -3655,6 +3680,13 @@ def process_response(phone, image_url=None):
     pending = get_messages_since_last_reply(phone)
     combined_raw = "\n".join(pending)
     combined = combined_raw.lower().strip()
+
+    # Se dopo un messaggio commerciale/link la mamma invia solo una reazione o una micro-conferma
+    # (es. 👍, 👌, ☝🏻, "ok guardo"), non generare una risposta GPT: evita allucinazioni
+    # come questionari via email o avvii percorso non richiesti.
+    if fase == 0 and not image_url and is_obvious_closing_message(combined_raw):
+        mark_silent_no_reply(phone, "fase 0: reazione/micro-conferma senza domanda")
+        return
 
     # Stop automatico follow-up se la mamma dice chiaramente che non vuole essere ricontattata.
     if fase == 0 and is_stop_followup_message(combined_raw):
