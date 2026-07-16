@@ -2384,6 +2384,17 @@ Se dal messaggio è chiaro che vuole la procedura formale, aggiungi questo link:
 Ricorda con delicatezza che il rimborso non è applicabile a chi ha già usufruito in parte o totalmente delle consulenze.
 """
     if intent == "richiesta_info_percorso" and fase == 0:
+        if link_sent:
+            return f"""
+La persona è ancora lead, ma il link/percorso è già stato inviato nello storico.
+Sta facendo una domanda commerciale o logistica dopo il link: per esempio contatto telefonico, chiamata, WhatsApp, supporto, pagamento, durata, come funziona o cosa succede dopo l'acquisto.
+NON tornare a chiedere "qual è la difficoltà principale" e NON ripartire da zero.
+Rispondi direttamente alla domanda leggendo lo storico.
+Se chiede del contatto telefonico o delle chiamate, spiega con naturalezza che il percorso si svolge principalmente su WhatsApp: questionario iniziale, piano personalizzato e supporto scritto passo passo. Non promettere telefonate o videochiamate fisse.
+Se chiede se è un bot o se è automatico, rispondi in modo trasparente: uso strumenti digitali per organizzare e scrivere meglio, ma il percorso segue il Metodo Paola ed è supervisionato.
+Non ripetere il link, salvo richiesta esplicita tipo "me lo rimandi" o "dov'è il link". Se serve, di' che lo trova nel messaggio sopra.
+Mantieni tono umano, usando "mamma" o evitando appellativi; mai "cara".
+"""
         if product_type == PRODUCT_POTTY:
             return f"""
 La persona è ancora lead e chiede informazioni sul percorso spannolinamento.
@@ -2476,6 +2487,13 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
     intent = router_result.get("intent", "altro") if router_result else "altro"
     confidence = float(router_result.get("confidence", 0) or 0) if router_result else 0
     product_type = product_from_context_or_text(phone, pending_text)
+
+    # Se in fase 0 il link è già stato inviato, NON usare mai risposte fisse tipo
+    # "raccontami la difficoltà principale". A quel punto la mamma può chiedere
+    # dettagli commerciali/logistici (telefono, supporto, WhatsApp, pagamento, ecc.)
+    # e deve rispondere GPT leggendo lo storico.
+    if fase == 0 and link_gia_inviato(phone, product_type):
+        return None
 
     # Se il numero è stato contattato con /contatta_sonno, le domande sono già nello storico.
     # In fase 0 non dare risposte meccaniche tipo "raccontami la difficoltà" o reinvii:
