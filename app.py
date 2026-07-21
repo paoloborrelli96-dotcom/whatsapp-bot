@@ -109,9 +109,9 @@ POTTY_BASE_PRICE = 47
 POTTY_PREMIUM_PRICE = 67
 
 POTTY_OFFER_DETAILS = (
-    "Per lo spannolinamento ci sono due opzioni. Il Base a 47 euro comprende la guida PDF Metodo Paola: "
+    "Per lo spannolinamento ci sono due opzioni. Il Base comprende la guida PDF Metodo Paola: "
     "Spannolinamento Dolce di Paola, quindi è indicato per chi vuole leggere il metodo e provare in autonomia. "
-    "Il Premium a 67 euro è il percorso consigliato: comprende la guida PDF, il questionario iniziale, "
+    "Il Premium è il percorso consigliato: comprende la guida PDF, il questionario iniziale, "
     "il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola, così il lavoro viene adattato "
     "a come reagisce davvero il bambino durante pipì, cacca, vasino, nido, uscite e prime difficoltà."
 )
@@ -348,7 +348,7 @@ Regole:
 - Collega la risposta a quello che ha scritto: addormentamento, risvegli, seno/braccio/contatto/lettone, pisolini o stanchezza.
 - Dai massimo 1 consiglio generale o una direzione iniziale, ma non una sequenza completa gratuita.
 - Spiega chiaramente che io lavoro con percorsi personalizzati: si parte da un questionario iniziale, poi preparo un piano su misura e per 60 giorni la seguo qui su WhatsApp passo passo.
-- Presenta il Percorso Premium in offerta a 67 euro, spiegando che include piano personalizzato e 60 giorni di supporto/contatto WhatsApp con me.
+- Presenta il Percorso Premium come percorso consigliato, spiegando che include piano personalizzato e 60 giorni di supporto/contatto WhatsApp con me. Non dire il prezzo in questa prima proposta: lascia il link dove trova percorsi, spiegazione del metodo, cosa comprende e dettagli aggiornati. Il prezzo si dice solo se lo chiede esplicitamente.
 - Usa un tono naturale, senza pressione, ma deve essere chiaro cosa comprende il percorso e perché è utile.
 - Inserisci il link una sola volta.
 - Non usare markdown, titoli o grassetti.
@@ -371,9 +371,9 @@ Devi restituire SOLO JSON valido con questo schema:
 }
 
 Come scegliere action:
-- analysis: se la mamma ha dato anche pochi indizi concreti sul sonno, anche monosillabi o parole singole come seno, braccia, lettone, ciuccio, risvegli, notte, contatto, latte, pisolini, stanchezza, sono distrutta. In questo caso fai una prima valutazione gratuita: empatia, lettura della dinamica, massimo una direzione generale, poi spiega il Percorso Premium a 67 euro con questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp con Paola. Inserisci il link una sola volta.
+- analysis: se la mamma ha dato anche pochi indizi concreti sul sonno, anche monosillabi o parole singole come seno, braccia, lettone, ciuccio, risvegli, notte, contatto, latte, pisolini, stanchezza, sono distrutta. In questo caso fai una prima valutazione gratuita: empatia, lettura della dinamica, massimo una direzione generale, poi spiega il Percorso Premium con questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp con Paola. Non dire il prezzo in questa prima proposta: lascia il link dove trova percorsi, spiegazione del metodo e dettagli aggiornati. Inserisci il link una sola volta.
 - soft_prompt: se la mamma non ha ancora risposto alle domande ma scrive cose come sì, ok, ci eravamo sentite, va bene, dimmi. In questo caso non ripetere le domande: rispondi in 2-4 righe, collegandoti al fatto che le domande sono nel messaggio sopra e può rispondere anche in modo semplice.
-- info_reply: se chiede prezzo, cosa comprende, come funziona, link, tempi o fa una piccola obiezione. Rispondi alla domanda e, se naturale, ricorda che per darle una valutazione più precisa può rispondere alle domande sopra. Se è opportuno, presenta il Percorso Premium a 67 euro e il link.
+- info_reply: se chiede prezzo/costo/promozione, rispondi in modo chiaro anche sul prezzo. Se chiede solo cosa comprende, come funziona, link, tempi o fa una piccola obiezione, rispondi alla domanda senza inserire il prezzo per forza; presenta il Premium come percorso consigliato e lascia il link dove trova percorsi, spiegazione del metodo e dettagli aggiornati.
 - defer: se dice che risponde dopo, che ora non può, che lo farà più tardi. Rispondi al massimo con una frase breve e naturale, senza ripetere le domande.
 - no_reply: se è solo una chiusura/cortesia senza bisogno di risposta.
 
@@ -519,6 +519,7 @@ Se non è chiaro se parla di sonno o spannolinamento, chiedi prima a quale perco
 Se la persona scrive solo ciao, info, vorrei informazioni, quanto costa o come funziona senza raccontare il problema, non vendere subito: chiedi prima il prodotto o la difficoltà principale specifica del prodotto.
 Se invece non ha ancora acquistato ma descrive per la prima volta un problema concreto di sonno o spannolinamento, non vendere subito e non inserire il link: ringrazia in modo umano se naturale, fai una lettura breve e personalizzata, poi fai una sola domanda intelligente per capire meglio.
 Se la mamma sta rispondendo a una domanda intelligente precedente, allora apri in modo accogliente, ad esempio "Grazie mamma, questo dettaglio mi aiuta a capire meglio", poi fai un'analisi più completa e introduci il percorso/link seguendo la regola business.
+Quando introduci il percorso in fase 0, non inserire il prezzo automaticamente: dillo solo se la mamma chiede prezzo/costo/promozione o differenza tra percorsi. Altrimenti lascia il link dicendo che lì trova i percorsi, la spiegazione del metodo, cosa comprende e i dettagli aggiornati.
 Il supporto emotivo forte va usato solo se lei lo palesa con frasi come "sono distrutta", "non ce la faccio", "mi sento in colpa", "sono disperata". Se racconta solo il problema, resta concreta, calda e professionale.
 Se dichiara di aver già acquistato, il codice avvia la sequenza acquisto corretta; se l'acquisto è generico, prima chiede sonno o spannolinamento.
 
@@ -2070,7 +2071,7 @@ def build_contextual_purchase_intro(phone, trigger_text="", product_type=PRODUCT
                 "Sei Paola di Genitori in Armonia. Devi scrivere un breve messaggio WhatsApp naturale.\n"
                 "La mamma ha appena fatto capire che ha già acquistato o ha già accesso al percorso/guida.\n"
                 f"Il prodotto/percorso è: {product_label(product_type)}.\n"
-                "Se il prodotto è spannolinamento e chiede cosa comprende, spiega che il Base a 47 euro comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, mentre il Premium a 67 euro è quello consigliato e comprende guida PDF, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.\n"
+                "Se il prodotto è spannolinamento e chiede cosa comprende, spiega senza insistere sul prezzo: il Base comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, mentre il Premium è quello consigliato e comprende guida PDF, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.\n"
                 "Rispondi in modo coerente all'ultimo messaggio: se ha fatto una domanda, rispondi prima a quella domanda.\n"
                 "Poi fai una transizione morbida: ora le manderai le regole della chat e il questionario iniziale corretto per preparare il piano personalizzato.\n"
                 "Non sembrare un messaggio automatico. Non dire 'messaggio automatico'. Non inserire link.\n"
@@ -2400,8 +2401,8 @@ Mantieni tono umano, usando "mamma" o evitando appellativi; mai "cara".
             return f"""
 La persona è ancora lead e chiede informazioni sul percorso spannolinamento.
 Rispondi in modo naturale e contestuale, senza sembrare un messaggio copia-incolla.
-Spiega che ci sono due opzioni: il Base a {POTTY_BASE_PRICE} euro comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, quindi è pensato per chi vuole leggere il metodo e provare in autonomia.
-Poi orienta con delicatezza verso il Premium a {POTTY_PREMIUM_PRICE} euro, che è quello consigliato: comprende la guida PDF, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Spiega cosa comprende il percorso senza partire dal prezzo: il Base è la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, mentre il Premium è quello consigliato se vuole essere seguita davvero perché comprende guida PDF, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Non dire il prezzo in automatico se non lo ha chiesto chiaramente; dille che nel link trova percorsi, cosa comprende, spiegazione del metodo e dettagli aggiornati.
 Spiega che il Premium serve proprio per non restare con una guida generica, ma adattare l'inizio dello spannolinamento alla situazione reale del bambino: pipì, cacca, vasino/water, incidenti, nido, uscite e reazioni emotive.
 Chiarisci che dopo l'ordine arriva automaticamente la guida; poi la mamma scrive qui su WhatsApp, compila il questionario e si parte con l'analisi della situazione e il piano personalizzato.
 Se non ha ancora raccontato la situazione, dopo la spiegazione puoi chiederle età del bambino e se hanno già iniziato a togliere il pannolino o stanno valutando quando partire.
@@ -2430,8 +2431,9 @@ La persona è ancora lead e ha già descritto una difficoltà concreta del sonno
 Non fare altre domande generiche: fai subito una prima analisi commerciale personalizzata.
 Devi riconoscere la difficoltà specifica, spiegare in modo semplice cosa potrebbe esserci dietro, senza diagnosi e senza dare un piano completo gratuito.
 Accenna alla direzione di lavoro, facendo capire che andrebbe vista su orari, pisolini, addormentamento e risvegli.
-Poi presenta il Percorso Premium: 60 giorni di supporto WhatsApp personalizzato al costo di {OFFERS['premium']['price']} euro, con questionario iniziale, piano su misura e guide PDF.
-Inserisci il link una sola volta: {LINK_PREMIUM}
+Poi presenta il Percorso Premium come percorso consigliato per essere seguita bene: questionario iniziale, piano su misura, guide PDF e 60 giorni di supporto WhatsApp personalizzato.
+Non indicare il prezzo in questa prima proposta, a meno che lo abbia chiesto esplicitamente.
+Inserisci il link una sola volta dicendo che lì trova percorsi, spiegazione del metodo, cosa comprende e dettagli aggiornati: {LINK_PREMIUM}
 Chiudi dicendo che dopo l'ordine può scriverti su WhatsApp e partite con l'analisi personalizzata.
 """
     if intent == "descrizione_problema_spannolinamento" and fase == 0:
@@ -2446,8 +2448,8 @@ La persona è ancora lead e ha già descritto una difficoltà concreta sullo spa
 Non fare altre domande generiche: fai subito una prima analisi commerciale personalizzata.
 Devi riconoscere la difficoltà specifica, spiegare in modo semplice cosa può esserci dietro: prontezza, segnali, incidenti, cacca, nido, pressione o routine non chiara.
 Non dare un piano completo gratuito.
-Poi presenta il Percorso Premium spannolinamento in modo chiaro: costa {POTTY_PREMIUM_PRICE} euro ed è quello consigliato perché comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
-Se serve, puoi dire che esiste anche il Base a {POTTY_BASE_PRICE} euro, ma solo come guida PDF da seguire in autonomia; non metterlo come scelta principale se la mamma ha chiesto aiuto o ha già raccontato una difficoltà.
+Poi presenta il Percorso Premium spannolinamento come percorso consigliato: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Non indicare il prezzo in questa prima proposta, a meno che lo abbia chiesto esplicitamente. Se serve, puoi dire che esiste anche il Base come sola guida PDF da seguire in autonomia, ma non metterlo come scelta principale se la mamma ha chiesto aiuto o ha già raccontato una difficoltà.
 Spiega che il Premium non è una guida generica: dopo l'ordine la guida arriva automaticamente, poi la mamma scrive qui su WhatsApp, compila il questionario iniziale e da lì viene analizzata la situazione per preparare un piano personalizzato sull'inizio dello spannolinamento.
 Inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
 """
@@ -2674,9 +2676,9 @@ Quando proponi il percorso, non usare formule tipo "in chat posso darti una prim
 Dì invece in modo naturale che questa è una prima lettura, ma per aiutarli davvero serve un percorso più personalizzato e collegalo al problema principale che lei ha raccontato.
 Consiglia il Premium come scelta più adatta per il suo caso, spiegando in modo dinamico che non è solo una guida: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
 Spiega che con il Premium può avere un supporto più costante e adattare i passaggi a come reagisce davvero il bambino, senza andare a tentativi e senza forzare.
-Specifica che il Premium è in promozione a {POTTY_PREMIUM_PRICE} euro.
-Il Base a {POTTY_BASE_PRICE} euro, solo guida PDF, si nomina solo se lei chiede la differenza o chiede se può farlo da sola.
-Inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
+Non indicare il prezzo in questa prima proposta, salvo domanda esplicita su prezzo/costo/promozione.
+Il Base, solo guida PDF, si nomina solo se lei chiede la differenza o chiede se può farlo da sola.
+Inserisci il link dello spannolinamento una sola volta dicendo che lì trova percorsi, spiegazione del metodo, cosa comprende e dettagli aggiornati: {LINK_POTTY}
 """
         return f"""
 La mamma ha risposto alla domanda intelligente precedente sul sonno.
@@ -2690,8 +2692,8 @@ Quando proponi il percorso, non usare formule tipo "in chat posso darti una prim
 Dì invece in modo naturale che questa è una prima lettura, ma per aiutarli davvero serve un percorso più personalizzato e collegalo al problema principale che lei ha raccontato.
 Consiglia il Premium come scelta più adatta per il suo caso, spiegando in modo dinamico che comprende questionario iniziale, piano personalizzato sul bambino e 60 giorni di supporto WhatsApp con Paola.
 Spiega che con il Premium può avere un supporto più costante e lavorare in modo graduale proprio sul nodo emerso nella chat, per esempio risvegli, seno, addormentamento, pisolini, routine o difficoltà a riaddormentarsi.
-Specifica che il Premium è in promozione a {OFFERS['premium']['price']} euro.
-Inserisci il link una sola volta: {LINK_PREMIUM}
+Non indicare il prezzo in questa prima proposta, salvo domanda esplicita su prezzo/costo/promozione.
+Inserisci il link una sola volta dicendo che lì trova percorsi, spiegazione del metodo, cosa comprende e dettagli aggiornati: {LINK_PREMIUM}
 """
 
     if product_type == PRODUCT_POTTY:
@@ -2740,7 +2742,7 @@ Gestisci la risposta con naturalezza, usando lo storico:
 - se chiede in cosa consiste, quanto costa, come funziona o il link, rispondi alla domanda commerciale senza chiedere da zero la difficoltà;
 - se dice che risponderà dopo, rispondi poco o niente;
 - se dice che ha acquistato, il codice avvierà la sequenza acquisto, quindi non trattarlo come lead generica.
-Quando fai la valutazione o spieghi il percorso, chiarisci che il Percorso Premium è in offerta a {OFFERS['premium']['price']} euro e comprende questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp con Paola.
+Quando fai la valutazione o spieghi il percorso, presenta il Percorso Premium come il più adatto per essere seguita bene: questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp con Paola. Non dire il prezzo in automatico: se chiede prezzo/costo/promozione, rispondi chiaramente; altrimenti lascia il link dove trova percorsi, spiegazione del metodo e dettagli aggiornati.
 Inserisci il link solo se naturale o se serve: {LINK_PREMIUM}
 """
 
@@ -3585,7 +3587,7 @@ def generate_sleep_lead_analysis(phone, lead_answers):
         if issue:
             risposta = rewrite_reply_if_needed(risposta, issue, context)
         if LINK_PREMIUM not in risposta:
-            risposta = risposta.rstrip() + f"\n\nIl percorso che ti consiglierei è il Premium, ora in offerta a 67 euro: partiamo da un questionario iniziale, preparo un piano personalizzato e poi per 60 giorni ti seguo qui su WhatsApp passo passo.\n\nSe senti che è il momento di farti aiutare, puoi iniziare da qui:\n{LINK_PREMIUM}"
+            risposta = risposta.rstrip() + f"\n\nIl percorso che ti consiglierei è il Premium: partiamo da un questionario iniziale, preparo un piano personalizzato e poi per 60 giorni ti seguo qui su WhatsApp passo passo.\n\nTi lascio il link dove trovi i percorsi, la spiegazione del mio metodo, cosa comprende e tutti i dettagli aggiornati:\n{LINK_PREMIUM}"
         save_message(phone, "assistant", risposta)
         send_whatsapp_message(phone, risposta)
         set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_ANALYSIS_DONE)
@@ -3651,8 +3653,8 @@ def handle_sleep_lead_followup(phone, latest_message):
         if action == "analysis" and LINK_PREMIUM not in reply:
             reply = reply.rstrip() + (
                 "\n\nPer lavorarci bene io parto sempre da un questionario iniziale, poi preparo un piano personalizzato "
-                "e per 60 giorni ti seguo qui su WhatsApp passo passo. Il percorso Premium ora è in offerta a 67 euro.\n\n"
-                f"Se senti che è il momento di farti aiutare, puoi iniziare da qui:\n{LINK_PREMIUM}"
+                "e per 60 giorni ti seguo qui su WhatsApp passo passo.\n\n"
+                f"Ti lascio il link dove trovi i percorsi, la spiegazione del mio metodo, cosa comprende e tutti i dettagli aggiornati:\n{LINK_PREMIUM}"
             )
 
         save_message(phone, "assistant", reply)
@@ -4535,9 +4537,9 @@ def generate_link_followup(phone, product_type, last_link_sent_at=None):
     history = get_recent_history(phone, limit=32)
     product_type = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else get_product_type(phone)
     if product_type == PRODUCT_POTTY:
-        product_note = f"Percorso spannolinamento Premium: {POTTY_PREMIUM_PRICE} euro, guida PDF, questionario, piano personalizzato e 30 giorni di supporto WhatsApp. Link già inviato: {LINK_POTTY}"
+        product_note = f"Percorso spannolinamento Premium: guida PDF, questionario, piano personalizzato e 30 giorni di supporto WhatsApp. Link già inviato: {LINK_POTTY}. Non citare il prezzo se non è emerso o se non lo chiede."
     else:
-        product_note = f"Percorso sonno Premium: {OFFERS['premium']['price']} euro, questionario, piano personalizzato e 60 giorni di supporto WhatsApp. Link già inviato: {LINK_PREMIUM}"
+        product_note = f"Percorso sonno Premium: questionario, piano personalizzato e 60 giorni di supporto WhatsApp. Link già inviato: {LINK_PREMIUM}. Non citare il prezzo se non è emerso o se non lo chiede."
 
     # Evita follow-up temporalmente strani tipo "in questi giorni" quando il link è stato inviato ieri o poche ore prima.
     elapsed_hours = None
