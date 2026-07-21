@@ -46,7 +46,7 @@ TEMP_ROUTER            = float(os.environ.get("TEMP_ROUTER", "0"))
 TEMP_CHAT              = float(os.environ.get("TEMP_CHAT", "0.55"))
 TEMP_PLAN              = float(os.environ.get("TEMP_PLAN", "0.65"))
 
-LINK_PREMIUM           = os.environ.get("LINK_PREMIUM", "https://genitorinarmonia.com/products/metodo-paola-premium")
+LINK_PREMIUM           = os.environ.get("LINK_PREMIUM", "https://shop.genitorinarmonia.com/sonno")
 LINK_BASE              = os.environ.get("LINK_BASE", "https://genitorinarmonia.com/products/sonno-magico")
 LINK_POTTY             = os.environ.get("LINK_POTTY", "https://shop.genitorinarmonia.com/spannolinamento/")
 LINK_REFUND            = os.environ.get("LINK_REFUND", "https://genitorinarmonia.com/policies/refund-policy")
@@ -2581,9 +2581,16 @@ def validate_reply(reply, context):
     clean = re.sub(r"\*\*|__|###?|^- ", "", clean, flags=re.MULTILINE)
 
     # Evita link ripetuti se la mamma non lo ha chiesto.
-    if context.get("link_sent") and not context.get("asks_link") and "genitorinarmonia.com/products/" in clean:
-        lines = [line for line in clean.splitlines() if "genitorinarmonia.com/products/" not in line]
-        clean = "\n".join(lines).strip()
+    # Include vecchi link prodotto e nuovi link shop.
+    if context.get("link_sent") and not context.get("asks_link"):
+        link_patterns = [
+            "genitorinarmonia.com/products/",
+            "shop.genitorinarmonia.com/sonno",
+            "shop.genitorinarmonia.com/spannolinamento",
+        ]
+        if any(p in clean for p in link_patterns):
+            lines = [line for line in clean.splitlines() if not any(p in line for p in link_patterns)]
+            clean = "\n".join(lines).strip()
 
     # Corregge eventuali allucinazioni operative: il questionario non arriva via email.
     forbidden_email_patterns = [
