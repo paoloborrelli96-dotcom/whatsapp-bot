@@ -105,15 +105,14 @@ LEAD_STATUS_STOPPED = "stopped"
 LEAD_STATUS_LINK_FOLLOWUP_SENT = "link_followup_sent"
 LEAD_STATUS_COLD = "cold"
 
-POTTY_BASE_PRICE = 47
-POTTY_PREMIUM_PRICE = 67
+POTTY_BASE_PRICE = 27
+POTTY_PREMIUM_PRICE = 27
 
 POTTY_OFFER_DETAILS = (
-    "Per lo spannolinamento ci sono due opzioni. Il Base comprende la guida PDF Metodo Paola: "
-    "Spannolinamento Dolce di Paola, quindi è indicato per chi vuole leggere il metodo e provare in autonomia. "
-    "Il Premium è il percorso consigliato: comprende la guida PDF, il questionario iniziale, "
-    "il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola, così il lavoro viene adattato "
-    "a come reagisce davvero il bambino durante pipì, cacca, vasino, nido, uscite e prime difficoltà."
+    "Il percorso spannolinamento è a 27 euro e comprende la guida PDF Metodo Paola: "
+    "Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul bambino "
+    "e 30 giorni di supporto WhatsApp con Paola, così il lavoro viene adattato a come reagisce davvero "
+    "il bambino durante pipì, cacca, vasino, nido, uscite e prime difficoltà."
 )
 
 OFFERS = {
@@ -2030,7 +2029,7 @@ def contextual_purchase_fallback(trigger_text="", product_type=PRODUCT_SLEEP):
         if product_type == PRODUCT_POTTY:
             return (
                 "Certo mamma, ti spiego subito.\n\n"
-                "Nel Percorso Premium spannolinamento hai incluso la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul tuo bambino e 30 giorni di supporto WhatsApp con me.\n\n"
+                "Nel Percorso percorso spannolinamento hai incluso la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul tuo bambino e 30 giorni di supporto WhatsApp con me.\n\n"
                 "La parte più importante è che non resti con una guida generica: guardo bene la vostra situazione e preparo un piano personalizzato per accompagnare l'inizio dello spannolinamento in base a come reagisce davvero il bambino.\n\n"
                 "La guida arriva in automatico dopo l'ordine. Ora, per partire bene qui insieme, ti mando le regole della chat e poi il questionario dettagliato."
             )
@@ -2071,7 +2070,7 @@ def build_contextual_purchase_intro(phone, trigger_text="", product_type=PRODUCT
                 "Sei Paola di Genitori in Armonia. Devi scrivere un breve messaggio WhatsApp naturale.\n"
                 "La mamma ha appena fatto capire che ha già acquistato o ha già accesso al percorso/guida.\n"
                 f"Il prodotto/percorso è: {product_label(product_type)}.\n"
-                "Se il prodotto è spannolinamento e chiede cosa comprende, spiega senza insistere sul prezzo: il Base comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, mentre il Premium è quello consigliato e comprende guida PDF, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.\n"
+                "Se il prodotto è spannolinamento e chiede cosa comprende, spiega senza insistere sul prezzo: il percorso spannolinamento comprende guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.\n"
                 "Rispondi in modo coerente all'ultimo messaggio: se ha fatto una domanda, rispondi prima a quella domanda.\n"
                 "Poi fai una transizione morbida: ora le manderai le regole della chat e il questionario iniziale corretto per preparare il piano personalizzato.\n"
                 "Non sembrare un messaggio automatico. Non dire 'messaggio automatico'. Non inserire link.\n"
@@ -2359,10 +2358,9 @@ def get_business_rule(intent, fase, link_sent=False, product_type=PRODUCT_UNKNOW
     if intent == "richiesta_differenza_percorsi":
         if product_type == PRODUCT_POTTY:
             return f"""
-Spiega la differenza tra i percorsi spannolinamento in modo naturale.
-Il Base a {POTTY_BASE_PRICE} euro comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, quindi è indicato se la mamma vuole leggere il metodo e provare in autonomia.
-Il Premium a {POTTY_PREMIUM_PRICE} euro è quello consigliato: comprende la guida PDF, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
-Orienta con delicatezza verso il Premium, soprattutto se ci sono dubbi, rifiuti, incidenti, cacca, nido, uscite o paura di sbagliare.
+Spiega in modo naturale che per lo spannolinamento al momento il percorso consigliato è unico e completo.
+Il percorso è a {POTTY_PREMIUM_PRICE} euro e comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Sottolinea che non resta una guida generica: viene adattato a dubbi, rifiuti, incidenti, cacca, nido, uscite o paura di sbagliare.
 Non spingere in modo aggressivo.
 """
         return f"""
@@ -2401,9 +2399,9 @@ Mantieni tono umano, usando "mamma" o evitando appellativi; mai "cara".
             return f"""
 La persona è ancora lead e chiede informazioni sul percorso spannolinamento.
 Rispondi in modo naturale e contestuale, senza sembrare un messaggio copia-incolla.
-Spiega cosa comprende il percorso senza partire dal prezzo: il Base è la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, mentre il Premium è quello consigliato se vuole essere seguita davvero perché comprende guida PDF, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Spiega cosa comprende il percorso senza partire dal prezzo: guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
 Non dire il prezzo in automatico se non lo ha chiesto chiaramente; dille che nel link trova percorsi, cosa comprende, spiegazione del metodo e dettagli aggiornati.
-Spiega che il Premium serve proprio per non restare con una guida generica, ma adattare l'inizio dello spannolinamento alla situazione reale del bambino: pipì, cacca, vasino/water, incidenti, nido, uscite e reazioni emotive.
+Spiega che il percorso serve proprio per non restare con una guida generica, ma adattare l'inizio dello spannolinamento alla situazione reale del bambino: pipì, cacca, vasino/water, incidenti, nido, uscite e reazioni emotive.
 Chiarisci che dopo l'ordine arriva automaticamente la guida; poi la mamma scrive qui su WhatsApp, compila il questionario e si parte con l'analisi della situazione e il piano personalizzato.
 Se non ha ancora raccontato la situazione, dopo la spiegazione puoi chiederle età del bambino e se hanno già iniziato a togliere il pannolino o stanno valutando quando partire.
 Se chiede il link o sembra pronta a procedere, inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
@@ -2448,9 +2446,9 @@ La persona è ancora lead e ha già descritto una difficoltà concreta sullo spa
 Non fare altre domande generiche: fai subito una prima analisi commerciale personalizzata.
 Devi riconoscere la difficoltà specifica, spiegare in modo semplice cosa può esserci dietro: prontezza, segnali, incidenti, cacca, nido, pressione o routine non chiara.
 Non dare un piano completo gratuito.
-Poi presenta il Percorso Premium spannolinamento come percorso consigliato: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
-Non indicare il prezzo in questa prima proposta, a meno che lo abbia chiesto esplicitamente. Se serve, puoi dire che esiste anche il Base come sola guida PDF da seguire in autonomia, ma non metterlo come scelta principale se la mamma ha chiesto aiuto o ha già raccontato una difficoltà.
-Spiega che il Premium non è una guida generica: dopo l'ordine la guida arriva automaticamente, poi la mamma scrive qui su WhatsApp, compila il questionario iniziale e da lì viene analizzata la situazione per preparare un piano personalizzato sull'inizio dello spannolinamento.
+Poi presenta il percorso spannolinamento come percorso consigliato: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Non indicare il prezzo in questa prima proposta, a meno che lo abbia chiesto esplicitamente. Se chiede il prezzo, spiega che il percorso completo con supporto e piano personalizzato è a 27 euro.
+Spiega che non è una guida generica: dopo l'ordine la guida arriva automaticamente, poi la mamma scrive qui su WhatsApp, compila il questionario iniziale e da lì viene analizzata la situazione per preparare un piano personalizzato sull'inizio dello spannolinamento.
 Inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
 """
     if intent in ("domanda_percorso_attivo", "aggiornamento_percorso_attivo", "richiesta_pratica_immediata") or fase == 4:
@@ -2529,7 +2527,7 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
 
     if intent == "richiesta_bonifico" and confidence >= 0.85:
         if product_type == PRODUCT_POTTY:
-            amount_text = f"Importo consigliato: {POTTY_PREMIUM_PRICE} euro per il Premium spannolinamento"
+            amount_text = f"Importo: {POTTY_PREMIUM_PRICE} euro per il percorso spannolinamento completo"
         else:
             amount_text = f"Importo consigliato: {OFFERS['premium']['price']} euro per il Premium"
         return (
@@ -2681,10 +2679,9 @@ Fai un'analisi concreta di quello che ha raccontato: prontezza, segnali, pipì, 
 Prima di proporre il percorso, aggiungi SEMPRE una breve direzione di lavoro, personalizzata sul suo caso, spiegando su cosa lavoreresti o da dove partiresti; resta generale e non dare una sequenza di azioni o un piano completo gratuito.
 Quando proponi il percorso, non usare formule tipo "in chat posso darti una prima lettura" o "in chat posso aiutarti fino a un certo punto".
 Dì invece in modo naturale che questa è una prima lettura, ma per aiutarli davvero serve un percorso più personalizzato e collegalo al problema principale che lei ha raccontato.
-Consiglia il Premium come scelta più adatta per il suo caso, spiegando in modo dinamico che non è solo una guida: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
-Spiega che con il Premium può avere un supporto più costante e adattare i passaggi a come reagisce davvero il bambino, senza andare a tentativi e senza forzare.
-Non indicare il prezzo in questa prima proposta, salvo domanda esplicita su prezzo/costo/promozione.
-Il Base, solo guida PDF, si nomina solo se lei chiede la differenza o chiede se può farlo da sola.
+Consiglia il percorso spannolinamento come scelta più adatta per il suo caso, spiegando in modo dinamico che non è solo una guida: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Spiega che con questo percorso può avere un supporto più costante e adattare i passaggi a come reagisce davvero il bambino, senza andare a tentativi e senza forzare.
+Non indicare il prezzo in questa prima proposta, salvo domanda esplicita su prezzo/costo/promozione. Se lo chiede, il prezzo del percorso completo spannolinamento è 27 euro, incluso supporto e piano personalizzato.
 Inserisci il link dello spannolinamento una sola volta dicendo che lì trova percorsi, spiegazione del metodo, cosa comprende e dettagli aggiornati: {LINK_POTTY}
 """
         return f"""
@@ -4544,7 +4541,7 @@ def generate_link_followup(phone, product_type, last_link_sent_at=None):
     history = get_recent_history(phone, limit=32)
     product_type = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else get_product_type(phone)
     if product_type == PRODUCT_POTTY:
-        product_note = f"Percorso spannolinamento Premium: guida PDF, questionario, piano personalizzato e 30 giorni di supporto WhatsApp. Link già inviato: {LINK_POTTY}. Non citare il prezzo se non è emerso o se non lo chiede."
+        product_note = f"Percorso spannolinamento completo: guida PDF, questionario, piano personalizzato e 30 giorni di supporto WhatsApp. Link già inviato: {LINK_POTTY}. Non citare il prezzo se non è emerso o se non lo chiede; se lo chiede, il prezzo è 27 euro."
     else:
         product_note = f"Percorso sonno Premium: questionario, piano personalizzato e 60 giorni di supporto WhatsApp. Link già inviato: {LINK_PREMIUM}. Non citare il prezzo se non è emerso o se non lo chiede."
 
