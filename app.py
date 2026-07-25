@@ -35,11 +35,11 @@ TIMEZONE               = os.environ.get("TIMEZONE", "Europe/Rome")
 # ─── MODELLI OPENAI ────────────────────────────────────────────────────────────
 # Puoi cambiarli da Railway senza modificare il codice.
 # Consiglio: router/classificazioni su modello economico, chat su modello conversazionale, piano su modello piu forte.
-MODEL_ROUTER           = os.environ.get("MODEL_ROUTER", "gpt-5.4-nano")
-MODEL_CLASSIFIER       = os.environ.get("MODEL_CLASSIFIER", "gpt-5.4-nano")
-MODEL_CHAT             = os.environ.get("MODEL_CHAT", "gpt-5.1-chat-latest")
-MODEL_PLAN             = os.environ.get("MODEL_PLAN", "gpt-5.5")
-MODEL_PROFILE          = os.environ.get("MODEL_PROFILE", "gpt-5.4-mini")
+MODEL_ROUTER           = os.environ.get("MODEL_ROUTER", "gpt-5-nano")
+MODEL_CLASSIFIER       = os.environ.get("MODEL_CLASSIFIER", "gpt-5-nano")
+MODEL_CHAT             = os.environ.get("MODEL_CHAT", "gpt-5.1")
+MODEL_PLAN             = os.environ.get("MODEL_PLAN", "gpt-5.1")
+MODEL_PROFILE          = os.environ.get("MODEL_PROFILE", "gpt-5.1")
 MODEL_AUDIO            = os.environ.get("MODEL_AUDIO", "whisper-1")
 
 TEMP_ROUTER            = float(os.environ.get("TEMP_ROUTER", "0"))
@@ -88,6 +88,10 @@ FOLLOWUP_QUESTION_AFTER_HOURS = float(os.environ.get("FOLLOWUP_QUESTION_AFTER_HO
 FOLLOWUP_LINK_AFTER_HOURS = float(os.environ.get("FOLLOWUP_LINK_AFTER_HOURS", "18"))
 FOLLOWUP_COLD_AFTER_HOURS = float(os.environ.get("FOLLOWUP_COLD_AFTER_HOURS", "24"))
 
+# V45: tutti i follow-up automatici sono disattivati.
+# Parte solo il template iniziale; se la persona non risponde, il bot non la ricontatta.
+AUTOMATIC_FOLLOWUPS_ENABLED = False
+
 GHL_WEBHOOK_SECRET = os.environ.get("GHL_WEBHOOK_SECRET", "").strip()
 
 LEAD_FLOW_NONE = "none"
@@ -105,14 +109,15 @@ LEAD_STATUS_STOPPED = "stopped"
 LEAD_STATUS_LINK_FOLLOWUP_SENT = "link_followup_sent"
 LEAD_STATUS_COLD = "cold"
 
-POTTY_BASE_PRICE = 27
-POTTY_PREMIUM_PRICE = 27
+POTTY_BASE_PRICE = 47
+POTTY_PREMIUM_PRICE = 67
 
 POTTY_OFFER_DETAILS = (
-    "Il percorso spannolinamento è a 27 euro e comprende la guida PDF Metodo Paola: "
-    "Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul bambino "
-    "e 30 giorni di supporto WhatsApp con Paola, così il lavoro viene adattato a come reagisce davvero "
-    "il bambino durante pipì, cacca, vasino, nido, uscite e prime difficoltà."
+    "Per lo spannolinamento ci sono due opzioni. Il Base comprende la guida PDF Metodo Paola: "
+    "Spannolinamento Dolce di Paola, quindi è indicato per chi vuole leggere il metodo e provare in autonomia. "
+    "Il Premium è il percorso consigliato: comprende la guida PDF, il questionario iniziale, "
+    "il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola, così il lavoro viene adattato "
+    "a come reagisce davvero il bambino durante pipì, cacca, vasino, nido, uscite e prime difficoltà."
 )
 
 OFFERS = {
@@ -1024,7 +1029,10 @@ def init_db():
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS lead_flow TEXT DEFAULT 'none'")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS lead_status TEXT DEFAULT 'none'")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS lead_contacted_at TIMESTAMPTZ")
-    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS followup_enabled BOOLEAN DEFAULT TRUE")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS followup_enabled BOOLEAN DEFAULT FALSE")
+    cur.execute("ALTER TABLE consultations ALTER COLUMN followup_enabled SET DEFAULT FALSE")
+    # V45: spegne anche eventuali follow-up rimasti in coda dalle versioni precedenti.
+    cur.execute("UPDATE consultations SET followup_enabled = FALSE WHERE followup_enabled IS DISTINCT FROM FALSE")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS template_followup_sent_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS last_intelligent_question_sent_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS intelligent_question_followup_sent_at TIMESTAMPTZ")
@@ -1213,11 +1221,12 @@ def set_lead_state(phone, lead_flow=LEAD_FLOW_NONE, lead_status=LEAD_STATUS_NONE
         conn = get_db()
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO consultations (phone, lead_flow, lead_status, lead_contacted_at)
-            VALUES (%s, %s, %s, NOW())
+            INSERT INTO consultations (phone, lead_flow, lead_status, lead_contacted_at, followup_enabled)
+            VALUES (%s, %s, %s, NOW(), FALSE)
             ON CONFLICT (phone) DO UPDATE
             SET lead_flow = EXCLUDED.lead_flow,
                 lead_status = EXCLUDED.lead_status,
+                followup_enabled = FALSE,
                 lead_contacted_at = CASE
                     WHEN EXCLUDED.lead_status = %s THEN NOW()
                     ELSE consultations.lead_contacted_at
@@ -1365,6 +1374,100 @@ def is_stop_followup_message(text):
 
 def stop_followups(phone):
     update_lead_followup_fields(phone, lead_status=LEAD_STATUS_STOPPED, followup_enabled=False)
+
+
+def pause_for_paola(phone, reason="richiesta manuale"):
+    """Mette la conversazione in pausa/manuale e disattiva follow-up automatici.
+    Si usa per richieste delicate, assistenza, rinnovi, verifiche piano e alert umani.
+    """
+    try:
+        set_fase(phone, 99)
+        update_lead_followup_fields(phone, followup_enabled=False)
+        logger.info(f"Chat {phone} messa in pausa/manuale — {reason}")
+    except Exception as e:
+        logger.error(f"Errore pause_for_paola per {phone}: {e}")
+
+
+def detect_special_manual_request(text):
+    """Rileva richieste che NON devono essere gestite dal bot in automatico.
+    Torna (categoria, risposta_mamma, titolo_alert) oppure None.
+    Regola: niente link inventati, prezzi inventati, rinnovi automatici o procedure amministrative.
+    """
+    t = normalize_text(text)
+    if not t:
+        return None
+
+    guide_terms = [
+        "non mi sono arrivate le guide", "non mi sono arrivati i pdf", "non mi e arrivata la guida",
+        "non mi è arrivata la guida", "non ho ricevuto le guide", "non ho ricevuto i pdf",
+        "non ho ricevuto l'email", "non mi e arrivata l'email", "non mi è arrivata l'email",
+        "non mi è arrivata email", "non mi e arrivata email", "non trovo le guide", "non trovo i pdf",
+        "dove trovo le guide", "dove sono le guide", "dove trovo i pdf", "dove sono i pdf",
+        "dove trovo il materiale", "non trovo il materiale", "non riesco a scaricare", "non mi fa scaricare",
+        "link della guida", "link delle guide", "pdf non arriv", "guide non arriv", "email non arriv"
+    ]
+    if any(term in t for term in guide_terms):
+        return (
+            "guide_non_arrivate",
+            "Mamma, le guide di solito arrivano via email dopo l'acquisto. Controlla anche spam o promozioni, perché a volte finiscono lì.\n\nSe non le trovi, verifico io e te le giro tranquillamente 💛",
+            "⚠️ GUIDE / PDF NON ARRIVATI"
+        )
+
+    renewal_terms = [
+        "vorrei rinnovare", "voglio rinnovare", "posso rinnovare", "come rinnovo", "come posso rinnovare",
+        "quanto costa rinnovare", "rinnovo", "rinnovare", "prolungare", "prolungamento",
+        "continuare il percorso", "continuare con il percorso", "posso continuare", "vorrei continuare",
+        "mi serve ancora supporto", "estendere il percorso", "estensione percorso", "rinnoviamo"
+    ]
+    if any(term in t for term in renewal_terms):
+        return (
+            "richiesta_rinnovo",
+            "Mamma, certo. Per il rinnovo controllo io la tua situazione e ti faccio sapere come possiamo procedere 💛",
+            "🔁 RICHIESTA RINNOVO / PROLUNGAMENTO"
+        )
+
+    assistance_terms = [
+        "ho bisogno di assistenza", "serve assistenza", "mi serve assistenza", "supporto tecnico",
+        "non riesco ad accedere", "non mi fa accedere", "link non funziona", "il link non funziona",
+        "problema con il link", "problemi con il link", "problema con ordine", "problemi con ordine",
+        "problema con l'ordine", "problemi con l'ordine", "ordine non risulta", "pagamento non risulta",
+        "ho pagato ma", "ho fatto il pagamento ma", "pagamento bloccato", "checkout non funziona",
+        "non riesco a pagare", "non mi fa pagare", "fattura", "ricevuta fiscale", "rimborso",
+        "voglio il rimborso", "chiedo rimborso", "richiedo rimborso", "cambiare percorso", "cambio percorso",
+        "voglio parlare con paola", "posso parlare con paola", "mi può contattare paola", "mi puoi chiamare",
+        "mi chiami", "assistenza ordine", "assistenza acquisto"
+    ]
+    if any(term in t for term in assistance_terms):
+        return (
+            "assistenza_o_amministrazione",
+            "Mamma, controllo io questa cosa e ti aggiorno appena verifico 💛",
+            "⚠️ ASSISTENZA / RICHIESTA PARTICOLARE"
+        )
+
+    return None
+
+
+def handle_special_manual_request(phone, text):
+    detected = detect_special_manual_request(text)
+    if not detected:
+        return False
+    category, reply, alert_title = detected
+    save_message(phone, "assistant", reply)
+    send_whatsapp_message(phone, reply)
+    pause_for_paola(phone, category)
+    alert = (
+        f"{alert_title}\n\n"
+        f"Telefono: {phone}\n"
+        f"Categoria: {category}\n\n"
+        f"Messaggio mamma:\n{text}\n\n"
+        f"Chat messa in pausa/manuale. Rispondi tu o usa /riprendi quando vuoi riattivare il bot."
+    )
+    threading.Thread(target=send_telegram, args=[alert], daemon=True).start()
+    try:
+        threading.Thread(target=send_to_topic, args=[phone, "[Chat messa in pausa per Paola]\n" + alert, True], daemon=True).start()
+    except Exception:
+        pass
+    return True
 
 
 def reply_contains_product_link(reply):
@@ -2029,7 +2132,7 @@ def contextual_purchase_fallback(trigger_text="", product_type=PRODUCT_SLEEP):
         if product_type == PRODUCT_POTTY:
             return (
                 "Certo mamma, ti spiego subito.\n\n"
-                "Nel Percorso percorso spannolinamento hai incluso la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul tuo bambino e 30 giorni di supporto WhatsApp con me.\n\n"
+                "Nel Percorso Premium spannolinamento hai incluso la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul tuo bambino e 30 giorni di supporto WhatsApp con me.\n\n"
                 "La parte più importante è che non resti con una guida generica: guardo bene la vostra situazione e preparo un piano personalizzato per accompagnare l'inizio dello spannolinamento in base a come reagisce davvero il bambino.\n\n"
                 "La guida arriva in automatico dopo l'ordine. Ora, per partire bene qui insieme, ti mando le regole della chat e poi il questionario dettagliato."
             )
@@ -2070,7 +2173,7 @@ def build_contextual_purchase_intro(phone, trigger_text="", product_type=PRODUCT
                 "Sei Paola di Genitori in Armonia. Devi scrivere un breve messaggio WhatsApp naturale.\n"
                 "La mamma ha appena fatto capire che ha già acquistato o ha già accesso al percorso/guida.\n"
                 f"Il prodotto/percorso è: {product_label(product_type)}.\n"
-                "Se il prodotto è spannolinamento e chiede cosa comprende, spiega senza insistere sul prezzo: il percorso spannolinamento comprende guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.\n"
+                "Se il prodotto è spannolinamento e chiede cosa comprende, spiega senza insistere sul prezzo: il Base comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, mentre il Premium è quello consigliato e comprende guida PDF, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.\n"
                 "Rispondi in modo coerente all'ultimo messaggio: se ha fatto una domanda, rispondi prima a quella domanda.\n"
                 "Poi fai una transizione morbida: ora le manderai le regole della chat e il questionario iniziale corretto per preparare il piano personalizzato.\n"
                 "Non sembrare un messaggio automatico. Non dire 'messaggio automatico'. Non inserire link.\n"
@@ -2358,9 +2461,10 @@ def get_business_rule(intent, fase, link_sent=False, product_type=PRODUCT_UNKNOW
     if intent == "richiesta_differenza_percorsi":
         if product_type == PRODUCT_POTTY:
             return f"""
-Spiega in modo naturale che per lo spannolinamento al momento il percorso consigliato è unico e completo.
-Il percorso è a {POTTY_PREMIUM_PRICE} euro e comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
-Sottolinea che non resta una guida generica: viene adattato a dubbi, rifiuti, incidenti, cacca, nido, uscite o paura di sbagliare.
+Spiega la differenza tra i percorsi spannolinamento in modo naturale.
+Il Base a {POTTY_BASE_PRICE} euro comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, quindi è indicato se la mamma vuole leggere il metodo e provare in autonomia.
+Il Premium a {POTTY_PREMIUM_PRICE} euro è quello consigliato: comprende la guida PDF, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Orienta con delicatezza verso il Premium, soprattutto se ci sono dubbi, rifiuti, incidenti, cacca, nido, uscite o paura di sbagliare.
 Non spingere in modo aggressivo.
 """
         return f"""
@@ -2399,9 +2503,9 @@ Mantieni tono umano, usando "mamma" o evitando appellativi; mai "cara".
             return f"""
 La persona è ancora lead e chiede informazioni sul percorso spannolinamento.
 Rispondi in modo naturale e contestuale, senza sembrare un messaggio copia-incolla.
-Spiega cosa comprende il percorso senza partire dal prezzo: guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Spiega cosa comprende il percorso senza partire dal prezzo: il Base è la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, mentre il Premium è quello consigliato se vuole essere seguita davvero perché comprende guida PDF, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
 Non dire il prezzo in automatico se non lo ha chiesto chiaramente; dille che nel link trova percorsi, cosa comprende, spiegazione del metodo e dettagli aggiornati.
-Spiega che il percorso serve proprio per non restare con una guida generica, ma adattare l'inizio dello spannolinamento alla situazione reale del bambino: pipì, cacca, vasino/water, incidenti, nido, uscite e reazioni emotive.
+Spiega che il Premium serve proprio per non restare con una guida generica, ma adattare l'inizio dello spannolinamento alla situazione reale del bambino: pipì, cacca, vasino/water, incidenti, nido, uscite e reazioni emotive.
 Chiarisci che dopo l'ordine arriva automaticamente la guida; poi la mamma scrive qui su WhatsApp, compila il questionario e si parte con l'analisi della situazione e il piano personalizzato.
 Se non ha ancora raccontato la situazione, dopo la spiegazione puoi chiederle età del bambino e se hanno già iniziato a togliere il pannolino o stanno valutando quando partire.
 Se chiede il link o sembra pronta a procedere, inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
@@ -2446,9 +2550,9 @@ La persona è ancora lead e ha già descritto una difficoltà concreta sullo spa
 Non fare altre domande generiche: fai subito una prima analisi commerciale personalizzata.
 Devi riconoscere la difficoltà specifica, spiegare in modo semplice cosa può esserci dietro: prontezza, segnali, incidenti, cacca, nido, pressione o routine non chiara.
 Non dare un piano completo gratuito.
-Poi presenta il percorso spannolinamento come percorso consigliato: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
-Non indicare il prezzo in questa prima proposta, a meno che lo abbia chiesto esplicitamente. Se chiede il prezzo, spiega che il percorso completo con supporto e piano personalizzato è a 27 euro.
-Spiega che non è una guida generica: dopo l'ordine la guida arriva automaticamente, poi la mamma scrive qui su WhatsApp, compila il questionario iniziale e da lì viene analizzata la situazione per preparare un piano personalizzato sull'inizio dello spannolinamento.
+Poi presenta il Percorso Premium spannolinamento come percorso consigliato: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Non indicare il prezzo in questa prima proposta, a meno che lo abbia chiesto esplicitamente. Se serve, puoi dire che esiste anche il Base come sola guida PDF da seguire in autonomia, ma non metterlo come scelta principale se la mamma ha chiesto aiuto o ha già raccontato una difficoltà.
+Spiega che il Premium non è una guida generica: dopo l'ordine la guida arriva automaticamente, poi la mamma scrive qui su WhatsApp, compila il questionario iniziale e da lì viene analizzata la situazione per preparare un piano personalizzato sull'inizio dello spannolinamento.
 Inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
 """
     if intent in ("domanda_percorso_attivo", "aggiornamento_percorso_attivo", "richiesta_pratica_immediata") or fase == 4:
@@ -2527,7 +2631,7 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
 
     if intent == "richiesta_bonifico" and confidence >= 0.85:
         if product_type == PRODUCT_POTTY:
-            amount_text = f"Importo: {POTTY_PREMIUM_PRICE} euro per il percorso spannolinamento completo"
+            amount_text = f"Importo consigliato: {POTTY_PREMIUM_PRICE} euro per il Premium spannolinamento"
         else:
             amount_text = f"Importo consigliato: {OFFERS['premium']['price']} euro per il Premium"
         return (
@@ -2679,9 +2783,10 @@ Fai un'analisi concreta di quello che ha raccontato: prontezza, segnali, pipì, 
 Prima di proporre il percorso, aggiungi SEMPRE una breve direzione di lavoro, personalizzata sul suo caso, spiegando su cosa lavoreresti o da dove partiresti; resta generale e non dare una sequenza di azioni o un piano completo gratuito.
 Quando proponi il percorso, non usare formule tipo "in chat posso darti una prima lettura" o "in chat posso aiutarti fino a un certo punto".
 Dì invece in modo naturale che questa è una prima lettura, ma per aiutarli davvero serve un percorso più personalizzato e collegalo al problema principale che lei ha raccontato.
-Consiglia il percorso spannolinamento come scelta più adatta per il suo caso, spiegando in modo dinamico che non è solo una guida: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
-Spiega che con questo percorso può avere un supporto più costante e adattare i passaggi a come reagisce davvero il bambino, senza andare a tentativi e senza forzare.
-Non indicare il prezzo in questa prima proposta, salvo domanda esplicita su prezzo/costo/promozione. Se lo chiede, il prezzo del percorso completo spannolinamento è 27 euro, incluso supporto e piano personalizzato.
+Consiglia il Premium come scelta più adatta per il suo caso, spiegando in modo dinamico che non è solo una guida: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Spiega che con il Premium può avere un supporto più costante e adattare i passaggi a come reagisce davvero il bambino, senza andare a tentativi e senza forzare.
+Non indicare il prezzo in questa prima proposta, salvo domanda esplicita su prezzo/costo/promozione.
+Il Base, solo guida PDF, si nomina solo se lei chiede la differenza o chiede se può farlo da sola.
 Inserisci il link dello spannolinamento una sola volta dicendo che lì trova percorsi, spiegazione del metodo, cosa comprende e dettagli aggiornati: {LINK_POTTY}
 """
         return f"""
@@ -3096,6 +3201,7 @@ def contact_sleep_lead(phone, lead_flow=LEAD_FLOW_SLEEP_MANUAL, source_note=None
     set_awaiting_product_choice(phone, False)
     set_fase(phone, 0)
     set_lead_state(phone, lead_flow, LEAD_STATUS_TEMPLATE_SENT)
+    update_lead_followup_fields(phone, followup_enabled=False)
     if source_note:
         save_message(phone, "user", f"[NOTA LEAD: {source_note}]")
     save_message(phone, "assistant", "[TEMPLATE LEAD SONNO INVIATO]\n" + MSG_TEMPLATE_SONNO_LEAD)
@@ -3115,6 +3221,7 @@ def contact_potty_lead(phone, lead_flow=LEAD_FLOW_POTTY_MANUAL, source_note=None
     set_awaiting_product_choice(phone, False)
     set_fase(phone, 0)
     set_lead_state(phone, lead_flow, LEAD_STATUS_TEMPLATE_SENT)
+    update_lead_followup_fields(phone, followup_enabled=False)
     if source_note:
         save_message(phone, "user", f"[NOTA LEAD: {source_note}]")
     save_message(phone, "assistant", "[TEMPLATE LEAD SPANNOLINAMENTO INVIATO]\n" + MSG_TEMPLATE_SPANNOLINAMENTO_LEAD)
@@ -3381,6 +3488,9 @@ Profilo bambino:
 
 
 def maybe_send_post_plan_alert(phone, router_result, pending_text):
+    """Se serve una verifica umana post-piano, avvisa Paola e blocca la chat.
+    Ritorna True se ha messo in pausa, così il bot non risponde automaticamente.
+    """
     intent = router_result.get("intent", "") if router_result else ""
     text = (pending_text or "").lower()
     difficulty_terms = [
@@ -3390,39 +3500,41 @@ def maybe_send_post_plan_alert(phone, router_result, pending_text):
     ]
     is_difficulty = intent == "difficolta_persistente_post_piano" or any(term in text for term in difficulty_terms)
     if not is_difficulty:
-        return
+        return False
     last_plan = get_last_plan_sent_at(phone)
     if not last_plan:
-        return
+        return False
     try:
         now = datetime.now(last_plan.tzinfo) if getattr(last_plan, 'tzinfo', None) else datetime.now()
         hours = (now - last_plan).total_seconds() / 3600
     except Exception:
-        return
+        return False
     if hours < 72:
         logger.info(f"Difficolta post-piano rilevata per {phone}, ma piano inviato da {hours:.1f} ore: nessun alert checkup")
-        return
+        return False
     last_alert = get_last_post_plan_alert_at(phone)
     if last_alert:
         try:
             now2 = datetime.now(last_alert.tzinfo) if getattr(last_alert, 'tzinfo', None) else datetime.now()
             alert_hours = (now2 - last_alert).total_seconds() / 3600
             if alert_hours < 24:
-                return
+                return False
         except Exception:
             pass
     mark_post_plan_alert_sent(phone)
+    pause_for_paola(phone, "verifica_post_piano")
     threading.Thread(
         target=send_telegram,
         args=[(
             f"⚠️ Possibile difficolta post-piano per {phone}\n"
             f"Sono passati almeno 3 giorni dal piano e la mamma segnala stanchezza, pochi miglioramenti o peggioramento.\n"
-            f"Il bot rispondera comunque normalmente, ma valuta tu se usare /checkup o /continua.\n"
+            f"Il bot è stato messo in pausa/manuale: valuta tu e poi usa /continua, /revisione o /riprendi.\n"
             f"Messaggio:\n{pending_text}"
             f"{quick_commands_text()}"
         )],
         daemon=True
     ).start()
+    return True
 
 
 def send_piano(phone):
@@ -3694,13 +3806,18 @@ def process_response(phone, image_url=None):
         mark_silent_no_reply(phone, "fase 0: reazione/micro-conferma senza domanda")
         return
 
-    # Stop automatico follow-up se la mamma dice chiaramente che non vuole essere ricontattata.
+    # Se la mamma chiede esplicitamente di non essere ricontattata, registra comunque lo stop.
     if fase == 0 and is_stop_followup_message(combined_raw):
         stop_followups(phone)
         risposta = "Va bene mamma, nessun problema. Non ti ricontatto più 💛"
         save_message(phone, "assistant", risposta)
         send_whatsapp_message(phone, risposta)
-        logger.info(f"Follow-up stoppati per {phone}")
+        logger.info(f"Ricontatto disattivato per {phone}")
+        return
+
+    # Richieste speciali/assistenza/rinnovo/materiali: Paola deve verificare.
+    # Il bot risponde solo in modo breve, avvisa Telegram e mette la chat in pausa/manuale.
+    if handle_special_manual_request(phone, combined_raw):
         return
 
     # Se il contatto è partito con /contatta_sonno, NON usiamo un flusso separato.
@@ -3749,9 +3866,10 @@ def process_response(phone, image_url=None):
     logger.info(f"Router per {phone}: {router_result}")
 
     if should_hold_for_human(router_result):
+        pause_for_paola(phone, f"alert_umano_{router_result.get('intent', 'altro') if router_result else 'altro'}")
         threading.Thread(
             target=send_telegram,
-            args=[manual_alert_message(phone, router_result, combined_raw)],
+            args=[manual_alert_message(phone, router_result, combined_raw) + "\n\nChat messa in pausa/manuale. Rispondi tu o usa /riprendi quando vuoi riattivare il bot."],
             daemon=True
         ).start()
         return
@@ -3761,19 +3879,23 @@ def process_response(phone, image_url=None):
         logger.info(f"Checkup response per {phone}: {check}")
         status = check.get("status", "incomplete")
         confidence = float(check.get("confidence", 0) or 0)
-        if status == "sufficient" and confidence >= 0.60:
-            send_revision(phone, reason="checkup automatico")
-            return
         if status == "defer" and confidence >= 0.60:
             mark_silent_no_reply(phone, "checkup in attesa: risposta di rinvio/cortesia")
             return
-        missing = check.get("missing") or "qualche dettaglio su addormentamento, risvegli e pisolini"
-        risposta = (
-            "Ok, per rivederlo bene mi manca ancora " + missing + ". "
-            "Quando riesci mandami questi dettagli, cosi posso rielaborare il piano senza andare a tentativi 🤍"
+        # Quando la mamma risponde a un checkup/verifica piano, il bot NON genera più revisione automatica.
+        # Paola deve leggere con calma e decidere se usare /revisione, /continua o rispondere manualmente.
+        pause_for_paola(phone, "risposta_checkup_da_verificare")
+        set_checkup_pending(phone, False)
+        alert = (
+            f"📝 RISPOSTA CHECKUP / VERIFICA PIANO\n\n"
+            f"Telefono: {phone}\n"
+            f"Esito classificatore: {status} — confidence {confidence:.2f}\n"
+            f"Missing eventuali: {check.get('missing') or '-'}\n\n"
+            f"Messaggio mamma:\n{combined_raw}\n\n"
+            f"Chat messa in pausa/manuale. Valuta tu e poi usa /revisione, /continua o /riprendi."
+            f"{quick_commands_text()}"
         )
-        save_message(phone, "assistant", risposta)
-        send_whatsapp_message(phone, risposta)
+        threading.Thread(target=send_telegram, args=[alert], daemon=True).start()
         return
 
     if fase == 0:
@@ -3991,7 +4113,8 @@ def process_response(phone, image_url=None):
         logger.info(f"Fase 3 per {phone} — bot in attesa del piano")
 
     elif fase == 4:
-        maybe_send_post_plan_alert(phone, router_result, combined_raw)
+        if maybe_send_post_plan_alert(phone, router_result, combined_raw):
+            return
         # Se emergono nuovi dati utili, prova ad aggiornare il profilo senza bloccare la risposta.
         if len(combined_raw) > 120:
             threading.Thread(target=extract_child_profile_from_history, args=[phone], daemon=True).start()
@@ -4541,7 +4664,7 @@ def generate_link_followup(phone, product_type, last_link_sent_at=None):
     history = get_recent_history(phone, limit=32)
     product_type = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else get_product_type(phone)
     if product_type == PRODUCT_POTTY:
-        product_note = f"Percorso spannolinamento completo: guida PDF, questionario, piano personalizzato e 30 giorni di supporto WhatsApp. Link già inviato: {LINK_POTTY}. Non citare il prezzo se non è emerso o se non lo chiede; se lo chiede, il prezzo è 27 euro."
+        product_note = f"Percorso spannolinamento Premium: guida PDF, questionario, piano personalizzato e 30 giorni di supporto WhatsApp. Link già inviato: {LINK_POTTY}. Non citare il prezzo se non è emerso o se non lo chiede."
     else:
         product_note = f"Percorso sonno Premium: questionario, piano personalizzato e 60 giorni di supporto WhatsApp. Link già inviato: {LINK_PREMIUM}. Non citare il prezzo se non è emerso o se non lo chiede."
 
@@ -4668,30 +4791,23 @@ def cleanup_invalid_lead_phones():
 
 
 def run_followup_checks():
-    if in_orario_silenzio():
-        return
-    cleanup_invalid_lead_phones()
-    for row in due_template_followups():
-        send_template_followup(row["phone"], row.get("product_type"))
-        time.sleep(1.0)
-    for row in due_question_followups():
-        generate_question_followup(row["phone"], row.get("product_type"))
-        time.sleep(1.0)
-    for row in due_link_followups():
-        generate_link_followup(row["phone"], row.get("product_type"), row.get("last_link_sent_at"))
-        time.sleep(1.0)
-    mark_silent_after_link_followup_cold()
+    """V45: follow-up automatici eliminati.
+
+    Il bot invia esclusivamente il template iniziale. Se la persona non risponde,
+    non parte nessun secondo template, nessun sollecito GPT e nessun follow-up post-link.
+    """
+    logger.debug("Follow-up automatici disattivati in V45")
+    return 0
 
 # ─── JOB BACKGROUND ────────────────────────────────────────────────────────────
 def background_job():
     risveglio_fatto = False
     while True:
         try:
-            # Invia piani schedulati e follow-up solo fuori orario silenzio
+            # Invia solo i piani schedulati. In V45 non esistono follow-up automatici.
             if not in_orario_silenzio():
                 for phone in get_pianos_to_send():
                     send_piano(phone)
-                run_followup_checks()
 
             # Risveglio mattutino — alle 07:00 crea timer per messaggi notturni
             try:
@@ -4761,7 +4877,7 @@ def startup():
     init_db()
     threading.Thread(target=background_job, daemon=True).start()
     setup_telegram_webhook()
-    logger.info("Bot avviato")
+    logger.info("Bot avviato — V45: follow-up automatici disattivati")
 
 if __name__ == "__main__":
     startup()
