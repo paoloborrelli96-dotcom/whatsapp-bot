@@ -47,7 +47,9 @@ TEMP_CHAT              = float(os.environ.get("TEMP_CHAT", "0.55"))
 TEMP_PLAN              = float(os.environ.get("TEMP_PLAN", "0.65"))
 
 LINK_PREMIUM           = os.environ.get("LINK_PREMIUM", "https://shop.genitorinarmonia.com/sonno")
-LINK_BASE              = os.environ.get("LINK_BASE", "https://genitorinarmonia.com/products/sonno-magico")
+LINK_SLEEP_GUIDES      = os.environ.get("LINK_SLEEP_GUIDES", "https://shop.genitorinarmonia.com/sonno-base")
+# Alias legacy mantenuto per compatibilita con vecchie funzioni/configurazioni.
+LINK_BASE              = LINK_SLEEP_GUIDES
 LINK_POTTY             = os.environ.get("LINK_POTTY", "https://shop.genitorinarmonia.com/spannolinamento/")
 LINK_REFUND            = os.environ.get("LINK_REFUND", "https://genitorinarmonia.com/policies/refund-policy")
 
@@ -88,7 +90,7 @@ FOLLOWUP_QUESTION_AFTER_HOURS = float(os.environ.get("FOLLOWUP_QUESTION_AFTER_HO
 FOLLOWUP_LINK_AFTER_HOURS = float(os.environ.get("FOLLOWUP_LINK_AFTER_HOURS", "18"))
 FOLLOWUP_COLD_AFTER_HOURS = float(os.environ.get("FOLLOWUP_COLD_AFTER_HOURS", "24"))
 
-# V45: tutti i follow-up automatici sono disattivati.
+# V46: tutti i follow-up automatici restano disattivati.
 # Parte solo il template iniziale; se la persona non risponde, il bot non la ricontatta.
 AUTOMATIC_FOLLOWUPS_ENABLED = False
 
@@ -109,31 +111,38 @@ LEAD_STATUS_STOPPED = "stopped"
 LEAD_STATUS_LINK_FOLLOWUP_SENT = "link_followup_sent"
 LEAD_STATUS_COLD = "cold"
 
-POTTY_BASE_PRICE = 47
-POTTY_PREMIUM_PRICE = 67
+SLEEP_GUIDES_PRICE = 37
+SLEEP_BASE_PRICE = 47
+SLEEP_PREMIUM_PRICE = 67
+POTTY_PRICE = 27
+
+SLEEP_GUIDES_DETAILS = (
+    "La Guida Metodo Paola da 37 euro comprende solo i materiali digitali, senza piano personalizzato e senza supporto WhatsApp: "
+    "Guida Metodo Paola con la tecnica dei 40 secondi; Serenità Notturna per coliche, fastidi e altri fattori che disturbano il sonno; "
+    "Libertà con amore per accompagnare gradualmente il bambino verso più autonomia da seno e braccia; "
+    "Superare ansia e insicurezza per regressioni e serate difficili; Playlist Note di Luna con 10 brani rilassanti per la routine della nanna."
+)
 
 POTTY_OFFER_DETAILS = (
-    "Per lo spannolinamento ci sono due opzioni. Il Base comprende la guida PDF Metodo Paola: "
-    "Spannolinamento Dolce di Paola, quindi è indicato per chi vuole leggere il metodo e provare in autonomia. "
-    "Il Premium è il percorso consigliato: comprende la guida PDF, il questionario iniziale, "
-    "il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola, così il lavoro viene adattato "
-    "a come reagisce davvero il bambino durante pipì, cacca, vasino, nido, uscite e prime difficoltà."
+    "Il percorso spannolinamento costa 27 euro e comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, "
+    "il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola, "
+    "così il lavoro viene adattato a come reagisce davvero il bambino durante pipì, cacca, vasino, nido, uscite e prime difficoltà."
 )
 
 OFFERS = {
     "base": {
-        "price": 37,
+        "price": SLEEP_BASE_PRICE,
         "duration_days": 30,
         "weekend_support": False,
-        "name": "Percorso da 37 euro",
-        "description": "questionario iniziale, piano personalizzato e supporto WhatsApp nei giorni lavorativi"
+        "name": "Percorso sonno 30 giorni",
+        "description": "guide, questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp"
     },
     "premium": {
-        "price": 67,
+        "price": SLEEP_PREMIUM_PRICE,
         "duration_days": 60,
         "weekend_support": True,
-        "name": "Percorso Premium",
-        "description": "questionario iniziale, piano personalizzato, 60 giorni di supporto WhatsApp e maggiore continuita"
+        "name": "Percorso Premium sonno",
+        "description": "guide, questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp"
     },
     "renewal_30": {"price": 37, "duration_days": 30},
     "renewal_60": {"price": 47, "duration_days": 60}
@@ -341,53 +350,32 @@ MSG_TEMPLATE_SPANNOLINAMENTO_FOLLOWUP = (
 )
 
 SLEEP_LEAD_ANALYSIS_PROMPT = """
-Scrivi una prima valutazione gratuita come Paola per una mamma che ha risposto alle domande iniziali sul sonno.
+Scrivi una prima valutazione commerciale come Paola per una mamma già contattata sul sonno.
 
-Obiettivo: farla sentire capita, darle una lettura utile della situazione e accompagnarla verso il percorso personalizzato, senza regalare un piano completo.
+Obiettivo: farla sentire capita, darle una lettura utile ma breve e accompagnarla all'acquisto senza regalare un piano completo.
 
 Regole:
-- Tono WhatsApp, umano, caldo, concreto.
-- Non essere troppo sintetica: deve sembrare una vera prima analisi, non una risposta fredda di vendita.
-- Se la mamma ha risposto in modo breve o a parole singole, ad esempio "seno", "braccio", "lettone", "risvegli", "sono distrutta", NON ripetere le domande: usa comunque quelle parole come indizi e fai una prima lettura prudente.
-- Collega la risposta a quello che ha scritto: addormentamento, risvegli, seno/braccio/contatto/lettone, pisolini o stanchezza.
-- Dai massimo 1 consiglio generale o una direzione iniziale, ma non una sequenza completa gratuita.
-- Spiega chiaramente che io lavoro con percorsi personalizzati: si parte da un questionario iniziale, poi preparo un piano su misura e per 60 giorni la seguo qui su WhatsApp passo passo.
-- Presenta il Percorso Premium come percorso consigliato, spiegando che include piano personalizzato e 60 giorni di supporto/contatto WhatsApp con me. Non dire il prezzo in questa prima proposta: lascia il link dove trova percorsi, spiegazione del metodo, cosa comprende e dettagli aggiornati. Il prezzo si dice solo se lo chiede esplicitamente.
-- Usa un tono naturale, senza pressione, ma deve essere chiaro cosa comprende il percorso e perché è utile.
-- Inserisci il link una sola volta.
+- Tono WhatsApp umano, caldo e concreto.
+- Collega la risposta a ciò che ha scritto: addormentamento, risvegli, seno/braccio/contatto/lettone, pisolini o stanchezza.
+- Dai massimo una direzione generale, niente orari dettagliati o sequenze passo passo.
+- Presenta il percorso da 47 euro con questionario, piano personalizzato e 30 giorni di supporto WhatsApp.
+- Consiglia soprattutto il Premium da 67 euro con 60 giorni di supporto WhatsApp.
+- Se cita il 37 euro, chiarisci che quella soluzione comprende solo le guide digitali, senza piano e senza supporto.
+- Inserisci il link dei percorsi 47/67 una sola volta.
 - Non usare markdown, titoli o grassetti.
 - Non promettere risultati certi e non dare indicazioni mediche.
 """
 
 SLEEP_LEAD_FOLLOWUP_PROMPT = """
-Gestisci la risposta di una mamma contattata con il template lead sonno.
+Gestisci la risposta di una mamma già contattata con il template sonno.
+Restituisci SOLO JSON valido con action analysis|soft_prompt|info_reply|defer|no_reply, reply e reason.
 
-Contesto importante:
-- Nel messaggio precedente Paola ha gia mandato le domande iniziali sul sonno.
-- Le domande sono gia visibili nello storico: NON riscriverle automaticamente.
-- Devi comportarti come Paola in una conversazione reale, non come un flusso a blocchi.
-
-Devi restituire SOLO JSON valido con questo schema:
-{
-  "action": "analysis|soft_prompt|info_reply|defer|no_reply",
-  "reply": "testo da inviare oppure __NO_REPLY__",
-  "reason": "breve motivo interno"
-}
-
-Come scegliere action:
-- analysis: se la mamma ha dato anche pochi indizi concreti sul sonno, anche monosillabi o parole singole come seno, braccia, lettone, ciuccio, risvegli, notte, contatto, latte, pisolini, stanchezza, sono distrutta. In questo caso fai una prima valutazione gratuita: empatia, lettura della dinamica, massimo una direzione generale, poi spiega il Percorso Premium con questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp con Paola. Non dire il prezzo in questa prima proposta: lascia il link dove trova percorsi, spiegazione del metodo e dettagli aggiornati. Inserisci il link una sola volta.
-- soft_prompt: se la mamma non ha ancora risposto alle domande ma scrive cose come sì, ok, ci eravamo sentite, va bene, dimmi. In questo caso non ripetere le domande: rispondi in 2-4 righe, collegandoti al fatto che le domande sono nel messaggio sopra e può rispondere anche in modo semplice.
-- info_reply: se chiede prezzo/costo/promozione, rispondi in modo chiaro anche sul prezzo. Se chiede solo cosa comprende, come funziona, link, tempi o fa una piccola obiezione, rispondi alla domanda senza inserire il prezzo per forza; presenta il Premium come percorso consigliato e lascia il link dove trova percorsi, spiegazione del metodo e dettagli aggiornati.
-- defer: se dice che risponde dopo, che ora non può, che lo farà più tardi. Rispondi al massimo con una frase breve e naturale, senza ripetere le domande.
-- no_reply: se è solo una chiusura/cortesia senza bisogno di risposta.
-
-Regole di scrittura:
-- Mai ripetere tutto il blocco delle domande, a meno che la mamma lo chieda esplicitamente.
-- Se devi invitarla a rispondere, scrivi "rispondimi pure alle domande che ti ho scritto sopra" oppure simile.
-- Non dire "come bot" o "automatico".
-- Tono WhatsApp Paola, caldo, naturale, concreto.
-- Non usare markdown, titoli, grassetti o elenchi lunghi.
-- Non promettere risultati certi e non dare indicazioni mediche.
+Se racconta un problema concreto, fai una lettura breve, massimo una direzione generale e poi presenta 47 euro/30 giorni e Premium 67 euro/60 giorni, consigliando il Premium. Non regalare un piano completo.
+Se cita il 37 euro, chiarisci che si tratta delle sole guide digitali senza supporto.
+Se scrive solo sì, ok o ci eravamo sentite, non ripetere tutte le domande: invitala a rispondere a quelle già sopra.
+Se chiede prezzo, durata, cosa comprende o link, rispondi direttamente senza ripartire da zero.
+Se rimanda, rispondi poco; se è solo cortesia, no_reply.
+Tono WhatsApp Paola, naturale, senza markdown e senza promesse certe.
 """
 
 # ─── PROMPT MODULARI ───────────────────────────────────────────────────────────
@@ -429,6 +417,11 @@ Per febbre, crescita, reflusso importante, allergie, difficoltà respiratorie o 
 Per sonno e spannolinamento, Paola resta il riferimento nel proprio ambito.
 Non parlare mai di consulenza scaduta, fine percorso o rinnovi, a meno che sia la mamma a chiedere esplicitamente informazioni sul rinnovo oppure sia Paola/Admin a dirtelo.
 Non dire mai che arriva una mail con il questionario o con il percorso. In questo sistema il questionario, le regole e l'avvio vengono inviati direttamente qui su WhatsApp solo dopo acquisto confermato o comando manuale. Prima dell'acquisto non dare per scontato che la mamma abbia acquistato solo perché manda una conferma, un ok o una emoji.
+
+DATI COMMERCIALI AGGIORNATI
+Sonno: percorso da 47 euro con 30 giorni di supporto WhatsApp; Premium da 67 euro con 60 giorni di supporto WhatsApp, da consigliare come scelta principale.
+Guida sonno da 37 euro: solo materiali digitali, nessun piano personalizzato e nessun supporto WhatsApp. Va proposta spontaneamente solo alle mamme che iniziano loro per prime la conversazione, oppure spiegata se una mamma già in contatto cita il prezzo da 37 euro. Link guida: https://shop.genitorinarmonia.com/sonno-base. Link percorsi 47/67: https://shop.genitorinarmonia.com/sonno.
+Spannolinamento: unico percorso da 27 euro con guida, questionario, piano personalizzato e 30 giorni di supporto WhatsApp.
 
 SE CHIEDONO SE SEI UN BOT
 Rispondi in modo trasparente e naturale:
@@ -479,7 +472,7 @@ Non dare per acquisto completato frasi come "lo compro", "vorrei acquistare", "p
 Non classificare come richiesta_bonifico solo perché compare la parola bonifico. È richiesta_bonifico solo se chiede IBAN, coordinate, o se può pagare con bonifico.
 Se dice che ha già fatto il bonifico, usa bonifico_effettuato.
 Non classificare come richiesta_rimborso solo perché compare la parola rimborso. È richiesta_rimborso solo se vuole indietro i soldi o chiede la procedura.
-Non classificare come problema_checkout_importo solo perché compaiono 37 o 67. È problema_checkout_importo solo se parla di carrello, checkout, importo sbagliato, prezzo che non torna, prodotto aggiunto più volte.
+Non classificare come problema_checkout_importo solo perché compaiono 27, 37, 47 o 67. È problema_checkout_importo solo se parla di carrello, checkout, importo sbagliato, prezzo che non torna, prodotto aggiunto più volte.
 Non classificare come acquisto_completato se scrive "lo compro", "lo prendo", "acquisto subito". Quello è intenzione_acquisto_non_completato.
 È acquisto_completato solo se dice che ha già pagato, completato ordine, fatto acquisto, mostra ricevuta/conferma, oppure dice di aver scaricato/letto/ricevuto la guida, il PDF, il materiale o il percorso. Se l'acquisto è generico non devi decidere tu il prodotto: il codice chiederà sonno o spannolinamento.
 Se la mamma è già in percorso attivo e chiede "che faccio ora", "lo sveglio", "la attacco", "come mi muovo adesso", usa richiesta_pratica_immediata.
@@ -522,8 +515,9 @@ In fase 0 ci sono casi diversi.
 Se non è chiaro se parla di sonno o spannolinamento, chiedi prima a quale percorso si riferisce.
 Se la persona scrive solo ciao, info, vorrei informazioni, quanto costa o come funziona senza raccontare il problema, non vendere subito: chiedi prima il prodotto o la difficoltà principale specifica del prodotto.
 Se invece non ha ancora acquistato ma descrive per la prima volta un problema concreto di sonno o spannolinamento, non vendere subito e non inserire il link: ringrazia in modo umano se naturale, fai una lettura breve e personalizzata, poi fai una sola domanda intelligente per capire meglio.
-Se la mamma sta rispondendo a una domanda intelligente precedente, allora apri in modo accogliente, ad esempio "Grazie mamma, questo dettaglio mi aiuta a capire meglio", poi fai un'analisi più completa e introduci il percorso/link seguendo la regola business.
-Quando introduci il percorso in fase 0, non inserire il prezzo automaticamente: dillo solo se la mamma chiede prezzo/costo/promozione o differenza tra percorsi. Altrimenti lascia il link dicendo che lì trova i percorsi, la spiegazione del metodo, cosa comprende e i dettagli aggiornati.
+Se la mamma sta rispondendo a una domanda intelligente precedente, allora apri in modo accogliente, fai un'analisi più completa ma ancora breve e introduci il percorso/link seguendo la regola business.
+In fase 0 la persona non ha ancora acquistato: puoi dare soltanto una piccola lettura personalizzata e al massimo una direzione generale. Non fornire orari dettagliati, sequenze passo passo, correzioni continue o un piano completo gratuito. Dopo una domanda sostanziale, riportala sempre con delicatezza verso l'acquisto del percorso adatto. Se il link è già stato inviato, non ripeterlo: dille che lo trova nel messaggio sopra, salvo richiesta esplicita.
+Per il sonno, i prezzi possono essere comunicati quando previsti dalla regola business: 47 euro per 30 giorni e 67 euro per 60 giorni. Solo alle mamme che scrivono spontaneamente per prime si può presentare anche la soluzione guide da 37 euro e la promo 37/47/67, consigliando il Premium da 67 euro. Per lo spannolinamento c'è un unico percorso da 27 euro con 30 giorni di supporto WhatsApp.
 Il supporto emotivo forte va usato solo se lei lo palesa con frasi come "sono distrutta", "non ce la faccio", "mi sento in colpa", "sono disperata". Se racconta solo il problema, resta concreta, calda e professionale.
 Se dichiara di aver già acquistato, il codice avvia la sequenza acquisto corretta; se l'acquisto è generico, prima chiede sonno o spannolinamento.
 
@@ -1027,11 +1021,12 @@ def init_db():
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS awaiting_product_choice BOOLEAN DEFAULT FALSE")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS awaiting_product_choice_reason TEXT")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS lead_flow TEXT DEFAULT 'none'")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS contact_origin TEXT DEFAULT 'unknown'")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS lead_status TEXT DEFAULT 'none'")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS lead_contacted_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS followup_enabled BOOLEAN DEFAULT FALSE")
     cur.execute("ALTER TABLE consultations ALTER COLUMN followup_enabled SET DEFAULT FALSE")
-    # V45: spegne anche eventuali follow-up rimasti in coda dalle versioni precedenti.
+    # V46: spegne anche eventuali follow-up rimasti in coda dalle versioni precedenti.
     cur.execute("UPDATE consultations SET followup_enabled = FALSE WHERE followup_enabled IS DISTINCT FROM FALSE")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS template_followup_sent_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS last_intelligent_question_sent_at TIMESTAMPTZ")
@@ -1220,18 +1215,23 @@ def set_lead_state(phone, lead_flow=LEAD_FLOW_NONE, lead_status=LEAD_STATUS_NONE
     try:
         conn = get_db()
         cur = conn.cursor()
+        origin = "outbound_template" if lead_flow != LEAD_FLOW_NONE else None
         cur.execute("""
-            INSERT INTO consultations (phone, lead_flow, lead_status, lead_contacted_at, followup_enabled)
-            VALUES (%s, %s, %s, NOW(), FALSE)
+            INSERT INTO consultations (phone, lead_flow, lead_status, lead_contacted_at, followup_enabled, contact_origin)
+            VALUES (%s, %s, %s, NOW(), FALSE, COALESCE(%s, 'unknown'))
             ON CONFLICT (phone) DO UPDATE
             SET lead_flow = EXCLUDED.lead_flow,
                 lead_status = EXCLUDED.lead_status,
                 followup_enabled = FALSE,
+                contact_origin = CASE
+                    WHEN %s IS NOT NULL THEN %s
+                    ELSE consultations.contact_origin
+                END,
                 lead_contacted_at = CASE
                     WHEN EXCLUDED.lead_status = %s THEN NOW()
                     ELSE consultations.lead_contacted_at
                 END
-        """, (phone, lead_flow, lead_status, LEAD_STATUS_TEMPLATE_SENT))
+        """, (phone, lead_flow, lead_status, origin, origin, origin, LEAD_STATUS_TEMPLATE_SENT))
         conn.commit()
         cur.close()
         conn.close()
@@ -1239,6 +1239,71 @@ def set_lead_state(phone, lead_flow=LEAD_FLOW_NONE, lead_status=LEAD_STATUS_NONE
     except Exception as e:
         logger.error(f"Errore set_lead_state: {e}")
 
+
+def register_inbound_contact_origin(phone):
+    """Registra una sola volta se la mamma ha scritto spontaneamente per prima.
+
+    - outbound_template: il numero era stato contattato da Paola/template;
+    - inbound_spontaneous: primo contatto assoluto iniziato dalla mamma;
+    - existing_contact: esisteva già uno storico, quindi non applicare la promo riservata ai nuovi inbound.
+    """
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT COALESCE(contact_origin, 'unknown') AS contact_origin,
+                   COALESCE(lead_flow, 'none') AS lead_flow
+            FROM consultations WHERE phone = %s
+        """, (phone,))
+        row = cur.fetchone() or {}
+        current = row.get("contact_origin", "unknown")
+        if current in ("outbound_template", "inbound_spontaneous", "existing_contact"):
+            cur.close()
+            conn.close()
+            return current
+
+        cur.execute("SELECT EXISTS(SELECT 1 FROM messages WHERE phone = %s) AS has_history", (phone,))
+        history_row = cur.fetchone() or {}
+        had_history = bool(history_row.get("has_history", False))
+        lead_flow = row.get("lead_flow", LEAD_FLOW_NONE)
+        if lead_flow != LEAD_FLOW_NONE:
+            origin = "outbound_template"
+        elif had_history:
+            origin = "existing_contact"
+        else:
+            origin = "inbound_spontaneous"
+
+        cur.execute("""
+            INSERT INTO consultations (phone, contact_origin)
+            VALUES (%s, %s)
+            ON CONFLICT (phone) DO UPDATE SET contact_origin = EXCLUDED.contact_origin
+        """, (phone, origin))
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"Origine contatto per {phone}: {origin}")
+        return origin
+    except Exception as e:
+        logger.error(f"Errore register_inbound_contact_origin: {e}")
+        return "existing_contact"
+
+
+def get_contact_origin(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT COALESCE(contact_origin, 'unknown') FROM consultations WHERE phone = %s", (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row[0] if row else "unknown"
+    except Exception as e:
+        logger.error(f"Errore get_contact_origin: {e}")
+        return "unknown"
+
+
+def is_spontaneous_inbound_lead(phone):
+    return get_contact_origin(phone) == "inbound_spontaneous"
 
 
 def get_lead_meta(phone):
@@ -1249,6 +1314,7 @@ def get_lead_meta(phone):
         cur.execute("""
             SELECT
                 COALESCE(lead_flow, 'none') AS lead_flow,
+                COALESCE(contact_origin, 'unknown') AS contact_origin,
                 COALESCE(lead_status, 'none') AS lead_status,
                 lead_contacted_at,
                 COALESCE(followup_enabled, TRUE) AS followup_enabled,
@@ -1404,7 +1470,7 @@ def detect_special_manual_request(text):
         "non mi è arrivata email", "non mi e arrivata email", "non trovo le guide", "non trovo i pdf",
         "dove trovo le guide", "dove sono le guide", "dove trovo i pdf", "dove sono i pdf",
         "dove trovo il materiale", "non trovo il materiale", "non riesco a scaricare", "non mi fa scaricare",
-        "link della guida", "link delle guide", "pdf non arriv", "guide non arriv", "email non arriv"
+        "pdf non arriv", "guide non arriv", "email non arriv"
     ]
     if any(term in t for term in guide_terms):
         return (
@@ -1875,6 +1941,139 @@ def user_chiede_link(router_result, pending_text):
     return "link" in t or "dove acquisto" in t or "dove posso acquist" in t
 
 
+def mentions_sleep_guides_offer(text):
+    t = normalize_text(text)
+    terms = [
+        "37 euro", "37€", "37 €", "guida da 37", "guide da 37",
+        "solo guida", "sole guide", "solo le guide", "guida metodo paola",
+        "sonno-base", "pdf del sonno", "materiali digitali"
+    ]
+    return any(term in t for term in terms)
+
+
+def asks_only_sleep_guides(text):
+    t = normalize_text(text)
+    if not t:
+        return False
+    guide_terms = ["guida", "guide", "pdf", "materiali", "37 euro", "37€", "37 €", "sonno-base"]
+    explicit_only = [
+        "voglio solo", "vorrei solo", "mi interessa solo", "preferisco solo",
+        "prendo solo", "acquisto solo", "solo la guida", "solo le guide",
+        "mandami il link della guida", "link della guida", "link guide"
+    ]
+    return any(g in t for g in guide_terms) and any(p in t for p in explicit_only)
+
+
+def asks_sleep_guides_details(text):
+    t = normalize_text(text)
+    if not mentions_sleep_guides_offer(t):
+        return False
+    detail_terms = ["cosa comprende", "cosa include", "che contiene", "che cosa c'è", "che cosa ce", "quali guide", "in cosa consiste"]
+    return any(term in t for term in detail_terms) or "?" in (text or "")
+
+
+def sleep_guide_context_active(phone, text=""):
+    if asks_only_sleep_guides(text) or mentions_sleep_guides_offer(text):
+        return True
+    try:
+        recent = get_recent_history(phone, limit=8)
+        combined = " ".join(str(m.get("content", "")) for m in recent)
+        return mentions_sleep_guides_offer(combined)
+    except Exception:
+        return False
+
+
+def explicit_sleep_guides_purchase(text):
+    t = normalize_text(text)
+    if not t or not acquisto_dichiarato(t):
+        return False
+    explicit_terms = [
+        "37 euro", "37€", "37 €", "guida da 37", "guide da 37", "sonno-base",
+        "solo la guida", "solo le guide", "sole guide", "guida metodo paola"
+    ]
+    return any(term in t for term in explicit_terms)
+
+
+def sleep_guides_purchase_context(phone, text=""):
+    if explicit_sleep_guides_purchase(text):
+        return True
+    try:
+        recent = get_recent_history(phone, limit=10)
+        user_text = " ".join(str(m.get("content", "")) for m in recent if m.get("role") == "user")
+        return explicit_sleep_guides_purchase(user_text)
+    except Exception:
+        return False
+
+
+def generic_sleep_material_purchase(text):
+    """Acquisto di guida/PDF dichiarato senza indicare se è 37 oppure percorso 47/67."""
+    t = normalize_text(text)
+    if not t or not acquisto_dichiarato(t):
+        return False
+    material_terms = ["guida", "guide", "pdf", "materiale", "materiali", "playlist"]
+    full_path_terms = [
+        "premium", "percorso da 47", "percorso 47", "47 euro", "47€", "47 €",
+        "percorso da 67", "percorso 67", "67 euro", "67€", "67 €",
+        "piano personalizzato", "supporto whatsapp", "30 giorni", "60 giorni", "consulenza"
+    ]
+    return any(term in t for term in material_terms) and not any(term in t for term in full_path_terms) and not explicit_sleep_guides_purchase(t)
+
+
+def chooses_sleep_guides(text):
+    t = normalize_text(text)
+    exact = {"37", "37 euro", "37€", "37 €", "guida", "guide", "solo guida", "solo guide", "le guide"}
+    return t in exact or asks_only_sleep_guides(t)
+
+
+def full_sleep_path_choice(text):
+    t = normalize_text(text)
+    if t in {"47", "67", "47 euro", "67 euro", "47€", "67€", "premium", "percorso", "quello con supporto"}:
+        return True
+    terms = [
+        "47 euro", "47€", "47 €", "67 euro", "67€", "67 €", "premium",
+        "percorso con supporto", "percorso da 47", "percorso da 67", "30 giorni", "60 giorni"
+    ]
+    return any(term in t for term in terms)
+
+
+def ask_sleep_purchase_tier():
+    return (
+        "Perfetto mamma, per avviare la parte giusta mi confermi solo cosa hai acquistato: "
+        "le sole guide digitali da 37 euro oppure il percorso da 47/67 euro con piano personalizzato e supporto WhatsApp?"
+    )
+
+
+def handle_sleep_guides_purchase(phone):
+    """La guida da 37 euro non avvia questionario/piano/supporto."""
+    set_product_type(phone, PRODUCT_SLEEP)
+    set_awaiting_product_choice(phone, False)
+    if is_spontaneous_inbound_lead(phone):
+        reply = (
+            f"Perfetto mamma. L'acquisto da {SLEEP_GUIDES_PRICE} euro comprende le sole guide digitali e la playlist, "
+            "quindi non include il questionario, il piano personalizzato o il supporto WhatsApp. "
+            "I materiali vengono inviati via email, quindi controlla anche spam e promozioni.\n\n"
+            f"Visto che mi hai scritto direttamente, posso riservarti la possibilità di passare al percorso da {SLEEP_BASE_PRICE} euro "
+            "con piano personalizzato e 30 giorni di supporto, "
+            f"oppure al Premium da {SLEEP_PREMIUM_PRICE} euro con 60 giorni, che è quello che ti consiglierei per essere seguita con più continuità.\n"
+            f"{LINK_PREMIUM}"
+        )
+    else:
+        reply = (
+            f"Perfetto mamma. L'acquisto da {SLEEP_GUIDES_PRICE} euro comprende le sole guide digitali e la playlist, "
+            "quindi non include il questionario, il piano personalizzato o il supporto WhatsApp. "
+            "I materiali vengono inviati via email, quindi controlla anche spam e promozioni.\n\n"
+            f"I percorsi con piano e supporto sono quello da {SLEEP_BASE_PRICE} euro per 30 giorni e il Premium da {SLEEP_PREMIUM_PRICE} euro per 60 giorni. "
+            f"Per essere seguita passo passo trovi qui le due opzioni:\n{LINK_PREMIUM}"
+        )
+    save_message(phone, "assistant", reply)
+    send_whatsapp_message(phone, reply)
+    update_lead_followup_fields(
+        phone,
+        lead_status=LEAD_STATUS_LINK_SENT,
+        last_link_sent_at=datetime.now(pytz.timezone(TIMEZONE))
+    )
+    return True
+
 def acquisto_dichiarato(text):
     """Rileva a codice quando la mamma dichiara di aver già acquistato o avuto accesso al materiale.
 
@@ -1963,7 +2162,7 @@ def detect_product_type_from_text(text):
     # parole molto forti che bastano da sole
     if any(term in t for term in ["spannolinamento", "spandolinamento", "spanolinamento", "togliere il pannolino", "pannolino", "vasino", "guida spannolinamento", "percorso spannolinamento", "pannolino in 9 giorni"]):
         return PRODUCT_POTTY
-    if any(term in t for term in ["sonno", "sonno magico", "percorso sonno", "guida sonno", "guida sul sonno", "guida del sonno", "metodo del sonno", "consulenza sonno"]):
+    if any(term in t for term in ["sonno", "sonno magico", "percorso sonno", "guida sonno", "guida sul sonno", "guida del sonno", "metodo del sonno", "consulenza sonno", "guida metodo paola", "37 euro", "37€", "37 €", "sonno-base"]):
         return PRODUCT_SLEEP
 
     if potty_count >= 2 and potty_count > sleep_count:
@@ -2132,7 +2331,7 @@ def contextual_purchase_fallback(trigger_text="", product_type=PRODUCT_SLEEP):
         if product_type == PRODUCT_POTTY:
             return (
                 "Certo mamma, ti spiego subito.\n\n"
-                "Nel Percorso Premium spannolinamento hai incluso la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul tuo bambino e 30 giorni di supporto WhatsApp con me.\n\n"
+                f"Nel percorso spannolinamento da {POTTY_PRICE} euro hai incluso la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul tuo bambino e 30 giorni di supporto WhatsApp con me.\n\n"
                 "La parte più importante è che non resti con una guida generica: guardo bene la vostra situazione e preparo un piano personalizzato per accompagnare l'inizio dello spannolinamento in base a come reagisce davvero il bambino.\n\n"
                 "La guida arriva in automatico dopo l'ordine. Ora, per partire bene qui insieme, ti mando le regole della chat e poi il questionario dettagliato."
             )
@@ -2173,7 +2372,7 @@ def build_contextual_purchase_intro(phone, trigger_text="", product_type=PRODUCT
                 "Sei Paola di Genitori in Armonia. Devi scrivere un breve messaggio WhatsApp naturale.\n"
                 "La mamma ha appena fatto capire che ha già acquistato o ha già accesso al percorso/guida.\n"
                 f"Il prodotto/percorso è: {product_label(product_type)}.\n"
-                "Se il prodotto è spannolinamento e chiede cosa comprende, spiega senza insistere sul prezzo: il Base comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, mentre il Premium è quello consigliato e comprende guida PDF, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.\n"
+                f"Se il prodotto è spannolinamento e chiede cosa comprende, spiega che c'è un unico percorso da {POTTY_PRICE} euro con guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.\n"
                 "Rispondi in modo coerente all'ultimo messaggio: se ha fatto una domanda, rispondi prima a quella domanda.\n"
                 "Poi fai una transizione morbida: ora le manderai le regole della chat e il questionario iniziale corretto per preparare il piano personalizzato.\n"
                 "Non sembrare un messaggio automatico. Non dire 'messaggio automatico'. Non inserire link.\n"
@@ -2453,33 +2652,68 @@ Ultimi messaggi da classificare:
         return default
 
 
-def get_business_rule(intent, fase, link_sent=False, product_type=PRODUCT_UNKNOWN):
-    """Regole specifiche passate al generatore solo quando servono."""
+def get_business_rule(intent, fase, link_sent=False, product_type=PRODUCT_UNKNOWN, phone=None, pending_text=""):
+    """Regole commerciali dinamiche per lead non ancora acquistate."""
     product_type = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else PRODUCT_UNKNOWN
     product_name = product_label(product_type)
+    spontaneous = bool(phone and is_spontaneous_inbound_lead(phone))
+    guide_mentioned = mentions_sleep_guides_offer(pending_text)
+    guide_only = asks_only_sleep_guides(pending_text)
+    guide_details = asks_sleep_guides_details(pending_text)
+
+    if intent == "richiesta_link":
+        if product_type == PRODUCT_POTTY:
+            return f"Invia direttamente il link del percorso spannolinamento da {POTTY_PRICE} euro, senza inventare altri link: {LINK_POTTY}"
+        if product_type == PRODUCT_SLEEP and guide_only:
+            return f"La mamma chiede espressamente le sole guide da {SLEEP_GUIDES_PRICE} euro. Invia questo link e chiarisci brevemente che non comprende piano o supporto: {LINK_SLEEP_GUIDES}"
+        if product_type == PRODUCT_SLEEP:
+            return f"Invia il link dei percorsi sonno da {SLEEP_BASE_PRICE}/{SLEEP_PREMIUM_PRICE} euro, consigliando il Premium da 60 giorni: {LINK_PREMIUM}"
+        return "Chiedi soltanto se si riferisce al sonno o allo spannolinamento, poi invia il link corretto."
 
     if intent == "richiesta_differenza_percorsi":
         if product_type == PRODUCT_POTTY:
             return f"""
-Spiega la differenza tra i percorsi spannolinamento in modo naturale.
-Il Base a {POTTY_BASE_PRICE} euro comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, quindi è indicato se la mamma vuole leggere il metodo e provare in autonomia.
-Il Premium a {POTTY_PREMIUM_PRICE} euro è quello consigliato: comprende la guida PDF, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
-Orienta con delicatezza verso il Premium, soprattutto se ci sono dubbi, rifiuti, incidenti, cacca, nido, uscite o paura di sbagliare.
-Non spingere in modo aggressivo.
+Per lo spannolinamento non presentare più Base e Premium: c'è un unico percorso completo da {POTTY_PRICE} euro.
+Comprende guida PDF Metodo Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
+Spiega con naturalezza che il supporto serve ad adattare i passaggi a pipì, cacca, vasino, nido, uscite e reazioni del bambino.
+Se serve, inserisci una sola volta il link: {LINK_POTTY}
+"""
+        if spontaneous or guide_mentioned:
+            return f"""
+Spiega con chiarezza le tre possibilità sul sonno.
+La soluzione da {SLEEP_GUIDES_PRICE} euro comprende solo i materiali digitali e non include piano personalizzato né supporto WhatsApp. {SLEEP_GUIDES_DETAILS}
+Con soli 10 euro in più, il percorso da {SLEEP_BASE_PRICE} euro comprende guide, questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp.
+Il Premium da {SLEEP_PREMIUM_PRICE} euro è quello che consigli: comprende guide, questionario, piano personalizzato e 60 giorni di supporto WhatsApp, quindi permette più continuità e aggiustamenti.
+Questa possibilità 37/47/67 va presentata come promo che Paola può riservare personalmente alle mamme che scrivono spontaneamente per prime.
+Per 47 e 67 usa questo link: {LINK_PREMIUM}
+Se la mamma conferma che vuole esclusivamente le guide, usa invece questo link: {LINK_SLEEP_GUIDES}
+Non essere aggressiva, ma orienta chiaramente verso il Premium da 67 euro.
 """
         return f"""
-Spiega la differenza tra i percorsi in modo naturale.
-Il percorso da {OFFERS['base']['price']} euro include questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp nei giorni lavorativi.
-Il Premium da {OFFERS['premium']['price']} euro dura 60 giorni, dà maggiore continuità e supporto anche nei weekend.
-Consiglia il Premium se la situazione è complessa o la mamma vuole essere seguita con più continuità, ma rassicura che anche il percorso da {OFFERS['base']['price']} euro va bene.
+Spiega la differenza tra i due percorsi sonno disponibili per chi è già in contatto o è stato raggiunto tramite template.
+Il percorso da {SLEEP_BASE_PRICE} euro comprende guide, questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp.
+Il Premium da {SLEEP_PREMIUM_PRICE} euro comprende guide, questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp ed è quello consigliato.
+Se la mamma cita il prezzo da 37 euro, chiarisci che quella pagina riguarda soltanto le guide digitali, senza piano personalizzato e senza supporto.
+Link percorsi 47/67: {LINK_PREMIUM}
 Non spingere in modo aggressivo.
 """
+
     if intent == "obiezione_prezzo":
-        return """
-Rispondi all'obiezione sul prezzo con calore e concretezza.
-Spiega che il valore non è solo il PDF, ma il questionario, il piano su misura e il supporto WhatsApp passo passo.
-Non fare pressione.
+        if product_type == PRODUCT_POTTY:
+            return f"""
+Rispondi con calore e concretezza. Il percorso spannolinamento costa {POTTY_PRICE} euro e comprende guida, questionario, piano personalizzato e 30 giorni di supporto WhatsApp.
+Spiega il valore senza pressione e senza proporre altri pacchetti.
+Link se serve: {LINK_POTTY}
 """
+        extra = ""
+        if spontaneous or guide_mentioned:
+            extra = f" La guida da {SLEEP_GUIDES_PRICE} euro è solo digitale e senza supporto; con 10 euro in più c'è il percorso da {SLEEP_BASE_PRICE} euro con 30 giorni, mentre il Premium da {SLEEP_PREMIUM_PRICE} euro offre 60 giorni ed è quello consigliato."
+        return f"""
+Rispondi all'obiezione sul prezzo con calore e concretezza.
+Spiega che il valore non è solo nei PDF, ma nel questionario, nel piano su misura e nel supporto WhatsApp passo passo.{extra}
+Non fare pressione e non regalare un piano operativo completo.
+"""
+
     if intent == "richiesta_rimborso":
         return f"""
 Rispondi prima con empatia, senza tono freddo.
@@ -2487,122 +2721,127 @@ Chiedi in modo naturale cosa non ha funzionato e se puoi sistemare qualcosa.
 Se dal messaggio è chiaro che vuole la procedura formale, aggiungi questo link: {LINK_REFUND}
 Ricorda con delicatezza che il rimborso non è applicabile a chi ha già usufruito in parte o totalmente delle consulenze.
 """
+
     if intent == "richiesta_info_percorso" and fase == 0:
         if link_sent:
+            if product_type == PRODUCT_SLEEP and guide_mentioned:
+                return f"""
+La mamma chiede della soluzione sonno da {SLEEP_GUIDES_PRICE} euro dopo che un altro link è già stato inviato.
+Spiega che comprende soltanto i materiali digitali: {SLEEP_GUIDES_DETAILS}
+Non include questionario, piano personalizzato o supporto WhatsApp.
+Se vuole essere seguita, orientala verso 47 euro/30 giorni o Premium 67 euro/60 giorni, consigliando il Premium. Link percorsi: {LINK_PREMIUM}
+Invia il link delle sole guide {LINK_SLEEP_GUIDES} soltanto se conferma che vuole esclusivamente quelle.
+"""
             return f"""
-La persona è ancora lead, ma il link/percorso è già stato inviato nello storico.
-Sta facendo una domanda commerciale o logistica dopo il link: per esempio contatto telefonico, chiamata, WhatsApp, supporto, pagamento, durata, come funziona o cosa succede dopo l'acquisto.
-NON tornare a chiedere "qual è la difficoltà principale" e NON ripartire da zero.
-Rispondi direttamente alla domanda leggendo lo storico.
-Se chiede del contatto telefonico o delle chiamate, spiega con naturalezza che il percorso si svolge principalmente su WhatsApp: questionario iniziale, piano personalizzato e supporto scritto passo passo. Non promettere telefonate o videochiamate fisse.
-Se chiede se è un bot o se è automatico, rispondi in modo trasparente: uso strumenti digitali per organizzare e scrivere meglio, ma il percorso segue il Metodo Paola ed è supervisionato.
-Non ripetere il link, salvo richiesta esplicita tipo "me lo rimandi" o "dov'è il link". Se serve, di' che lo trova nel messaggio sopra.
-Mantieni tono umano, usando "mamma" o evitando appellativi; mai "cara".
+La persona è ancora lead e non ha ancora acquistato, ma un link è già stato inviato nello storico.
+Rispondi direttamente alla domanda commerciale o logistica senza ripartire da zero e senza reinviare il link, salvo richiesta esplicita.
+Se chiede altre indicazioni sul bambino, dai solo una piccola lettura o una direzione generale e invitala con delicatezza a procedere con il percorso per ricevere il piano personalizzato.
+Se serve, dille che trova il link nel messaggio sopra.
+Non promettere telefonate o videochiamate fisse: il percorso si svolge principalmente su WhatsApp con questionario, piano e supporto scritto.
 """
         if product_type == PRODUCT_POTTY:
             return f"""
-La persona è ancora lead e chiede informazioni sul percorso spannolinamento.
-Rispondi in modo naturale e contestuale, senza sembrare un messaggio copia-incolla.
-Spiega cosa comprende il percorso senza partire dal prezzo: il Base è la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, mentre il Premium è quello consigliato se vuole essere seguita davvero perché comprende guida PDF, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
-Non dire il prezzo in automatico se non lo ha chiesto chiaramente; dille che nel link trova percorsi, cosa comprende, spiegazione del metodo e dettagli aggiornati.
-Spiega che il Premium serve proprio per non restare con una guida generica, ma adattare l'inizio dello spannolinamento alla situazione reale del bambino: pipì, cacca, vasino/water, incidenti, nido, uscite e reazioni emotive.
-Chiarisci che dopo l'ordine arriva automaticamente la guida; poi la mamma scrive qui su WhatsApp, compila il questionario e si parte con l'analisi della situazione e il piano personalizzato.
-Se non ha ancora raccontato la situazione, dopo la spiegazione puoi chiederle età del bambino e se hanno già iniziato a togliere il pannolino o stanno valutando quando partire.
-Se chiede il link o sembra pronta a procedere, inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
+La persona chiede informazioni sullo spannolinamento.
+Spiega in modo naturale che c'è un unico percorso da {POTTY_PRICE} euro con guida PDF, questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp con Paola.
+Puoi comunicare direttamente prezzo e durata. Se non ha raccontato la situazione, chiedi età del bambino e se hanno già iniziato o stanno valutando quando partire.
+Non dare una consulenza completa gratuita. Se sembra pronta o chiede il link, inserisci una sola volta: {LINK_POTTY}
 """
         if product_type == PRODUCT_SLEEP:
+            if guide_mentioned:
+                return f"""
+La mamma sta chiedendo della guida sonno da {SLEEP_GUIDES_PRICE} euro.
+Chiarisci che comprende solo materiali digitali, senza piano personalizzato e senza supporto WhatsApp. {SLEEP_GUIDES_DETAILS}
+Se ha scritto spontaneamente per prima, spiega la promo riservata: con 10 euro in più può scegliere il percorso da {SLEEP_BASE_PRICE} euro con piano e 30 giorni di supporto; il Premium da {SLEEP_PREMIUM_PRICE} euro con 60 giorni è quello che consigli.
+Link percorsi assistiti: {LINK_PREMIUM}
+Se dichiara di volere solo le guide, link guida: {LINK_SLEEP_GUIDES}
+Se è già in contatto o è stata raggiunta tramite template, chiarisci semplicemente che il 37 riguarda solo guide, mentre i percorsi con supporto sono 47 e 67 euro.
+"""
             return """
-La persona è ancora lead e ha chiesto informazioni sul sonno senza descrivere davvero il problema.
-Non mandare subito il link e non vendere subito in modo freddo.
-Rispondi breve e chiedi di raccontarti in poche parole qual è la difficoltà principale con il sonno del bambino.
+La persona chiede informazioni sul sonno ma non ha ancora raccontato la difficoltà concreta.
+Non partire subito con una consulenza né con un lungo messaggio di vendita. Chiedile in poche parole età del bambino e problema principale, così puoi darle una prima lettura breve e poi indicarle il percorso più adatto.
 """
         return """
-La persona è ancora lead ma non è chiaro se parla di sonno o spannolinamento.
-Chiedi prima a quale percorso si riferisce, senza mandare link.
+Non è chiaro se parla di sonno o spannolinamento. Chiedi prima a quale percorso si riferisce, senza mandare link.
 """
+
     if intent in ("descrizione_problema_sonno", "richiesta_consiglio_gratuito") and fase == 0:
         if link_sent:
-            return """
-La persona è ancora lead, ha già raccontato una difficoltà concreta e il link è già stato mandato.
-Non ripetere il link, a meno che lo chieda espressamente.
-Fai una prima lettura breve e personalizzata della situazione, senza dare un piano gratuito completo.
-Accenna alla direzione di lavoro e mantieni la conversazione naturale verso il percorso.
+            return f"""
+La persona non ha ancora acquistato e il link è già stato inviato.
+Dai solo una lettura breve e personalizzata o una singola direzione generale. Non dare orari dettagliati, sequenze passo passo, piani completi o assistenza continuativa gratuita.
+Poi riportala con delicatezza all'acquisto: spiega che per dirle esattamente come procedere serve questionario e piano personalizzato. Non ripetere il link, ma dille che lo trova nel messaggio sopra; reinvialo solo se lo chiede.
+Il percorso consigliato è il Premium da {SLEEP_PREMIUM_PRICE} euro con 60 giorni di supporto.
+"""
+        if spontaneous:
+            return f"""
+La mamma ha scritto spontaneamente per prima e non ha ancora acquistato.
+Fai una prima lettura breve e personalizzata, massimo una direzione generale, senza regalare un piano completo.
+Poi presenta la promo riservata a chi contatta direttamente Paola: guide digitali sole a {SLEEP_GUIDES_PRICE} euro; con 10 euro in più percorso da {SLEEP_BASE_PRICE} euro con questionario, piano personalizzato e 30 giorni di supporto; Premium da {SLEEP_PREMIUM_PRICE} euro con piano e 60 giorni di supporto, che è quello da consigliare.
+Per i percorsi 47/67 inserisci una sola volta: {LINK_PREMIUM}
+Il link guida {LINK_SLEEP_GUIDES} va inviato solo se lei conferma di volere esclusivamente le guide.
 """
         return f"""
-La persona è ancora lead e ha già descritto una difficoltà concreta del sonno.
-Non fare altre domande generiche: fai subito una prima analisi commerciale personalizzata.
-Devi riconoscere la difficoltà specifica, spiegare in modo semplice cosa potrebbe esserci dietro, senza diagnosi e senza dare un piano completo gratuito.
-Accenna alla direzione di lavoro, facendo capire che andrebbe vista su orari, pisolini, addormentamento e risvegli.
-Poi presenta il Percorso Premium come percorso consigliato per essere seguita bene: questionario iniziale, piano su misura, guide PDF e 60 giorni di supporto WhatsApp personalizzato.
-Non indicare il prezzo in questa prima proposta, a meno che lo abbia chiesto esplicitamente.
-Inserisci il link una sola volta dicendo che lì trova percorsi, spiegazione del metodo, cosa comprende e dettagli aggiornati: {LINK_PREMIUM}
-Chiudi dicendo che dopo l'ordine può scriverti su WhatsApp e partite con l'analisi personalizzata.
+La persona è già in contatto o è stata raggiunta tramite template e non ha ancora acquistato.
+Fai una prima lettura breve e personalizzata, massimo una direzione generale, senza regalare un piano completo.
+Presenta i percorsi sonno da {SLEEP_BASE_PRICE} euro con 30 giorni e Premium da {SLEEP_PREMIUM_PRICE} euro con 60 giorni, consigliando il Premium.
+Se cita il prezzo da 37 euro, chiarisci che riguarda solo le guide digitali senza piano e senza supporto.
+Inserisci una sola volta il link dei percorsi: {LINK_PREMIUM}
 """
+
     if intent == "descrizione_problema_spannolinamento" and fase == 0:
         if link_sent:
-            return """
-La persona è ancora lead, ha già raccontato una difficoltà sullo spannolinamento e il link è già stato mandato.
-Non ripetere il link, a meno che lo chieda espressamente.
-Fai una prima lettura breve e personalizzata, senza dare un piano gratuito completo.
+            return f"""
+La persona non ha ancora acquistato e il link spannolinamento è già stato inviato.
+Dai soltanto una piccola lettura o una direzione generale, poi invitala a procedere con il percorso da {POTTY_PRICE} euro per ricevere piano personalizzato e 30 giorni di supporto. Non ripetere il link salvo richiesta.
 """
         return f"""
-La persona è ancora lead e ha già descritto una difficoltà concreta sullo spannolinamento.
-Non fare altre domande generiche: fai subito una prima analisi commerciale personalizzata.
-Devi riconoscere la difficoltà specifica, spiegare in modo semplice cosa può esserci dietro: prontezza, segnali, incidenti, cacca, nido, pressione o routine non chiara.
-Non dare un piano completo gratuito.
-Poi presenta il Percorso Premium spannolinamento come percorso consigliato: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
-Non indicare il prezzo in questa prima proposta, a meno che lo abbia chiesto esplicitamente. Se serve, puoi dire che esiste anche il Base come sola guida PDF da seguire in autonomia, ma non metterlo come scelta principale se la mamma ha chiesto aiuto o ha già raccontato una difficoltà.
-Spiega che il Premium non è una guida generica: dopo l'ordine la guida arriva automaticamente, poi la mamma scrive qui su WhatsApp, compila il questionario iniziale e da lì viene analizzata la situazione per preparare un piano personalizzato sull'inizio dello spannolinamento.
-Inserisci il link dello spannolinamento una sola volta: {LINK_POTTY}
+La persona ha descritto una difficoltà concreta sullo spannolinamento e non ha ancora acquistato.
+Fai una lettura breve e personalizzata senza dare un piano completo gratuito.
+Poi presenta l'unico percorso da {POTTY_PRICE} euro: guida PDF, questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp.
+Inserisci una sola volta il link: {LINK_POTTY}
 """
-    if intent in ("domanda_percorso_attivo", "aggiornamento_percorso_attivo", "richiesta_pratica_immediata") or fase == 4:
+
+    if fase == 4:
         if product_type == PRODUCT_POTTY:
             return """
 La persona è in percorso attivo di spannolinamento.
-Rispondi collegandoti al profilo bambino e allo storico recente.
-Dai massimo 1 o 2 indicazioni pratiche su pipì, cacca, vasino/water, incidenti, nido, uscite o pannolino notturno.
-Non cambiare troppe cose insieme. Non forzare, non colpevolizzare e non proporre punizioni.
-Se emergono dolore, stitichezza importante, trattenimento forte o dubbi sanitari, rimanda al pediatra.
-Non parlare di scadenze, rinnovi o fine percorso.
+Rispondi collegandoti al profilo bambino e allo storico recente. Dai massimo 1 o 2 indicazioni pratiche su pipì, cacca, vasino/water, incidenti, nido, uscite o pannolino notturno.
+Non cambiare troppe cose insieme. Non forzare, non colpevolizzare e non proporre punizioni. Per dolore, stitichezza importante, trattenimento forte o dubbi sanitari, rimanda al pediatra.
 """
         return """
-La persona è in percorso attivo.
-Rispondi collegandoti al profilo bambino e allo storico recente.
-Dai massimo 1 o 2 indicazioni pratiche, non cambiare troppe cose insieme.
-Se è una richiesta immediata, rispondi breve e operativo.
-Se è un aggiornamento, valorizza o normalizza in modo specifico.
-Se nel messaggio compaiono febbre, tosse, raffreddore, dentini o malattia recente, non dare consigli medici: riconosci che quando un bambino sta male può cercare più contatto/latte/braccio, invita a seguire il pediatra se non è ancora del tutto in forma, e poi dai indicazioni solo sul rientro graduale alla routine del sonno.
-Non parlare di scadenze, rinnovi o fine percorso.
+La persona è in percorso attivo. Rispondi collegandoti al profilo bambino e allo storico recente.
+Dai massimo 1 o 2 indicazioni pratiche, non cambiare troppe cose insieme. Se è una richiesta immediata, rispondi breve e operativo.
+Se compaiono febbre, tosse, raffreddore, dentini o malattia recente, non dare consigli medici: riconosci il maggiore bisogno di contatto e dai indicazioni solo sul rientro graduale alla routine, rimandando al pediatra per la parte sanitaria.
 """
+
     if intent in ("dubbio_medico_lieve", "dubbio_medico_delicato"):
         return """
-Rispondi in modo prudente.
-Non dare diagnosi, non parlare di farmaci, dosi, cause mediche o cure.
-Per la parte sanitaria rimanda al pediatra, soprattutto se il bambino non è ancora in forma.
-Poi, se la domanda riguarda il percorso, dai solo indicazioni morbide e graduali.
+Rispondi in modo prudente. Non dare diagnosi, farmaci, dosi, cause mediche o cure. Per la parte sanitaria rimanda al pediatra; poi, se la domanda riguarda il percorso, dai solo indicazioni morbide e graduali.
 """
+
+    if fase == 0:
+        return f"""
+La persona non ha ancora acquistato. Rispondi in modo umano ma mantieni il confine commerciale: al massimo una piccola lettura o una direzione generale, niente piano completo, niente sequenze operative e niente assistenza continuativa gratuita.
+Dopo aver risposto alla sua domanda, invitala con delicatezza a procedere con il percorso adatto per ricevere questionario, piano personalizzato e supporto.
+Prodotto: {product_name}.
+"""
+
     return f"""
 Rispondi in modo naturale come Paola, rispettando il contesto e il prodotto: {product_name}.
 Non aggiungere link o offerte se non servono.
 """
 
-
 def direct_reply_for_intent(phone, fase, router_result, pending_text):
-    """Risposte fisse solo per intenti sicuri. Altrimenti torna None e risponde GPT."""
+    """Risposte fisse solo per intenti sicuri. Altrimenti risponde GPT."""
     intent = router_result.get("intent", "altro") if router_result else "altro"
     confidence = float(router_result.get("confidence", 0) or 0) if router_result else 0
     product_type = product_from_context_or_text(phone, pending_text)
 
-    # Se in fase 0 il link è già stato inviato, NON usare mai risposte fisse tipo
-    # "raccontami la difficoltà principale". A quel punto la mamma può chiedere
-    # dettagli commerciali/logistici (telefono, supporto, WhatsApp, pagamento, ecc.)
-    # e deve rispondere GPT leggendo lo storico.
+    # Dopo un link già inviato lascia a GPT la continuità della conversazione.
     if fase == 0 and link_gia_inviato(phone, product_type):
         return None
 
-    # Se il numero è stato contattato con /contatta_sonno, le domande sono già nello storico.
-    # In fase 0 non dare risposte meccaniche tipo "raccontami la difficoltà" o reinvii:
-    # lascia sempre decidere GPT leggendo la coerenza della conversazione.
+    # Le lead contattate col template sonno hanno già le domande nello storico.
     if fase == 0 and is_sleep_manual_lead(phone):
         return None
 
@@ -2612,6 +2851,9 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
         return product_specific_first_question(product_type)
 
     if intent == "richiesta_info_percorso" and fase == 0 and confidence >= 0.70 and not lead_problem_described(pending_text) and not potty_problem_described(pending_text):
+        # Se chiede espressamente della guida da 37, non fare una domanda generica.
+        if product_type == PRODUCT_SLEEP and mentions_sleep_guides_offer(pending_text):
+            return None
         if product_type == PRODUCT_UNKNOWN:
             set_awaiting_product_choice(phone, True, "info")
         return product_specific_first_question(product_type)
@@ -2620,45 +2862,55 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
         if product_type == PRODUCT_UNKNOWN:
             set_awaiting_product_choice(phone, True, "info")
             return "Certo mamma, prima ti mando il link giusto: ti riferisci al percorso sonno o al percorso spannolinamento?"
+        if product_type == PRODUCT_SLEEP and asks_only_sleep_guides(pending_text):
+            return f"Certo mamma, se preferisci esclusivamente le guide digitali da {SLEEP_GUIDES_PRICE} euro, trovi qui il link:\n{LINK_SLEEP_GUIDES}"
         link = get_product_link(product_type)
-        return f"Perfetto mamma, ti lascio il link per procedere:\n{link}\n\nAppena hai completato, scrivimi qui e iniziamo subito 🤍"
+        return f"Perfetto mamma, ti lascio il link per procedere:\n{link}\n\nAppena hai completato, scrivimi qui e iniziamo 🤍"
 
     if intent == "richiesta_link" and confidence >= 0.75:
         if product_type == PRODUCT_UNKNOWN:
             set_awaiting_product_choice(phone, True, "info")
             return "Certo mamma, te lo mando volentieri. Mi confermi solo se ti riferisci al percorso sonno o allo spannolinamento?"
+        if product_type == PRODUCT_SLEEP and asks_only_sleep_guides(pending_text):
+            return f"Certo, questo è il link delle sole guide sonno da {SLEEP_GUIDES_PRICE} euro:\n{LINK_SLEEP_GUIDES}"
         return f"Certo, ti lascio il link:\n{get_product_link(product_type)}"
 
     if intent == "richiesta_bonifico" and confidence >= 0.85:
         if product_type == PRODUCT_POTTY:
-            amount_text = f"Importo consigliato: {POTTY_PREMIUM_PRICE} euro per il Premium spannolinamento"
+            amount_text = f"Importo: {POTTY_PRICE} euro per il percorso spannolinamento"
+        elif product_type == PRODUCT_SLEEP and sleep_guide_context_active(phone, pending_text) and asks_only_sleep_guides(pending_text):
+            amount_text = f"Importo: {SLEEP_GUIDES_PRICE} euro per le sole guide sonno"
         else:
-            amount_text = f"Importo consigliato: {OFFERS['premium']['price']} euro per il Premium"
+            amount_text = f"Importo consigliato: {SLEEP_PREMIUM_PRICE} euro per il Premium sonno da 60 giorni"
         return (
             "Certo, puoi pagare tramite bonifico. Ecco le coordinate:\n\n"
             "Intestatario: P&D Digital\n"
             "IBAN: NL10BUNQ2192297467\n\n"
             f"{amount_text}\n"
             "Causale: il tuo nome e cognome\n\n"
-            "Dimmi quando hai effettuato il bonifico cosi iniziamo 🤍"
+            "Dimmi quando hai effettuato il bonifico così verifico e partiamo 🤍"
         )
 
     if intent == "problema_checkout_importo" and confidence >= 0.85:
-        expected = POTTY_PREMIUM_PRICE if product_type == PRODUCT_POTTY else OFFERS['premium']['price']
+        if product_type == PRODUCT_POTTY:
+            expected = POTTY_PRICE
+        elif product_type == PRODUCT_SLEEP and sleep_guide_context_active(phone, pending_text):
+            expected = SLEEP_GUIDES_PRICE
+        else:
+            expected = SLEEP_PREMIUM_PRICE
         return (
-            "L'unica spiegazione e che hai aggiunto il prodotto piu volte nel carrello.\n"
-            "In alto a destra vedi l'icona di una borsetta — cliccaci sopra, guarda quanti articoli ci sono "
-            f"e cambia il numero a 1. Poi procedi al pagamento e ti deve uscire {expected} euro 🤍"
+            "Probabilmente il prodotto è stato aggiunto più volte nel carrello.\n"
+            "Apri l'icona della borsetta in alto, controlla quanti articoli risultano e lascia la quantità a 1. "
+            f"Poi riprova: l'importo previsto per il prodotto che stai scegliendo è {expected} euro 🤍"
         )
 
     if intent == "bonifico_effettuato" and confidence >= 0.80:
-        return "Perfetto, appena verifico il pagamento ti avvio il questionario cosi partiamo con l'analisi personalizzata 🤍"
+        return "Perfetto, appena verifico il pagamento ti avvio il questionario così partiamo con l'analisi personalizzata 🤍"
 
     if intent == "messaggio_cortesia" and confidence >= 0.80:
         return NO_REPLY
 
     return None
-
 
 def should_hold_for_human(router_result):
     if not router_result:
@@ -2694,13 +2946,11 @@ def validate_reply(reply, context):
             lines = [line for line in clean.splitlines() if not any(p in line for p in link_patterns)]
             clean = "\n".join(lines).strip()
 
-    # Corregge eventuali allucinazioni operative: il questionario non arriva via email.
+    # Il questionario/piano non arriva via email; le guide digitali invece sì.
+    # Rimuove solo frasi che associano esplicitamente mail/email a questionario, piano o avvio del percorso.
     forbidden_email_patterns = [
-        r"tra poco ti arriva una mail[^\n.]*",
-        r"ti arriva una mail[^\n.]*",
-        r"riceverai una mail[^\n.]*",
-        r"arriver[aà] una mail[^\n.]*",
-        r"controlla la mail[^\n.]*"
+        r"(?:questionario|piano personalizzato|avvio del percorso)[^\n.]{0,100}(?:mail|email)[^\n.]*",
+        r"(?:mail|email)[^\n.]{0,100}(?:questionario|piano personalizzato|avvio del percorso)[^\n.]*"
     ]
     for pattern in forbidden_email_patterns:
         clean = re.sub(pattern, "", clean, flags=re.I).strip()
@@ -2761,7 +3011,7 @@ Messaggio da riscrivere:
 
 
 def phase0_business_override(phone, intent, product_type, link_sent, asks_link=False):
-    """Regola conversazionale nuova per la fase 0: prima domanda intelligente, poi percorso/link."""
+    """Prima lettura + domanda; alla risposta successiva proposta commerciale coerente con l'origine."""
     if link_sent:
         return None
     if not phase0_intent_is_problem(intent):
@@ -2775,56 +3025,41 @@ def phase0_business_override(phone, intent, product_type, link_sent, asks_link=F
         if product_type == PRODUCT_POTTY:
             return f"""
 La mamma ha risposto alla domanda intelligente precedente sullo spannolinamento.
-Apri in modo umano e accogliente, per esempio ringraziandola perché il dettaglio aiuta a capire meglio; non essere fredda e non sembrare automatica.
-Poi fai una lettura più completa e personalizzata, introduci il percorso e il link.
-Usa "mamma" oppure evita appellativi, mai "cara".
-Non farla sentire in colpa. Il supporto emotivo forte va usato solo se lei ha mostrato stanchezza, ansia o senso di colpa.
-Fai un'analisi concreta di quello che ha raccontato: prontezza, segnali, pipì, cacca, vasino/water, rifiuto, incidenti, nido o routine.
-Prima di proporre il percorso, aggiungi SEMPRE una breve direzione di lavoro, personalizzata sul suo caso, spiegando su cosa lavoreresti o da dove partiresti; resta generale e non dare una sequenza di azioni o un piano completo gratuito.
-Quando proponi il percorso, non usare formule tipo "in chat posso darti una prima lettura" o "in chat posso aiutarti fino a un certo punto".
-Dì invece in modo naturale che questa è una prima lettura, ma per aiutarli davvero serve un percorso più personalizzato e collegalo al problema principale che lei ha raccontato.
-Consiglia il Premium come scelta più adatta per il suo caso, spiegando in modo dinamico che non è solo una guida: comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, questionario iniziale, piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola.
-Spiega che con il Premium può avere un supporto più costante e adattare i passaggi a come reagisce davvero il bambino, senza andare a tentativi e senza forzare.
-Non indicare il prezzo in questa prima proposta, salvo domanda esplicita su prezzo/costo/promozione.
-Il Base, solo guida PDF, si nomina solo se lei chiede la differenza o chiede se può farlo da sola.
-Inserisci il link dello spannolinamento una sola volta dicendo che lì trova percorsi, spiegazione del metodo, cosa comprende e dettagli aggiornati: {LINK_POTTY}
+Apri in modo umano, fai una lettura più completa ma breve e aggiungi una direzione generale personalizzata. Non dare una sequenza di azioni o un piano completo gratuito.
+Poi presenta l'unico percorso spannolinamento da {POTTY_PRICE} euro: guida PDF Metodo Paola, questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp con Paola.
+Spiega che il supporto permette di adattare i passaggi a pipì, cacca, vasino, nido, uscite e reazioni del bambino.
+Inserisci il link una sola volta: {LINK_POTTY}
 """
+
+        if is_spontaneous_inbound_lead(phone):
+            return f"""
+La mamma ha scritto spontaneamente per prima e ha risposto alla domanda intelligente sul sonno.
+Apri in modo umano, fai una lettura più completa ma ancora breve e aggiungi una direzione generale personalizzata. Non dare orari dettagliati, sequenze operative o un piano gratuito.
+Poi spiega la possibilità che Paola può riservare personalmente a chi la contatta direttamente: la soluzione da {SLEEP_GUIDES_PRICE} euro comprende solo le guide digitali, senza piano e senza supporto; con 10 euro in più c'è il percorso da {SLEEP_BASE_PRICE} euro con guide, questionario, piano personalizzato e 30 giorni di supporto; il Premium da {SLEEP_PREMIUM_PRICE} euro comprende il piano e 60 giorni di supporto ed è quello che consigli per seguirla con continuità.
+Orienta chiaramente verso il Premium da 67 euro, collegandolo alla difficoltà raccontata.
+Inserisci una sola volta il link dei percorsi 47/67: {LINK_PREMIUM}
+Non inserire il link delle sole guide, a meno che lei dica esplicitamente che vuole solo quelle.
+"""
+
         return f"""
-La mamma ha risposto alla domanda intelligente precedente sul sonno.
-Apri in modo umano e accogliente, per esempio ringraziandola perché il dettaglio aiuta a capire meglio; non essere fredda e non sembrare automatica.
-Poi fai una lettura più completa e personalizzata, introduci il percorso e il link.
-Usa "mamma" oppure evita appellativi, mai "cara".
-Non farla sentire in colpa. Il supporto emotivo forte va usato solo se lei ha mostrato stanchezza, ansia o senso di colpa.
-Fai un'analisi concreta di quello che ha raccontato: addormentamento, risvegli, seno/braccio/ciuccio/lettone, pisolini, routine o stanchezza.
-Prima di proporre il percorso, aggiungi SEMPRE una breve direzione di lavoro, personalizzata sul suo caso, spiegando su cosa lavoreresti o da dove partiresti; resta generale e non dare una sequenza di azioni o un piano completo gratuito.
-Quando proponi il percorso, non usare formule tipo "in chat posso darti una prima lettura" o "in chat posso aiutarti fino a un certo punto".
-Dì invece in modo naturale che questa è una prima lettura, ma per aiutarli davvero serve un percorso più personalizzato e collegalo al problema principale che lei ha raccontato.
-Consiglia il Premium come scelta più adatta per il suo caso, spiegando in modo dinamico che comprende questionario iniziale, piano personalizzato sul bambino e 60 giorni di supporto WhatsApp con Paola.
-Spiega che con il Premium può avere un supporto più costante e lavorare in modo graduale proprio sul nodo emerso nella chat, per esempio risvegli, seno, addormentamento, pisolini, routine o difficoltà a riaddormentarsi.
-Non indicare il prezzo in questa prima proposta, salvo domanda esplicita su prezzo/costo/promozione.
-Inserisci il link una sola volta dicendo che lì trova percorsi, spiegazione del metodo, cosa comprende e dettagli aggiornati: {LINK_PREMIUM}
+La mamma è già in contatto o è stata raggiunta tramite template e ha risposto alla domanda sul sonno.
+Apri in modo umano, fai una lettura più completa ma breve e aggiungi una direzione generale personalizzata. Non dare un piano gratuito.
+Presenta i due percorsi: {SLEEP_BASE_PRICE} euro con questionario, piano personalizzato e 30 giorni di supporto; Premium da {SLEEP_PREMIUM_PRICE} euro con 60 giorni di supporto, che è quello da consigliare.
+Se ha citato il 37, chiarisci che quella pagina comprende soltanto le guide digitali, senza piano personalizzato e senza supporto.
+Inserisci una sola volta il link dei percorsi: {LINK_PREMIUM}
 """
 
     if product_type == PRODUCT_POTTY:
         return """
 La mamma ha appena raccontato una difficoltà sullo spannolinamento.
-Non vendere subito, non inserire link e non presentare ancora il percorso.
-Apri in modo naturale e umano, per esempio con "Grazie mamma, ho letto quello che mi hai scritto" solo se suona spontaneo.
-Fai una lettura breve e personalizzata di quello che ha scritto, poi fai UNA sola domanda intelligente e specifica per capire meglio.
-La domanda deve aiutare a distinguere il nodo principale: segnali, pipì, cacca, vasino/water, rifiuto, paura, incidenti, nido o routine.
-Usa "mamma" oppure evita appellativi, mai "cara".
-Non farla sentire in colpa. Il supporto emotivo forte va usato solo se lei ha mostrato stanchezza, ansia o senso di colpa; se ha solo descritto il problema, resta concreta e delicata.
-Non dire ancora che lavori con un percorso personalizzato, salvo che lei lo chieda esplicitamente.
+Non vendere subito e non inserire link. Fai una lettura breve e personalizzata, poi fai UNA sola domanda intelligente e specifica per capire il nodo principale tra segnali, pipì, cacca, vasino/water, rifiuto, paura, incidenti, nido o routine.
+Non dare consigli operativi completi.
 """
+
     return """
 La mamma ha appena raccontato una difficoltà sul sonno.
-Non vendere subito, non inserire link e non presentare ancora il percorso.
-Apri in modo naturale e umano, per esempio con "Grazie mamma, ho letto quello che mi hai scritto" solo se suona spontaneo.
-Fai una lettura breve e personalizzata di quello che ha scritto, poi fai UNA sola domanda intelligente e specifica per capire meglio.
-La domanda deve aiutare a distinguere il nodo principale: addormentamento, risvegli, seno/braccio/ciuccio/lettone, pisolini, routine o stanchezza.
-Usa "mamma" oppure evita appellativi, mai "cara".
-Non farla sentire in colpa. Il supporto emotivo forte va usato solo se lei ha mostrato stanchezza, ansia o senso di colpa; se ha solo descritto il problema, resta concreta e delicata.
-Non dire ancora che lavori con un percorso personalizzato, salvo che lei lo chieda esplicitamente.
+Non vendere subito e non inserire link. Fai una lettura breve e personalizzata, poi fai UNA sola domanda intelligente e specifica per capire il nodo principale tra addormentamento, risvegli, seno/braccio/ciuccio/lettone, pisolini, routine o stanchezza.
+Non dare consigli operativi completi.
 """
 
 def build_ai_context(phone, fase, router_result, pending_text):
@@ -2835,7 +3070,7 @@ def build_ai_context(phone, fase, router_result, pending_text):
     asks_link = user_chiede_link(router_result, pending_text)
     profile = get_child_profile(phone)
     intent = router_result.get("intent", "altro") if router_result else "altro"
-    business_rule = get_business_rule(intent, fase, link_sent, product_type)
+    business_rule = get_business_rule(intent, fase, link_sent, product_type, phone=phone, pending_text=pending_text)
     override_rule = phase0_business_override(phone, intent, product_type, link_sent, asks_link) if fase == 0 else None
     if override_rule:
         business_rule = override_rule
@@ -2851,7 +3086,9 @@ Gestisci la risposta con naturalezza, usando lo storico:
 - se chiede in cosa consiste, quanto costa, come funziona o il link, rispondi alla domanda commerciale senza chiedere da zero la difficoltà;
 - se dice che risponderà dopo, rispondi poco o niente;
 - se dice che ha acquistato, il codice avvierà la sequenza acquisto, quindi non trattarlo come lead generica.
-Quando fai la valutazione o spieghi il percorso, presenta il Percorso Premium come il più adatto per essere seguita bene: questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp con Paola. Non dire il prezzo in automatico: se chiede prezzo/costo/promozione, rispondi chiaramente; altrimenti lascia il link dove trova percorsi, spiegazione del metodo e dettagli aggiornati.
+Quando fai la valutazione o spieghi il percorso, presenta le due opzioni corrette: 47 euro con questionario, piano personalizzato e 30 giorni di supporto WhatsApp; Premium da 67 euro con 60 giorni di supporto, che è quello da consigliare.
+Se cita la pagina da 37 euro, chiarisci che comprende soltanto le guide digitali e non include piano personalizzato né supporto.
+Non trasformare la chat in una consulenza gratuita: massimo una piccola lettura e una direzione generale, poi invitala a procedere con il percorso.
 Inserisci il link solo se naturale o se serve: {LINK_PREMIUM}
 """
 
@@ -2861,6 +3098,7 @@ Inserisci il link solo se naturale o se serve: {LINK_PREMIUM}
         "asks_link": asks_link,
         "profile_text": profile_to_text(profile),
         "product_type": product_type,
+        "contact_origin": get_contact_origin(phone),
         "business_rule": business_rule,
         "recent_history": get_recent_history(phone, limit=30),
         "pending_text": pending_text
@@ -2906,6 +3144,7 @@ def get_ai_response(phone, image_url=None, router_result=None):
 Contesto operativo:
 Fase: {fase}
 Prodotto: {product_label(context.get('product_type'))}
+Origine contatto: {context.get('contact_origin', 'unknown')}
 Intento rilevato: {router_result.get('intent', 'altro')}
 Confidenza router: {router_result.get('confidence', 0)}
 Tipo messaggio: {router_result.get('message_type', 'altro')}
@@ -3829,10 +4068,29 @@ def process_response(phone, image_url=None):
         awaiting_reason = get_awaiting_product_choice_reason(phone)
         detected_product = detect_product_type_from_text(combined_raw)
 
+        if awaiting_reason == "sleep_purchase_tier":
+            if explicit_sleep_guides_purchase(combined_raw) or chooses_sleep_guides(combined_raw):
+                set_awaiting_product_choice(phone, False)
+                handle_sleep_guides_purchase(phone)
+                return
+            if full_sleep_path_choice(combined_raw):
+                set_product_type(phone, PRODUCT_SLEEP)
+                set_awaiting_product_choice(phone, False)
+                intro = build_contextual_purchase_intro(phone, combined_raw, PRODUCT_SLEEP)
+                invia_sequenza_acquisto(phone, intro_text=intro, product_type=PRODUCT_SLEEP)
+                return
+            risposta = ask_sleep_purchase_tier()
+            save_message(phone, "assistant", risposta)
+            send_whatsapp_message(phone, risposta)
+            return
+
         if awaiting_reason and detected_product in (PRODUCT_SLEEP, PRODUCT_POTTY):
             set_product_type(phone, detected_product)
             set_awaiting_product_choice(phone, False)
             if awaiting_reason == "purchase":
+                if detected_product == PRODUCT_SLEEP and sleep_guides_purchase_context(phone, combined_raw):
+                    handle_sleep_guides_purchase(phone)
+                    return
                 intro = build_contextual_purchase_intro(phone, combined_raw, detected_product)
                 invia_sequenza_acquisto(phone, intro_text=intro, product_type=detected_product)
                 return
@@ -3848,6 +4106,15 @@ def process_response(phone, image_url=None):
             if product_type == PRODUCT_UNKNOWN:
                 set_awaiting_product_choice(phone, True, "purchase")
                 risposta = build_product_clarification(phone, combined_raw, reason="purchase")
+                save_message(phone, "assistant", risposta)
+                send_whatsapp_message(phone, risposta)
+                return
+            if product_type == PRODUCT_SLEEP and sleep_guides_purchase_context(phone, combined_raw):
+                handle_sleep_guides_purchase(phone)
+                return
+            if product_type == PRODUCT_SLEEP and generic_sleep_material_purchase(combined_raw):
+                set_awaiting_product_choice(phone, True, "sleep_purchase_tier")
+                risposta = ask_sleep_purchase_tier()
                 save_message(phone, "assistant", risposta)
                 send_whatsapp_message(phone, risposta)
                 return
@@ -3933,6 +4200,21 @@ def process_response(phone, image_url=None):
             if product_type == PRODUCT_UNKNOWN:
                 set_awaiting_product_choice(phone, True, "purchase")
                 risposta = build_product_clarification(phone, combined_raw, reason="purchase")
+                save_message(phone, "assistant", risposta)
+                send_whatsapp_message(phone, risposta)
+                return
+            if image_url and product_type == PRODUCT_SLEEP and not combined_raw.strip():
+                set_awaiting_product_choice(phone, True, "sleep_purchase_tier")
+                risposta = ask_sleep_purchase_tier()
+                save_message(phone, "assistant", risposta)
+                send_whatsapp_message(phone, risposta)
+                return
+            if product_type == PRODUCT_SLEEP and sleep_guides_purchase_context(phone, combined_raw):
+                handle_sleep_guides_purchase(phone)
+                return
+            if product_type == PRODUCT_SLEEP and generic_sleep_material_purchase(combined_raw):
+                set_awaiting_product_choice(phone, True, "sleep_purchase_tier")
+                risposta = ask_sleep_purchase_tier()
                 save_message(phone, "assistant", risposta)
                 send_whatsapp_message(phone, risposta)
                 return
@@ -4460,6 +4742,9 @@ def webhook():
         return Response("OK", status=200)
 
     saved_content = text_to_process or "[immagine]"
+    # Prima di salvare il primo messaggio, registra se il contatto è nato spontaneamente.
+    # La promo guida 37 / percorso 47 / Premium 67 vale solo per questi nuovi inbound.
+    register_inbound_contact_origin(phone)
     save_message(phone, "user", saved_content)
 
     # Notifica nel topic Telegram anche se la chat è in pausa.
@@ -4519,7 +4804,7 @@ def due_template_followups():
         cur.execute("""
             SELECT phone, COALESCE(product_type, 'unknown') AS product_type, lead_contacted_at
             FROM consultations c
-            WHERE c.phone ~ '^\+393[0-9]{9}$'
+            WHERE c.phone ~ '^\\+393[0-9]{9}$'
               AND COALESCE(fase, 0) = 0
               AND COALESCE(followup_enabled, TRUE) = TRUE
               AND COALESCE(lead_status, 'none') = %s
@@ -4549,7 +4834,7 @@ def due_question_followups():
         cur.execute("""
             SELECT phone, COALESCE(product_type, 'unknown') AS product_type, last_intelligent_question_sent_at
             FROM consultations c
-            WHERE c.phone ~ '^\+393[0-9]{9}$'
+            WHERE c.phone ~ '^\\+393[0-9]{9}$'
               AND COALESCE(fase, 0) = 0
               AND COALESCE(followup_enabled, TRUE) = TRUE
               AND COALESCE(lead_status, 'none') <> 'stopped'
@@ -4580,7 +4865,7 @@ def due_link_followups():
         cur.execute("""
             SELECT phone, COALESCE(product_type, 'unknown') AS product_type, last_link_sent_at
             FROM consultations c
-            WHERE c.phone ~ '^\+393[0-9]{9}$'
+            WHERE c.phone ~ '^\\+393[0-9]{9}$'
               AND COALESCE(fase, 0) = 0
               AND COALESCE(followup_enabled, TRUE) = TRUE
               AND COALESCE(lead_status, 'none') = %s
@@ -4664,9 +4949,9 @@ def generate_link_followup(phone, product_type, last_link_sent_at=None):
     history = get_recent_history(phone, limit=32)
     product_type = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else get_product_type(phone)
     if product_type == PRODUCT_POTTY:
-        product_note = f"Percorso spannolinamento Premium: guida PDF, questionario, piano personalizzato e 30 giorni di supporto WhatsApp. Link già inviato: {LINK_POTTY}. Non citare il prezzo se non è emerso o se non lo chiede."
+        product_note = f"Percorso spannolinamento da {POTTY_PRICE} euro: guida PDF, questionario, piano personalizzato e 30 giorni di supporto WhatsApp. Link già inviato: {LINK_POTTY}."
     else:
-        product_note = f"Percorso sonno Premium: questionario, piano personalizzato e 60 giorni di supporto WhatsApp. Link già inviato: {LINK_PREMIUM}. Non citare il prezzo se non è emerso o se non lo chiede."
+        product_note = f"Percorsi sonno: {SLEEP_BASE_PRICE} euro/30 giorni e Premium {SLEEP_PREMIUM_PRICE} euro/60 giorni. Link già inviato: {LINK_PREMIUM}."
 
     # Evita follow-up temporalmente strani tipo "in questi giorni" quando il link è stato inviato ieri o poche ore prima.
     elapsed_hours = None
@@ -4741,7 +5026,7 @@ def mark_silent_after_link_followup_cold():
             UPDATE consultations c
             SET lead_status = %s,
                 followup_enabled = FALSE
-            WHERE c.phone ~ '^\+393[0-9]{9}$'
+            WHERE c.phone ~ '^\\+393[0-9]{9}$'
               AND COALESCE(fase, 0) = 0
               AND COALESCE(followup_enabled, TRUE) = TRUE
               AND COALESCE(lead_status, 'none') = %s
@@ -4776,7 +5061,7 @@ def cleanup_invalid_lead_phones():
                 followup_enabled = FALSE
             WHERE COALESCE(fase, 0) = 0
               AND COALESCE(followup_enabled, TRUE) = TRUE
-              AND (phone IS NULL OR phone !~ '^\+393[0-9]{9}$')
+              AND (phone IS NULL OR phone !~ '^\\+393[0-9]{9}$')
         """, (LEAD_STATUS_STOPPED,))
         changed = cur.rowcount
         conn.commit()
@@ -4791,12 +5076,12 @@ def cleanup_invalid_lead_phones():
 
 
 def run_followup_checks():
-    """V45: follow-up automatici eliminati.
+    """V46: follow-up automatici eliminati.
 
     Il bot invia esclusivamente il template iniziale. Se la persona non risponde,
     non parte nessun secondo template, nessun sollecito GPT e nessun follow-up post-link.
     """
-    logger.debug("Follow-up automatici disattivati in V45")
+    logger.debug("Follow-up automatici disattivati in V46")
     return 0
 
 # ─── JOB BACKGROUND ────────────────────────────────────────────────────────────
@@ -4804,7 +5089,7 @@ def background_job():
     risveglio_fatto = False
     while True:
         try:
-            # Invia solo i piani schedulati. In V45 non esistono follow-up automatici.
+            # Invia solo i piani schedulati. In V46 non esistono follow-up automatici.
             if not in_orario_silenzio():
                 for phone in get_pianos_to_send():
                     send_piano(phone)
@@ -4877,7 +5162,7 @@ def startup():
     init_db()
     threading.Thread(target=background_job, daemon=True).start()
     setup_telegram_webhook()
-    logger.info("Bot avviato — V45: follow-up automatici disattivati")
+    logger.info("Bot avviato — V46: offerte aggiornate e follow-up automatici disattivati")
 
 if __name__ == "__main__":
     startup()
