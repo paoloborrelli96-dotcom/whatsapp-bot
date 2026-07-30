@@ -14,6 +14,7 @@ import base64
 import io
 import json
 import re
+import unicodedata
 import pytz
 
 # ─── CONFIGURAZIONE ────────────────────────────────────────────────────────────
@@ -90,7 +91,7 @@ FOLLOWUP_QUESTION_AFTER_HOURS = float(os.environ.get("FOLLOWUP_QUESTION_AFTER_HO
 FOLLOWUP_LINK_AFTER_HOURS = float(os.environ.get("FOLLOWUP_LINK_AFTER_HOURS", "18"))
 FOLLOWUP_COLD_AFTER_HOURS = float(os.environ.get("FOLLOWUP_COLD_AFTER_HOURS", "24"))
 
-# V48: tutti i follow-up automatici restano disattivati.
+# V49: tutti i follow-up automatici restano disattivati.
 # Parte solo il template iniziale; se la persona non risponde, il bot non la ricontatta.
 AUTOMATIC_FOLLOWUPS_ENABLED = False
 
@@ -111,11 +112,20 @@ LEAD_STATUS_STOPPED = "stopped"
 LEAD_STATUS_LINK_FOLLOWUP_SENT = "link_followup_sent"
 LEAD_STATUS_COLD = "cold"
 
+# V49: lead che arrivano inviando direttamente su WhatsApp le risposte del modulo Meta.
+FORM_LEAD_NONE = "none"
+FORM_LEAD_SLEEP = "sleep_form"
+FORM_LEAD_POTTY = "potty_form"
+FORM_STEP_INITIAL = 0          # modulo appena ricevuto, Paola deve presentarsi e fare la prima domanda
+FORM_STEP_FIRST_REPLY = 1      # la mamma ha risposto alla prima domanda, serve un altro scambio naturale
+FORM_STEP_READY_FOR_OFFER = 2  # dopo il secondo scambio: lettura breve + proposta
+FORM_STEP_OFFER_SENT = 3
+
 SLEEP_GUIDES_PRICE = 37
 SLEEP_BASE_PRICE = 47
 SLEEP_PREMIUM_PRICE = 67
 SLEEP_PREMIUM_ORIGINAL_PRICE = 197
-POTTY_PRICE = 27
+POTTY_PRICE = 19
 
 SLEEP_GUIDES_DETAILS = (
     "La Guida Metodo Paola da 37 euro comprende solo i materiali digitali, senza piano personalizzato e senza supporto WhatsApp: "
@@ -125,9 +135,10 @@ SLEEP_GUIDES_DETAILS = (
 )
 
 POTTY_OFFER_DETAILS = (
-    "Il percorso spannolinamento costa 27 euro e comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, "
+    "Il percorso spannolinamento costa 19 euro e comprende la guida PDF Metodo Paola: Spannolinamento Dolce di Paola, "
     "il questionario iniziale, il piano personalizzato sul bambino e 30 giorni di supporto WhatsApp con Paola, "
-    "così il lavoro viene adattato a come reagisce davvero il bambino durante pipì, cacca, vasino, nido, uscite e prime difficoltà."
+    "così il lavoro viene adattato a come reagisce davvero il bambino durante pipì, cacca, vasino, nido, uscite e prime difficoltà. "
+    "Per le mamme che arrivano dal modulo Meta va presentato come super promo valida solo fino a oggi."
 )
 
 OFFERS = {
@@ -420,8 +431,8 @@ Non dire mai che arriva una mail con il questionario o con il percorso. In quest
 
 DATI COMMERCIALI AGGIORNATI
 Sonno: percorso da 47 euro con 30 giorni di supporto WhatsApp; Premium in offerta a 67 euro invece di 197 euro, con 60 giorni di supporto WhatsApp, da consigliare come scelta principale.
-Guida sonno da 37 euro: solo materiali digitali, nessun piano personalizzato e nessun supporto WhatsApp. Va proposta spontaneamente solo alle mamme che iniziano loro per prime la conversazione, oppure spiegata se una mamma già in contatto cita il prezzo da 37 euro. Link guida: https://shop.genitorinarmonia.com/sonno-base. Link percorsi 47/67: https://shop.genitorinarmonia.com/sonno.
-Spannolinamento: unico percorso da 27 euro con guida, questionario, piano personalizzato e 30 giorni di supporto WhatsApp.
+Guida sonno da 37 euro: solo materiali digitali, nessun piano personalizzato e nessun supporto WhatsApp. Va proposta spontaneamente solo alle mamme che iniziano loro per prime la conversazione dalla landing delle guide. NON va proposta alle mamme riconosciute come provenienti dal modulo Meta sonno: a loro si presentano soltanto 47 e 67 euro. Se una mamma già in contatto cita il prezzo da 37 euro, spiega che riguarda soltanto le guide. Link guida: https://shop.genitorinarmonia.com/sonno-base. Link percorsi 47/67: https://shop.genitorinarmonia.com/sonno.
+Spannolinamento: unico percorso da 19 euro con guida, questionario, piano personalizzato e 30 giorni di supporto WhatsApp. Alle mamme provenienti dal modulo Meta pannolino presentalo come super promo valida solo fino a oggi.
 
 SE CHIEDONO SE SEI UN BOT
 Rispondi in modo trasparente e naturale:
@@ -472,7 +483,7 @@ Non dare per acquisto completato frasi come "lo compro", "vorrei acquistare", "p
 Non classificare come richiesta_bonifico solo perché compare la parola bonifico. È richiesta_bonifico solo se chiede IBAN, coordinate, o se può pagare con bonifico.
 Se dice che ha già fatto il bonifico, usa bonifico_effettuato.
 Non classificare come richiesta_rimborso solo perché compare la parola rimborso. È richiesta_rimborso solo se vuole indietro i soldi o chiede la procedura.
-Non classificare come problema_checkout_importo solo perché compaiono 27, 37, 47 o 67. È problema_checkout_importo solo se parla di carrello, checkout, importo sbagliato, prezzo che non torna, prodotto aggiunto più volte.
+Non classificare come problema_checkout_importo solo perché compaiono 19, 37, 47 o 67. È problema_checkout_importo solo se parla di carrello, checkout, importo sbagliato, prezzo che non torna, prodotto aggiunto più volte.
 Non classificare come acquisto_completato se scrive "lo compro", "lo prendo", "acquisto subito". Quello è intenzione_acquisto_non_completato.
 È acquisto_completato solo se dice che ha già pagato, completato ordine, fatto acquisto, mostra ricevuta/conferma, oppure dice di aver scaricato/letto/ricevuto la guida, il PDF, il materiale o il percorso. Se l'acquisto è generico non devi decidere tu il prodotto: il codice chiederà sonno o spannolinamento.
 Se la mamma è già in percorso attivo e chiede "che faccio ora", "lo sveglio", "la attacco", "come mi muovo adesso", usa richiesta_pratica_immediata.
@@ -517,7 +528,7 @@ Se la persona scrive solo ciao, info, vorrei informazioni, quanto costa o come f
 Se invece non ha ancora acquistato ma descrive per la prima volta un problema concreto di sonno o spannolinamento, non vendere subito e non inserire il link: ringrazia in modo umano se naturale, fai una lettura breve e personalizzata, poi fai una sola domanda intelligente per capire meglio.
 Se la mamma sta rispondendo a una domanda intelligente precedente, allora apri in modo accogliente, fai un'analisi più completa ma ancora breve e introduci il percorso/link seguendo la regola business.
 In fase 0 la persona non ha ancora acquistato: puoi dare soltanto una piccola lettura personalizzata e al massimo una direzione generale. Non fornire orari dettagliati, sequenze passo passo, correzioni continue o un piano completo gratuito. Dopo una domanda sostanziale, riportala sempre con delicatezza verso l'acquisto del percorso adatto. Se il link è già stato inviato, non ripeterlo: dille che lo trova nel messaggio sopra, salvo richiesta esplicita.
-Per il sonno, i prezzi possono essere comunicati quando previsti dalla regola business: 47 euro per 30 giorni e Premium in offerta a 67 euro invece di 197 euro per 60 giorni. Solo alle mamme che scrivono spontaneamente per prime si può presentare anche la soluzione guide da 37 euro e la promo 37/47/67, consigliando il Premium in offerta. Per lo spannolinamento c'è un unico percorso da 27 euro con 30 giorni di supporto WhatsApp.
+Per il sonno, i prezzi possono essere comunicati quando previsti dalla regola business: 47 euro per 30 giorni e Premium in offerta a 67 euro invece di 197 euro per 60 giorni. Solo alle mamme spontanee provenienti dalla landing delle guide si può presentare anche la soluzione da 37 euro. Alle mamme riconosciute come provenienti dal modulo Meta sonno si presentano esclusivamente 47 e 67 euro, consigliando il Premium. Per lo spannolinamento c'è un unico percorso da 19 euro con 30 giorni di supporto WhatsApp; nel flusso modulo Meta è una super promo valida soltanto fino a oggi.
 Il supporto emotivo forte va usato solo se lei lo palesa con frasi come "sono distrutta", "non ce la faccio", "mi sento in colpa", "sono disperata". Se racconta solo il problema, resta concreta, calda e professionale.
 Se dichiara di aver già acquistato, il codice avvia la sequenza acquisto corretta; se l'acquisto è generico, prima chiede sonno o spannolinamento.
 
@@ -1033,6 +1044,11 @@ def init_db():
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS intelligent_question_followup_sent_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS last_link_sent_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS link_followup_sent_at TIMESTAMPTZ")
+    # V49: stato della conversazione nata dalle risposte del modulo Meta inviate su WhatsApp.
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS form_lead_type TEXT DEFAULT 'none'")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS form_step INTEGER DEFAULT 0")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS form_offer_sent BOOLEAN DEFAULT FALSE")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS form_received_at TIMESTAMPTZ")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS telegram_topics (
@@ -1232,6 +1248,12 @@ def set_lead_state(phone, lead_flow=LEAD_FLOW_NONE, lead_status=LEAD_STATUS_NONE
                     ELSE consultations.lead_contacted_at
                 END
         """, (phone, lead_flow, lead_status, origin, origin, origin, LEAD_STATUS_TEMPLATE_SENT))
+        if lead_flow != LEAD_FLOW_NONE:
+            cur.execute("""
+                UPDATE consultations
+                SET form_lead_type = %s, form_step = %s, form_offer_sent = FALSE, form_received_at = NULL
+                WHERE phone = %s
+            """, (FORM_LEAD_NONE, FORM_STEP_INITIAL, phone))
         conn.commit()
         cur.close()
         conn.close()
@@ -1304,6 +1326,179 @@ def get_contact_origin(phone):
 
 def is_spontaneous_inbound_lead(phone):
     return get_contact_origin(phone) == "inbound_spontaneous"
+
+
+def has_prior_conversation_messages(phone):
+    """Serve a riconoscere in sicurezza un modulo che arriva come primo messaggio WhatsApp."""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT EXISTS(SELECT 1 FROM messages WHERE phone = %s)", (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return bool(row and row[0])
+    except Exception as e:
+        logger.error(f"Errore has_prior_conversation_messages: {e}")
+        return True
+
+
+def detect_meta_form_type(text, first_contact=False):
+    """Riconosce le risposte dei moduli Meta inviate direttamente dalla mamma su WhatsApp.
+
+    Usa prima le etichette delle domande e i titoli del modulo; come fallback, sul primo
+    contatto riconosce anche le opzioni testuali esatte impostate nelle campagne.
+    """
+    raw = normalize_text(text)
+    if not raw:
+        return FORM_LEAD_NONE
+    # I testi Meta possono contenere accenti diversi (è/e, difficoltà/difficolta).
+    t = "".join(
+        ch for ch in unicodedata.normalize("NFD", raw)
+        if unicodedata.category(ch) != "Mn"
+    )
+
+    sleep_form_markers = [
+        "compila questo breve questionario sul sonno",
+        "prima valutazione gratuita",
+        "quanti mesi o anni ha il tuo bambino",
+        "quanti mesi anni ha il tuo bambino",
+        "qual e la difficolta principale"
+    ]
+    potty_form_markers = [
+        "togliere il pannolino sta diventando difficile",
+        "qual e la difficolta principale con il pannolino",
+        "questionario pannolino",
+        "modulo pannolino"
+    ]
+    sleep_options = [
+        "si addormenta solo al seno",
+        "si addormenta solo in braccio",
+        "si sveglia tante volte a notte",
+        "pisolini difficili",
+        "dorme solo con contatto"
+    ]
+    potty_options = [
+        "rifiuta il vasino o il riduttore",
+        "fa pipi o cacca addosso spesso",
+        "trattiene pipi o cacca",
+        "si agita quando provo a togliere il pannolino",
+        "vuole rimettere subito il pannolino",
+        "non capisco se e pronto",
+        "non capisco se e pronta"
+    ]
+
+    has_sleep_label = any(marker in t for marker in sleep_form_markers)
+    has_potty_label = any(marker in t for marker in potty_form_markers)
+    has_sleep_option = any(option in t for option in sleep_options)
+    has_potty_option = any(option in t for option in potty_options)
+
+    # Le parole pannolino/vasino hanno priorità se il testo contiene indicatori di entrambi.
+    if has_potty_label or (first_contact and has_potty_option):
+        return FORM_LEAD_POTTY
+    if has_sleep_label and (has_sleep_option or "sonno" in t or "mesi" in t or "anni" in t):
+        return FORM_LEAD_SLEEP
+    if first_contact and has_sleep_option:
+        return FORM_LEAD_SLEEP
+    return FORM_LEAD_NONE
+
+
+def register_meta_form_lead(phone, form_lead_type):
+    if form_lead_type not in (FORM_LEAD_SLEEP, FORM_LEAD_POTTY):
+        return False
+    product_type = PRODUCT_SLEEP if form_lead_type == FORM_LEAD_SLEEP else PRODUCT_POTTY
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO consultations (
+                phone, product_type, form_lead_type, form_step, form_offer_sent,
+                form_received_at, lead_status, followup_enabled
+            )
+            VALUES (%s, %s, %s, %s, FALSE, NOW(), %s, FALSE)
+            ON CONFLICT (phone) DO UPDATE
+            SET product_type = EXCLUDED.product_type,
+                form_lead_type = EXCLUDED.form_lead_type,
+                form_step = EXCLUDED.form_step,
+                form_offer_sent = FALSE,
+                form_received_at = NOW(),
+                lead_status = EXCLUDED.lead_status,
+                lead_flow = 'none',
+                followup_enabled = FALSE
+        """, (phone, product_type, form_lead_type, FORM_STEP_INITIAL, LEAD_STATUS_WAITING_ANSWERS))
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"Modulo Meta riconosciuto per {phone}: {form_lead_type}")
+        return True
+    except Exception as e:
+        logger.error(f"Errore register_meta_form_lead: {e}")
+        return False
+
+
+def get_meta_form_state(phone):
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT COALESCE(form_lead_type, 'none') AS form_lead_type,
+                   COALESCE(form_step, 0) AS form_step,
+                   COALESCE(form_offer_sent, FALSE) AS form_offer_sent,
+                   form_received_at
+            FROM consultations WHERE phone = %s
+        """, (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return dict(row) if row else {
+            "form_lead_type": FORM_LEAD_NONE,
+            "form_step": FORM_STEP_INITIAL,
+            "form_offer_sent": False,
+            "form_received_at": None
+        }
+    except Exception as e:
+        logger.error(f"Errore get_meta_form_state: {e}")
+        return {
+            "form_lead_type": FORM_LEAD_NONE,
+            "form_step": FORM_STEP_INITIAL,
+            "form_offer_sent": False,
+            "form_received_at": None
+        }
+
+
+def is_meta_form_lead(phone):
+    state = get_meta_form_state(phone)
+    return state.get("form_lead_type") in (FORM_LEAD_SLEEP, FORM_LEAD_POTTY)
+
+
+def update_meta_form_after_assistant_reply(phone, reply):
+    """Avanza il dialogo solo dopo che Paola ha realmente inviato una risposta."""
+    state = get_meta_form_state(phone)
+    form_type = state.get("form_lead_type", FORM_LEAD_NONE)
+    if form_type not in (FORM_LEAD_SLEEP, FORM_LEAD_POTTY):
+        return
+    current_step = int(state.get("form_step", FORM_STEP_INITIAL) or 0)
+    offer_sent = bool(state.get("form_offer_sent", False))
+    if offer_sent:
+        return
+
+    contains_link = reply_contains_product_link(reply)
+    next_step = FORM_STEP_OFFER_SENT if contains_link else min(current_step + 1, FORM_STEP_READY_FOR_OFFER)
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE consultations
+            SET form_step = %s,
+                form_offer_sent = CASE WHEN %s THEN TRUE ELSE form_offer_sent END
+            WHERE phone = %s
+        """, (next_step, contains_link, phone))
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.info(f"Stato modulo Meta per {phone}: step {current_step} -> {next_step}, offer={contains_link}")
+    except Exception as e:
+        logger.error(f"Errore update_meta_form_after_assistant_reply: {e}")
 
 
 def get_lead_meta(phone):
@@ -1561,6 +1756,8 @@ def mark_phase0_after_assistant_reply(phone, reply, router_result=None):
     """Segna se in fase 0 il bot ha fatto domanda intelligente oppure ha inviato link."""
     if get_fase(phone) != 0 or not reply:
         return
+    # Nel flusso Meta lo step avanza dopo ogni risposta effettivamente inviata da Paola.
+    update_meta_form_after_assistant_reply(phone, reply)
     if reply_contains_product_link(reply):
         update_lead_followup_fields(
             phone,
@@ -2837,6 +3034,11 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
     confidence = float(router_result.get("confidence", 0) or 0) if router_result else 0
     product_type = product_from_context_or_text(phone, pending_text)
 
+    # Le lead da modulo Meta devono essere condotte da GPT con conversazione naturale,
+    # anche quando chiedono prezzo/link durante gli scambi.
+    if fase == 0 and is_meta_form_lead(phone):
+        return None
+
     # Dopo un link già inviato lascia a GPT la continuità della conversazione.
     if fase == 0 and link_gia_inviato(phone, product_type):
         return None
@@ -3062,6 +3264,97 @@ Non vendere subito e non inserire link. Fai una lettura breve e personalizzata, 
 Non dare consigli operativi completi.
 """
 
+def meta_form_business_rule(phone, intent, product_type, link_sent, asks_link=False, pending_text=""):
+    """Conduce il dialogo naturale delle lead da modulo Meta per 2 scambi prima della proposta."""
+    state = get_meta_form_state(phone)
+    form_type = state.get("form_lead_type", FORM_LEAD_NONE)
+    if form_type not in (FORM_LEAD_SLEEP, FORM_LEAD_POTTY):
+        return None
+
+    step = int(state.get("form_step", FORM_STEP_INITIAL) or 0)
+    offer_sent = bool(state.get("form_offer_sent", False)) or link_sent
+    guide_mentioned = mentions_sleep_guides_offer(pending_text)
+    guide_note = (
+        "La mamma ha citato la sponsorizzata/guida da 37 euro: spiega soltanto in questo caso che riguarda i soli materiali digitali, senza piano personalizzato e senza supporto. "
+        if guide_mentioned else
+        "Non introdurre guide o altre opzioni: resta soltanto sui percorsi con supporto da 47 e 67 euro. "
+    )
+    commercial_intents = {
+        "richiesta_link", "richiesta_info_percorso", "richiesta_differenza_percorsi",
+        "obiezione_prezzo", "intenzione_acquisto_non_completato", "richiesta_bonifico"
+    }
+
+    if offer_sent:
+        if form_type == FORM_LEAD_POTTY:
+            return f"""
+La mamma proviene dal modulo Meta pannolino e ha già ricevuto la proposta/link.
+Rispondi alla sua domanda in modo diretto, senza ripetere il link salvo richiesta esplicita.
+Ricorda soltanto se utile che la super promo è di {POTTY_PRICE} euro, valida fino a oggi, con piano personalizzato e 30 giorni di supporto WhatsApp.
+Non continuare con consulenza gratuita: al massimo una piccola lettura generale, poi rimandala con delicatezza al percorso.
+"""
+        return f"""
+La mamma proviene dal modulo Meta sonno e ha già ricevuto la proposta/link.
+Rispondi direttamente senza ripartire dalle domande e senza reinviare il link salvo richiesta esplicita.
+Le sole opzioni per questo flusso sono {SLEEP_BASE_PRICE} euro con 30 giorni e Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro con 60 giorni, consigliando il Premium.
+{guide_note}
+Non continuare con consulenza gratuita: al massimo una piccola lettura generale, poi invitala al percorso.
+"""
+
+    # Il primo messaggio del modulo deve SEMPRE aprire il dialogo, anche se il router
+    # interpreta il titolo del form come una generica richiesta di informazioni.
+    if step == FORM_STEP_INITIAL:
+        topic = "sonno" if form_type == FORM_LEAD_SLEEP else "pannolino"
+        return f"""
+Questo è il primo messaggio arrivato da un modulo Meta sul {topic}. Le risposte del modulo sono già nello storico.
+Presentati in modo naturale: "Ciao, sono Paola". Dimostra subito di avere letto età e difficoltà, senza ripetere le domande del modulo e senza fare un riassunto rigido.
+Apri una vera conversazione: fai una breve osservazione personalizzata e poi UNA sola domanda scelta da te, quella più utile per capire cosa succede davvero.
+La domanda deve nascere dalle risposte ricevute, non da uno schema fisso. Non vendere, non nominare prezzi e non inserire link in questo messaggio.
+"""
+
+    # Dopo la prima risposta, se la mamma chiede direttamente prezzo o link si risponde;
+    # altrimenti si fa un secondo scambio naturale prima della valutazione.
+    if step == FORM_STEP_FIRST_REPLY and not (intent in commercial_intents or asks_link):
+        return """
+La mamma ha risposto alla prima domanda di Paola dopo il modulo Meta.
+Continua come una conversazione WhatsApp naturale: collega ciò che ha appena detto alle risposte iniziali, fai una piccola osservazione concreta e poi UNA sola seconda domanda davvero utile.
+Non ripetere ciò che sai già, non fare un elenco, non dare un piano e non vendere ancora. Questo è il secondo e ultimo scambio di approfondimento prima della prima valutazione.
+"""
+
+    # Se durante il dialogo la mamma chiede già prezzo/link, rispondi senza costringerla ad altre domande.
+    if intent in commercial_intents or asks_link:
+        if form_type == FORM_LEAD_POTTY:
+            return f"""
+La mamma arriva dal modulo Meta pannolino e ora chiede informazioni commerciali.
+Rispondi in modo naturale e presenta la super promo da {POTTY_PRICE} euro valida soltanto fino a oggi.
+Comprende guida, questionario, piano personalizzato e 30 giorni di supporto WhatsApp.
+Inserisci una sola volta il link: {LINK_POTTY}
+Non inventare altre offerte o link.
+"""
+        return f"""
+La mamma arriva dal modulo Meta sonno e ora chiede prezzo, differenze o link.
+Presenta esclusivamente il percorso da {SLEEP_BASE_PRICE} euro con questionario, piano personalizzato e 30 giorni di supporto WhatsApp e il Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro con 60 giorni, che è quello da consigliare.
+{guide_note}
+Inserisci una sola volta il link dei percorsi: {LINK_PREMIUM}
+"""
+
+    if form_type == FORM_LEAD_POTTY:
+        return f"""
+Hai ora abbastanza elementi dal modulo Meta pannolino e dai due scambi successivi.
+Fai una prima lettura gratuita breve ma autentica: spiega il nodo centrale e la direzione generale su cui lavoreresti, senza dare una sequenza operativa completa.
+Poi presenta in modo naturale la super promo da {POTTY_PRICE} euro valida solo fino a oggi, che comprende guida, questionario, piano personalizzato e 30 giorni di supporto WhatsApp.
+Collega il valore del supporto alla difficoltà specifica raccontata dalla mamma e inserisci una sola volta il link: {LINK_POTTY}
+Non fare altre domande prima della proposta, salvo che il messaggio sia totalmente incomprensibile.
+"""
+
+    return f"""
+Hai ora abbastanza elementi dal modulo Meta sonno e dai due scambi successivi.
+Fai una prima lettura gratuita breve ma autentica: spiega il punto centrale e la direzione generale su cui lavoreresti, senza dare orari, passaggi dettagliati o un piano completo.
+Poi presenta soltanto le due opzioni con supporto: {SLEEP_BASE_PRICE} euro con questionario, piano personalizzato e 30 giorni di supporto WhatsApp; Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro con 60 giorni, che è quello da consigliare in base alla situazione.
+{guide_note}
+Inserisci una sola volta il link dei percorsi: {LINK_PREMIUM}
+"""
+
+
 def build_ai_context(phone, fase, router_result, pending_text):
     product_type = product_from_context_or_text(phone, pending_text)
     if product_type != PRODUCT_UNKNOWN and get_product_type(phone) == PRODUCT_UNKNOWN:
@@ -3092,6 +3385,15 @@ Non trasformare la chat in una consulenza gratuita: massimo una piccola lettura 
 Inserisci il link solo se naturale o se serve: {LINK_PREMIUM}
 """
 
+    # V49: il flusso modulo Meta prevale sulla normale logica inbound della landing guide.
+    if fase == 0 and is_meta_form_lead(phone):
+        form_rule = meta_form_business_rule(
+            phone, intent, product_type, link_sent, asks_link=asks_link, pending_text=pending_text
+        )
+        if form_rule:
+            business_rule = form_rule
+
+    form_state = get_meta_form_state(phone)
     return {
         "fase": fase,
         "link_sent": link_sent,
@@ -3099,6 +3401,9 @@ Inserisci il link solo se naturale o se serve: {LINK_PREMIUM}
         "profile_text": profile_to_text(profile),
         "product_type": product_type,
         "contact_origin": get_contact_origin(phone),
+        "form_lead_type": form_state.get("form_lead_type", FORM_LEAD_NONE),
+        "form_step": form_state.get("form_step", FORM_STEP_INITIAL),
+        "form_offer_sent": form_state.get("form_offer_sent", False),
         "business_rule": business_rule,
         "recent_history": get_recent_history(phone, limit=30),
         "pending_text": pending_text
@@ -3145,6 +3450,9 @@ Contesto operativo:
 Fase: {fase}
 Prodotto: {product_label(context.get('product_type'))}
 Origine contatto: {context.get('contact_origin', 'unknown')}
+Origine modulo Meta: {context.get('form_lead_type', FORM_LEAD_NONE)}
+Step conversazione modulo: {context.get('form_step', FORM_STEP_INITIAL)}
+Offerta modulo già inviata: {context.get('form_offer_sent', False)}
 Intento rilevato: {router_result.get('intent', 'altro')}
 Confidenza router: {router_result.get('confidence', 0)}
 Tipo messaggio: {router_result.get('message_type', 'altro')}
@@ -4742,10 +5050,16 @@ def webhook():
         return Response("OK", status=200)
 
     saved_content = text_to_process or "[immagine]"
-    # Prima di salvare il primo messaggio, registra se il contatto è nato spontaneamente.
-    # La promo guida 37 / percorso 47 / Premium 67 vale solo per questi nuovi inbound.
+    # Prima di salvare il primo messaggio, registra l'origine e verifica se il testo
+    # contiene le risposte del modulo Meta inviate direttamente dalla mamma.
+    first_contact = not has_prior_conversation_messages(phone)
     register_inbound_contact_origin(phone)
+    detected_form = detect_meta_form_type(saved_content, first_contact=first_contact)
+    if detected_form in (FORM_LEAD_SLEEP, FORM_LEAD_POTTY):
+        register_meta_form_lead(phone, detected_form)
     save_message(phone, "user", saved_content)
+    if detected_form in (FORM_LEAD_SLEEP, FORM_LEAD_POTTY):
+        threading.Thread(target=extract_child_profile_from_history, args=[phone], daemon=True).start()
 
     # Notifica nel topic Telegram anche se la chat è in pausa.
     threading.Thread(target=send_to_topic, args=[phone, saved_content, False], daemon=True).start()
@@ -5162,7 +5476,7 @@ def startup():
     init_db()
     threading.Thread(target=background_job, daemon=True).start()
     setup_telegram_webhook()
-    logger.info("Bot avviato — V46: offerte aggiornate e follow-up automatici disattivati")
+    logger.info("Bot avviato — V49: moduli Meta conversazionali, pannolino 19 euro e follow-up disattivati")
 
 if __name__ == "__main__":
     startup()
