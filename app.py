@@ -90,7 +90,7 @@ FOLLOWUP_QUESTION_AFTER_HOURS = float(os.environ.get("FOLLOWUP_QUESTION_AFTER_HO
 FOLLOWUP_LINK_AFTER_HOURS = float(os.environ.get("FOLLOWUP_LINK_AFTER_HOURS", "18"))
 FOLLOWUP_COLD_AFTER_HOURS = float(os.environ.get("FOLLOWUP_COLD_AFTER_HOURS", "24"))
 
-# V46: tutti i follow-up automatici restano disattivati.
+# V48: tutti i follow-up automatici restano disattivati.
 # Parte solo il template iniziale; se la persona non risponde, il bot non la ricontatta.
 AUTOMATIC_FOLLOWUPS_ENABLED = False
 
@@ -114,6 +114,7 @@ LEAD_STATUS_COLD = "cold"
 SLEEP_GUIDES_PRICE = 37
 SLEEP_BASE_PRICE = 47
 SLEEP_PREMIUM_PRICE = 67
+SLEEP_PREMIUM_ORIGINAL_PRICE = 197
 POTTY_PRICE = 27
 
 SLEEP_GUIDES_DETAILS = (
@@ -229,7 +230,6 @@ MSG_REGOLE = (
     "Tutti i contenuti inviati restano comunque sotto la mia supervisione e responsabilita professionale. "
     "Ti chiedo inoltre, quando possibile, di evitare messaggi eccessivamente lunghi e di suddividerli in piu messaggi brevi, "
     "cosi riesco a seguirti meglio e a mantenere la chat ordinata.\n\n"
-    "Per condizioni di acquisto, garanzia e rimborsi fa fede quanto indicato nella pagina del prodotto e nella policy del sito.\n\n"
     "Rispondo dal lunedi al venerdi, dalle 9 alle 17. "
     "Il weekend mi fermo — se mi scrivi sabato o domenica ti rispondo lunedi.\n\n"
     "Se accetti queste condizioni, compila il questionario e iniziamo 🤍"
@@ -359,7 +359,7 @@ Regole:
 - Collega la risposta a ciò che ha scritto: addormentamento, risvegli, seno/braccio/contatto/lettone, pisolini o stanchezza.
 - Dai massimo una direzione generale, niente orari dettagliati o sequenze passo passo.
 - Presenta il percorso da 47 euro con questionario, piano personalizzato e 30 giorni di supporto WhatsApp.
-- Consiglia soprattutto il Premium da 67 euro con 60 giorni di supporto WhatsApp.
+- Consiglia soprattutto il Premium in offerta a 67 euro invece di 197 euro, con 60 giorni di supporto WhatsApp.
 - Se cita il 37 euro, chiarisci che quella soluzione comprende solo le guide digitali, senza piano e senza supporto.
 - Inserisci il link dei percorsi 47/67 una sola volta.
 - Non usare markdown, titoli o grassetti.
@@ -370,7 +370,7 @@ SLEEP_LEAD_FOLLOWUP_PROMPT = """
 Gestisci la risposta di una mamma già contattata con il template sonno.
 Restituisci SOLO JSON valido con action analysis|soft_prompt|info_reply|defer|no_reply, reply e reason.
 
-Se racconta un problema concreto, fai una lettura breve, massimo una direzione generale e poi presenta 47 euro/30 giorni e Premium 67 euro/60 giorni, consigliando il Premium. Non regalare un piano completo.
+Se racconta un problema concreto, fai una lettura breve, massimo una direzione generale e poi presenta 47 euro/30 giorni e il Premium in offerta a 67 euro invece di 197 euro, con 60 giorni di supporto, consigliando il Premium. Non regalare un piano completo.
 Se cita il 37 euro, chiarisci che si tratta delle sole guide digitali senza supporto.
 Se scrive solo sì, ok o ci eravamo sentite, non ripetere tutte le domande: invitala a rispondere a quelle già sopra.
 Se chiede prezzo, durata, cosa comprende o link, rispondi direttamente senza ripartire da zero.
@@ -419,7 +419,7 @@ Non parlare mai di consulenza scaduta, fine percorso o rinnovi, a meno che sia l
 Non dire mai che arriva una mail con il questionario o con il percorso. In questo sistema il questionario, le regole e l'avvio vengono inviati direttamente qui su WhatsApp solo dopo acquisto confermato o comando manuale. Prima dell'acquisto non dare per scontato che la mamma abbia acquistato solo perché manda una conferma, un ok o una emoji.
 
 DATI COMMERCIALI AGGIORNATI
-Sonno: percorso da 47 euro con 30 giorni di supporto WhatsApp; Premium da 67 euro con 60 giorni di supporto WhatsApp, da consigliare come scelta principale.
+Sonno: percorso da 47 euro con 30 giorni di supporto WhatsApp; Premium in offerta a 67 euro invece di 197 euro, con 60 giorni di supporto WhatsApp, da consigliare come scelta principale.
 Guida sonno da 37 euro: solo materiali digitali, nessun piano personalizzato e nessun supporto WhatsApp. Va proposta spontaneamente solo alle mamme che iniziano loro per prime la conversazione, oppure spiegata se una mamma già in contatto cita il prezzo da 37 euro. Link guida: https://shop.genitorinarmonia.com/sonno-base. Link percorsi 47/67: https://shop.genitorinarmonia.com/sonno.
 Spannolinamento: unico percorso da 27 euro con guida, questionario, piano personalizzato e 30 giorni di supporto WhatsApp.
 
@@ -517,7 +517,7 @@ Se la persona scrive solo ciao, info, vorrei informazioni, quanto costa o come f
 Se invece non ha ancora acquistato ma descrive per la prima volta un problema concreto di sonno o spannolinamento, non vendere subito e non inserire il link: ringrazia in modo umano se naturale, fai una lettura breve e personalizzata, poi fai una sola domanda intelligente per capire meglio.
 Se la mamma sta rispondendo a una domanda intelligente precedente, allora apri in modo accogliente, fai un'analisi più completa ma ancora breve e introduci il percorso/link seguendo la regola business.
 In fase 0 la persona non ha ancora acquistato: puoi dare soltanto una piccola lettura personalizzata e al massimo una direzione generale. Non fornire orari dettagliati, sequenze passo passo, correzioni continue o un piano completo gratuito. Dopo una domanda sostanziale, riportala sempre con delicatezza verso l'acquisto del percorso adatto. Se il link è già stato inviato, non ripeterlo: dille che lo trova nel messaggio sopra, salvo richiesta esplicita.
-Per il sonno, i prezzi possono essere comunicati quando previsti dalla regola business: 47 euro per 30 giorni e 67 euro per 60 giorni. Solo alle mamme che scrivono spontaneamente per prime si può presentare anche la soluzione guide da 37 euro e la promo 37/47/67, consigliando il Premium da 67 euro. Per lo spannolinamento c'è un unico percorso da 27 euro con 30 giorni di supporto WhatsApp.
+Per il sonno, i prezzi possono essere comunicati quando previsti dalla regola business: 47 euro per 30 giorni e Premium in offerta a 67 euro invece di 197 euro per 60 giorni. Solo alle mamme che scrivono spontaneamente per prime si può presentare anche la soluzione guide da 37 euro e la promo 37/47/67, consigliando il Premium in offerta. Per lo spannolinamento c'è un unico percorso da 27 euro con 30 giorni di supporto WhatsApp.
 Il supporto emotivo forte va usato solo se lei lo palesa con frasi come "sono distrutta", "non ce la faccio", "mi sento in colpa", "sono disperata". Se racconta solo il problema, resta concreta, calda e professionale.
 Se dichiara di aver già acquistato, il codice avvia la sequenza acquisto corretta; se l'acquisto è generico, prima chiede sonno o spannolinamento.
 
@@ -2054,7 +2054,7 @@ def handle_sleep_guides_purchase(phone):
             "I materiali vengono inviati via email, quindi controlla anche spam e promozioni.\n\n"
             f"Visto che mi hai scritto direttamente, posso riservarti la possibilità di passare al percorso da {SLEEP_BASE_PRICE} euro "
             "con piano personalizzato e 30 giorni di supporto, "
-            f"oppure al Premium da {SLEEP_PREMIUM_PRICE} euro con 60 giorni, che è quello che ti consiglierei per essere seguita con più continuità.\n"
+            f"oppure al Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro, con 60 giorni, che è quello che ti consiglierei per essere seguita con più continuità.\n"
             f"{LINK_PREMIUM}"
         )
     else:
@@ -2062,7 +2062,7 @@ def handle_sleep_guides_purchase(phone):
             f"Perfetto mamma. L'acquisto da {SLEEP_GUIDES_PRICE} euro comprende le sole guide digitali e la playlist, "
             "quindi non include il questionario, il piano personalizzato o il supporto WhatsApp. "
             "I materiali vengono inviati via email, quindi controlla anche spam e promozioni.\n\n"
-            f"I percorsi con piano e supporto sono quello da {SLEEP_BASE_PRICE} euro per 30 giorni e il Premium da {SLEEP_PREMIUM_PRICE} euro per 60 giorni. "
+            f"I percorsi con piano e supporto sono quello da {SLEEP_BASE_PRICE} euro per 30 giorni e il Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro per 60 giorni. "
             f"Per essere seguita passo passo trovi qui le due opzioni:\n{LINK_PREMIUM}"
         )
     save_message(phone, "assistant", reply)
@@ -2211,7 +2211,7 @@ def get_msg_regole(product_type):
 def get_msg_regole_parts(product_type):
     """Divide le regole in due messaggi fissi e ordinati, senza tagli automatici brutti."""
     full = get_msg_regole(product_type)
-    marker = "Per condizioni di acquisto"
+    marker = "Rispondo dal lunedi"
     idx = full.find(marker)
     if idx != -1:
         part1 = full[:idx].strip()
@@ -2667,7 +2667,7 @@ def get_business_rule(intent, fase, link_sent=False, product_type=PRODUCT_UNKNOW
         if product_type == PRODUCT_SLEEP and guide_only:
             return f"La mamma chiede espressamente le sole guide da {SLEEP_GUIDES_PRICE} euro. Invia questo link e chiarisci brevemente che non comprende piano o supporto: {LINK_SLEEP_GUIDES}"
         if product_type == PRODUCT_SLEEP:
-            return f"Invia il link dei percorsi sonno da {SLEEP_BASE_PRICE}/{SLEEP_PREMIUM_PRICE} euro, consigliando il Premium da 60 giorni: {LINK_PREMIUM}"
+            return f"Invia il link dei percorsi sonno: {SLEEP_BASE_PRICE} euro per 30 giorni e Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro per 60 giorni, consigliando il Premium: {LINK_PREMIUM}"
         return "Chiedi soltanto se si riferisce al sonno o allo spannolinamento, poi invia il link corretto."
 
     if intent == "richiesta_differenza_percorsi":
@@ -2683,16 +2683,16 @@ Se serve, inserisci una sola volta il link: {LINK_POTTY}
 Spiega con chiarezza le tre possibilità sul sonno.
 La soluzione da {SLEEP_GUIDES_PRICE} euro comprende solo i materiali digitali e non include piano personalizzato né supporto WhatsApp. {SLEEP_GUIDES_DETAILS}
 Con soli 10 euro in più, il percorso da {SLEEP_BASE_PRICE} euro comprende guide, questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp.
-Il Premium da {SLEEP_PREMIUM_PRICE} euro è quello che consigli: comprende guide, questionario, piano personalizzato e 60 giorni di supporto WhatsApp, quindi permette più continuità e aggiustamenti.
+Il Premium è in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro ed è quello che consigli: comprende guide, questionario, piano personalizzato e 60 giorni di supporto WhatsApp, quindi permette più continuità e aggiustamenti.
 Questa possibilità 37/47/67 va presentata come promo che Paola può riservare personalmente alle mamme che scrivono spontaneamente per prime.
 Per 47 e 67 usa questo link: {LINK_PREMIUM}
 Se la mamma conferma che vuole esclusivamente le guide, usa invece questo link: {LINK_SLEEP_GUIDES}
-Non essere aggressiva, ma orienta chiaramente verso il Premium da 67 euro.
+Non essere aggressiva, ma orienta chiaramente verso il Premium in offerta a 67 euro invece di 197 euro.
 """
         return f"""
 Spiega la differenza tra i due percorsi sonno disponibili per chi è già in contatto o è stato raggiunto tramite template.
 Il percorso da {SLEEP_BASE_PRICE} euro comprende guide, questionario iniziale, piano personalizzato e 30 giorni di supporto WhatsApp.
-Il Premium da {SLEEP_PREMIUM_PRICE} euro comprende guide, questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp ed è quello consigliato.
+Il Premium è in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro, comprende guide, questionario iniziale, piano personalizzato e 60 giorni di supporto WhatsApp ed è quello consigliato.
 Se la mamma cita il prezzo da 37 euro, chiarisci che quella pagina riguarda soltanto le guide digitali, senza piano personalizzato e senza supporto.
 Link percorsi 47/67: {LINK_PREMIUM}
 Non spingere in modo aggressivo.
@@ -2707,7 +2707,7 @@ Link se serve: {LINK_POTTY}
 """
         extra = ""
         if spontaneous or guide_mentioned:
-            extra = f" La guida da {SLEEP_GUIDES_PRICE} euro è solo digitale e senza supporto; con 10 euro in più c'è il percorso da {SLEEP_BASE_PRICE} euro con 30 giorni, mentre il Premium da {SLEEP_PREMIUM_PRICE} euro offre 60 giorni ed è quello consigliato."
+            extra = f" La guida da {SLEEP_GUIDES_PRICE} euro è solo digitale e senza supporto; con 10 euro in più c'è il percorso da {SLEEP_BASE_PRICE} euro con 30 giorni, mentre il Premium è in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro, offre 60 giorni ed è quello consigliato."
         return f"""
 Rispondi all'obiezione sul prezzo con calore e concretezza.
 Spiega che il valore non è solo nei PDF, ma nel questionario, nel piano su misura e nel supporto WhatsApp passo passo.{extra}
@@ -2729,7 +2729,7 @@ Ricorda con delicatezza che il rimborso non è applicabile a chi ha già usufrui
 La mamma chiede della soluzione sonno da {SLEEP_GUIDES_PRICE} euro dopo che un altro link è già stato inviato.
 Spiega che comprende soltanto i materiali digitali: {SLEEP_GUIDES_DETAILS}
 Non include questionario, piano personalizzato o supporto WhatsApp.
-Se vuole essere seguita, orientala verso 47 euro/30 giorni o Premium 67 euro/60 giorni, consigliando il Premium. Link percorsi: {LINK_PREMIUM}
+Se vuole essere seguita, orientala verso 47 euro/30 giorni o Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro/60 giorni, consigliando il Premium. Link percorsi: {LINK_PREMIUM}
 Invia il link delle sole guide {LINK_SLEEP_GUIDES} soltanto se conferma che vuole esclusivamente quelle.
 """
             return f"""
@@ -2751,7 +2751,7 @@ Non dare una consulenza completa gratuita. Se sembra pronta o chiede il link, in
                 return f"""
 La mamma sta chiedendo della guida sonno da {SLEEP_GUIDES_PRICE} euro.
 Chiarisci che comprende solo materiali digitali, senza piano personalizzato e senza supporto WhatsApp. {SLEEP_GUIDES_DETAILS}
-Se ha scritto spontaneamente per prima, spiega la promo riservata: con 10 euro in più può scegliere il percorso da {SLEEP_BASE_PRICE} euro con piano e 30 giorni di supporto; il Premium da {SLEEP_PREMIUM_PRICE} euro con 60 giorni è quello che consigli.
+Se ha scritto spontaneamente per prima, spiega la promo riservata: con 10 euro in più può scegliere il percorso da {SLEEP_BASE_PRICE} euro con piano e 30 giorni di supporto; il Premium è in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro, con 60 giorni, ed è quello che consigli.
 Link percorsi assistiti: {LINK_PREMIUM}
 Se dichiara di volere solo le guide, link guida: {LINK_SLEEP_GUIDES}
 Se è già in contatto o è stata raggiunta tramite template, chiarisci semplicemente che il 37 riguarda solo guide, mentre i percorsi con supporto sono 47 e 67 euro.
@@ -2770,20 +2770,20 @@ Non è chiaro se parla di sonno o spannolinamento. Chiedi prima a quale percorso
 La persona non ha ancora acquistato e il link è già stato inviato.
 Dai solo una lettura breve e personalizzata o una singola direzione generale. Non dare orari dettagliati, sequenze passo passo, piani completi o assistenza continuativa gratuita.
 Poi riportala con delicatezza all'acquisto: spiega che per dirle esattamente come procedere serve questionario e piano personalizzato. Non ripetere il link, ma dille che lo trova nel messaggio sopra; reinvialo solo se lo chiede.
-Il percorso consigliato è il Premium da {SLEEP_PREMIUM_PRICE} euro con 60 giorni di supporto.
+Il percorso consigliato è il Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro, con 60 giorni di supporto.
 """
         if spontaneous:
             return f"""
 La mamma ha scritto spontaneamente per prima e non ha ancora acquistato.
 Fai una prima lettura breve e personalizzata, massimo una direzione generale, senza regalare un piano completo.
-Poi presenta la promo riservata a chi contatta direttamente Paola: guide digitali sole a {SLEEP_GUIDES_PRICE} euro; con 10 euro in più percorso da {SLEEP_BASE_PRICE} euro con questionario, piano personalizzato e 30 giorni di supporto; Premium da {SLEEP_PREMIUM_PRICE} euro con piano e 60 giorni di supporto, che è quello da consigliare.
+Poi presenta la promo riservata a chi contatta direttamente Paola: guide digitali sole a {SLEEP_GUIDES_PRICE} euro; con 10 euro in più percorso da {SLEEP_BASE_PRICE} euro con questionario, piano personalizzato e 30 giorni di supporto; Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro, con piano e 60 giorni di supporto, che è quello da consigliare.
 Per i percorsi 47/67 inserisci una sola volta: {LINK_PREMIUM}
 Il link guida {LINK_SLEEP_GUIDES} va inviato solo se lei conferma di volere esclusivamente le guide.
 """
         return f"""
 La persona è già in contatto o è stata raggiunta tramite template e non ha ancora acquistato.
 Fai una prima lettura breve e personalizzata, massimo una direzione generale, senza regalare un piano completo.
-Presenta i percorsi sonno da {SLEEP_BASE_PRICE} euro con 30 giorni e Premium da {SLEEP_PREMIUM_PRICE} euro con 60 giorni, consigliando il Premium.
+Presenta i percorsi sonno da {SLEEP_BASE_PRICE} euro con 30 giorni e Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro con 60 giorni, consigliando il Premium.
 Se cita il prezzo da 37 euro, chiarisci che riguarda solo le guide digitali senza piano e senza supporto.
 Inserisci una sola volta il link dei percorsi: {LINK_PREMIUM}
 """
@@ -2881,7 +2881,7 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
         elif product_type == PRODUCT_SLEEP and sleep_guide_context_active(phone, pending_text) and asks_only_sleep_guides(pending_text):
             amount_text = f"Importo: {SLEEP_GUIDES_PRICE} euro per le sole guide sonno"
         else:
-            amount_text = f"Importo consigliato: {SLEEP_PREMIUM_PRICE} euro per il Premium sonno da 60 giorni"
+            amount_text = f"Importo promozionale: {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro per il Premium sonno da 60 giorni"
         return (
             "Certo, puoi pagare tramite bonifico. Ecco le coordinate:\n\n"
             "Intestatario: P&D Digital\n"
@@ -3035,8 +3035,8 @@ Inserisci il link una sola volta: {LINK_POTTY}
             return f"""
 La mamma ha scritto spontaneamente per prima e ha risposto alla domanda intelligente sul sonno.
 Apri in modo umano, fai una lettura più completa ma ancora breve e aggiungi una direzione generale personalizzata. Non dare orari dettagliati, sequenze operative o un piano gratuito.
-Poi spiega la possibilità che Paola può riservare personalmente a chi la contatta direttamente: la soluzione da {SLEEP_GUIDES_PRICE} euro comprende solo le guide digitali, senza piano e senza supporto; con 10 euro in più c'è il percorso da {SLEEP_BASE_PRICE} euro con guide, questionario, piano personalizzato e 30 giorni di supporto; il Premium da {SLEEP_PREMIUM_PRICE} euro comprende il piano e 60 giorni di supporto ed è quello che consigli per seguirla con continuità.
-Orienta chiaramente verso il Premium da 67 euro, collegandolo alla difficoltà raccontata.
+Poi spiega la possibilità che Paola può riservare personalmente a chi la contatta direttamente: la soluzione da {SLEEP_GUIDES_PRICE} euro comprende solo le guide digitali, senza piano e senza supporto; con 10 euro in più c'è il percorso da {SLEEP_BASE_PRICE} euro con guide, questionario, piano personalizzato e 30 giorni di supporto; il Premium è in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro, comprende il piano e 60 giorni di supporto ed è quello che consigli per seguirla con continuità.
+Orienta chiaramente verso il Premium in offerta a 67 euro invece di 197 euro, collegandolo alla difficoltà raccontata.
 Inserisci una sola volta il link dei percorsi 47/67: {LINK_PREMIUM}
 Non inserire il link delle sole guide, a meno che lei dica esplicitamente che vuole solo quelle.
 """
@@ -3044,7 +3044,7 @@ Non inserire il link delle sole guide, a meno che lei dica esplicitamente che vu
         return f"""
 La mamma è già in contatto o è stata raggiunta tramite template e ha risposto alla domanda sul sonno.
 Apri in modo umano, fai una lettura più completa ma breve e aggiungi una direzione generale personalizzata. Non dare un piano gratuito.
-Presenta i due percorsi: {SLEEP_BASE_PRICE} euro con questionario, piano personalizzato e 30 giorni di supporto; Premium da {SLEEP_PREMIUM_PRICE} euro con 60 giorni di supporto, che è quello da consigliare.
+Presenta i due percorsi: {SLEEP_BASE_PRICE} euro con questionario, piano personalizzato e 30 giorni di supporto; Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro con 60 giorni di supporto, che è quello da consigliare.
 Se ha citato il 37, chiarisci che quella pagina comprende soltanto le guide digitali, senza piano personalizzato e senza supporto.
 Inserisci una sola volta il link dei percorsi: {LINK_PREMIUM}
 """
@@ -3086,7 +3086,7 @@ Gestisci la risposta con naturalezza, usando lo storico:
 - se chiede in cosa consiste, quanto costa, come funziona o il link, rispondi alla domanda commerciale senza chiedere da zero la difficoltà;
 - se dice che risponderà dopo, rispondi poco o niente;
 - se dice che ha acquistato, il codice avvierà la sequenza acquisto, quindi non trattarlo come lead generica.
-Quando fai la valutazione o spieghi il percorso, presenta le due opzioni corrette: 47 euro con questionario, piano personalizzato e 30 giorni di supporto WhatsApp; Premium da 67 euro con 60 giorni di supporto, che è quello da consigliare.
+Quando fai la valutazione o spieghi il percorso, presenta le due opzioni corrette: 47 euro con questionario, piano personalizzato e 30 giorni di supporto WhatsApp; Premium in offerta a 67 euro invece di 197 euro con 60 giorni di supporto, che è quello da consigliare.
 Se cita la pagina da 37 euro, chiarisci che comprende soltanto le guide digitali e non include piano personalizzato né supporto.
 Non trasformare la chat in una consulenza gratuita: massimo una piccola lettura e una direzione generale, poi invitala a procedere con il percorso.
 Inserisci il link solo se naturale o se serve: {LINK_PREMIUM}
@@ -3942,7 +3942,7 @@ def generate_sleep_lead_analysis(phone, lead_answers):
         if issue:
             risposta = rewrite_reply_if_needed(risposta, issue, context)
         if LINK_PREMIUM not in risposta:
-            risposta = risposta.rstrip() + f"\n\nIl percorso che ti consiglierei è il Premium: partiamo da un questionario iniziale, preparo un piano personalizzato e poi per 60 giorni ti seguo qui su WhatsApp passo passo.\n\nTi lascio il link dove trovi i percorsi, la spiegazione del mio metodo, cosa comprende e tutti i dettagli aggiornati:\n{LINK_PREMIUM}"
+            risposta = risposta.rstrip() + f"\n\nIl percorso che ti consiglierei è il Premium, in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro: partiamo da un questionario iniziale, preparo un piano personalizzato e poi per 60 giorni ti seguo qui su WhatsApp passo passo.\n\nTi lascio il link dove trovi i percorsi, la spiegazione del mio metodo, cosa comprende e tutti i dettagli aggiornati:\n{LINK_PREMIUM}"
         save_message(phone, "assistant", risposta)
         send_whatsapp_message(phone, risposta)
         set_lead_state(phone, LEAD_FLOW_SLEEP_MANUAL, LEAD_STATUS_ANALYSIS_DONE)
@@ -4951,7 +4951,7 @@ def generate_link_followup(phone, product_type, last_link_sent_at=None):
     if product_type == PRODUCT_POTTY:
         product_note = f"Percorso spannolinamento da {POTTY_PRICE} euro: guida PDF, questionario, piano personalizzato e 30 giorni di supporto WhatsApp. Link già inviato: {LINK_POTTY}."
     else:
-        product_note = f"Percorsi sonno: {SLEEP_BASE_PRICE} euro/30 giorni e Premium {SLEEP_PREMIUM_PRICE} euro/60 giorni. Link già inviato: {LINK_PREMIUM}."
+        product_note = f"Percorsi sonno: {SLEEP_BASE_PRICE} euro/30 giorni e Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro/60 giorni. Link già inviato: {LINK_PREMIUM}."
 
     # Evita follow-up temporalmente strani tipo "in questi giorni" quando il link è stato inviato ieri o poche ore prima.
     elapsed_hours = None
