@@ -856,6 +856,31 @@ def ensure_meta_subscriptions() -> None:
         logger.exception("Impossibile iscrivere l'app al WABA: %s", exc)
 
 
+def send_whatsapp_template(phone: str, template_name: str = "hello_world", language: str = "en_US") -> Tuple[bool, Optional[str]]:
+    recipient = phone_for_meta(phone)
+    if not recipient:
+        return False, "numero destinatario non valido"
+    try:
+        result = meta_api("POST", f"{META_PHONE_NUMBER_ID}/messages", json_data={
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": recipient,
+            "type": "template",
+            "template": {
+                "name": template_name,
+                "language": {"code": language},
+            },
+        })
+        message_id = None
+        if result.get("messages"):
+            message_id = result["messages"][0].get("id")
+        save_message(phone, "assistant", "meta_api", f"[template:{template_name}]", provider_message_id=message_id)
+        return True, None
+    except Exception as exc:
+        logger.exception("Errore invio template WhatsApp %s: %s", phone, exc)
+        return False, str(exc)
+
+
 def send_whatsapp_message(phone: str, text: str, source: str = "bot") -> bool:
     recipient = phone_for_meta(phone)
     if not recipient:
@@ -1792,10 +1817,27 @@ def admin_meta_test_message():
     payload = request.get_json(silent=True) or {}
     phone = normalize_phone(payload.get("to", ""))
     text = (payload.get("text") or "Test connessione WhatsApp Cloud API - Genitori in Armonia").strip()
+    use_template = payload.get("template", True)
     if not phone:
         return jsonify({"ok": False, "error": "Campo 'to' obbligatorio, es. +393331234567"}), 400
-    sent = send_whatsapp_message(phone, text, source="bot")
-    return jsonify({"ok": sent, "to": phone, "meta": meta_setup_status()})
+    error = None
+    if use_template:
+        sent, error = send_whatsapp_template(phone)
+        if sent:
+            return jsonify({"ok": True, "to": phone, "mode": "template:hello_world", "meta": meta_setup_status()})
+    recipient = phone_for_meta(phone)
+    try:
+        meta_api("POST", f"{META_PHONE_NUMBER_ID}/messages", json_data={
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": recipient,
+            "type": "text",
+            "text": {"preview_url": False, "body": text},
+        })
+        return jsonify({"ok": True, "to": phone, "mode": "text", "meta": meta_setup_status()})
+    except Exception as exc:
+        error = str(exc)
+    return jsonify({"ok": False, "to": phone, "error": error, "hint": "Aggiungi il numero come destinatario di test in Meta Passaggio 1, oppure invia prima un messaggio al numero +1 555-647-0518", "meta": meta_setup_status()}), 502
 
 
 @app.route("/admin/reload_profile/<path:phone>", methods=["POST"])
