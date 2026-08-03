@@ -33,6 +33,7 @@ TELEGRAM_CHAT_ID       = os.environ.get("TELEGRAM_CHAT_ID", "")
 TELEGRAM_GROUP_ID      = os.environ.get("TELEGRAM_GROUP_ID", "")
 TIMEZONE               = os.environ.get("TIMEZONE", "Europe/Rome")
 PLAN_DELAY_MINUTES     = int(os.environ.get("PLAN_DELAY_MINUTES", "60"))
+NO_REPLY_MIN_CONFIDENCE = float(os.environ.get("NO_REPLY_MIN_CONFIDENCE", "0.88"))
 
 # ─── MODELLI OPENAI ────────────────────────────────────────────────────────────
 # Puoi cambiarli da Railway senza modificare il codice.
@@ -3980,6 +3981,145 @@ def is_immediate_question(text):
     return any(p in t for p in patterns) and "?" in text or any(p in t for p in ["che faccio", "cosa faccio", "lo sveglio", "la sveglio"])
 
 
+
+NO_REPLY_CLASSIFIER_PROMPT = """
+Sei un filtro decisionale per una chat WhatsApp di Genitori in Armonia.
+Devi decidere se il messaggio della mamma richiede una risposta oppure se è soltanto una chiusura naturale della conversazione.
+Non devi scrivere la risposta. Restituisci SOLO JSON valido.
+
+Formato obbligatorio:
+{
+  "no_reply": true,
+  "confidence": 0.0,
+  "kind": "chiusura|ringraziamento|conferma_operativa|nuovo_contenuto|domanda|altro",
+  "reason": "breve motivo"
+}
+
+Metti no_reply=true SOLO quando il messaggio contiene esclusivamente uno o più di questi elementi:
+- ringraziamento;
+- conferma di aver capito;
+- approvazione di quanto proposto;
+- decisione di provare o mettere in pratica i consigli già ricevuti;
+- promessa generica di aggiornare più avanti;
+- saluto o chiusura naturale senza nuovi elementi.
+
+Esempi che NON richiedono risposta:
+- "Perfetto, grazie mille Paola"
+- "Ok, grazie dei consigli, mettiamo in atto"
+- "Va bene, proviamo così e vediamo come va"
+- "Tutto chiaro, iniziamo da stasera"
+- "Grazie, ci organizziamo in questo modo e poi ti aggiorno"
+- "Perfetto, allora continuo così"
+
+Metti no_reply=false se compare anche UNO SOLO di questi elementi:
+- una domanda esplicita o implicita;
+- un dubbio che attende chiarimento;
+- un nuovo aggiornamento concreto sul bambino;
+- un nuovo problema, peggioramento, sintomo o difficoltà;
+- una richiesta pratica su cosa fare;
+- una correzione o precisazione importante;
+- acquisto, pagamento, bonifico, rimborso, link, assistenza o richiesta amministrativa;
+- conferma di avere finito il questionario;
+- rabbia, lamentela, urgenza o richiesta di parlare con Paola.
+
+Esempi che richiedono risposta:
+- "Grazie, però se si sveglia dopo mezz'ora cosa faccio?"
+- "Ok, mettiamo in atto, ma oggi il pisolino è saltato"
+- "Perfetto, non ho capito quando devo toglierle il seno"
+- "Grazie Paola, stanotte ha avuto dieci risvegli"
+- "Va bene, ho finito il questionario"
+
+Regole di prudenza:
+- Non classificare come chiusura un messaggio solo perché inizia con "grazie", "ok", "perfetto" o "va bene".
+- Valuta l'intero messaggio.
+- Se c'è un nuovo contenuto utile o un dubbio, no_reply=false.
+- In caso di dubbio scegli no_reply=false.
+""".strip()
+
+
+def should_silence_with_gpt(phone, fase, text, image_url=None):
+    """Classifica ogni messaggio di fase 0/4 prima del router.
+
+    Il modello decide se è una chiusura naturale che non richiede risposta.
+    Il controllo statico resta soltanto come fallback se OpenAI non risponde.
+    """
+    if fase not in (0, 4):
+        return False
+    if image_url:
+        return False
+
+    raw = (text or "").strip()
+    if not raw:
+        return True
+
+    # Protezioni deterministiche: questi casi non possono essere silenziati.
+    normalized = normalize_text(raw)
+    if "?" in raw:
+        return False
+
+    must_reply_patterns = [
+        "ho finito", "ho risposto a tutto", "questionario completato",
+        "ho acquistato", "ho comprato", "ho pagato", "bonifico",
+        "rimborso", "non funziona", "non riesco", "ho bisogno",
+        "voglio parlare con paola", "mi chiami", "urgente",
+        "che faccio", "cosa faccio", "come faccio", "non ho capito",
+        "però", "pero", "ma oggi", "ma stanotte", "ma adesso", "solo che"
+    ]
+    if any(pattern in normalized for pattern in must_reply_patterns):
+        return False
+
+    heuristic_closure = is_obvious_closing_message(raw)
+    recent_history = get_recent_history(phone, limit=8)
+    history_text = format_history_for_prompt(recent_history)
+    default = {
+        "no_reply": heuristic_closure,
+        "confidence": 0.90 if heuristic_closure else 0.0,
+        "kind": "chiusura" if heuristic_closure else "altro",
+        "reason": "fallback statico"
+    }
+
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CLASSIFIER,
+            messages=[
+                {"role": "system", "content": NO_REPLY_CLASSIFIER_PROMPT},
+                {"role": "user", "content": f"""
+Fase attuale: {fase}
+
+Storico recente:
+{history_text}
+
+Messaggio da valutare:
+{raw}
+
+Decidi se Paola deve rispondere oppure restare in silenzio.
+"""}
+            ],
+            max_tokens=260,
+            temperature=0,
+            response_format={"type": "json_object"},
+            timeout=45
+        )
+        data = parse_json_safely(response.choices[0].message.content, default)
+        if not isinstance(data, dict):
+            data = dict(default)
+
+        no_reply = bool(data.get("no_reply", False))
+        confidence = float(data.get("confidence", 0.0) or 0.0)
+        kind = str(data.get("kind", "altro"))
+        reason = str(data.get("reason", ""))
+
+        logger.info(
+            f"Filtro no-reply per {phone} — fase {fase} — "
+            f"no_reply={no_reply}, confidence={confidence:.2f}, kind={kind}, reason={reason}"
+        )
+        return no_reply and confidence >= NO_REPLY_MIN_CONFIDENCE
+
+    except Exception as e:
+        logger.error(f"Errore filtro no-reply GPT per {phone}: {e}")
+        # Se OpenAI fallisce, silenzia solo le chiusure davvero evidenti già riconosciute a codice.
+        return heuristic_closure
+
 def is_obvious_closing_message(text):
     """Riconosce chiusure/cortesie brevi per evitare risposte automatiche inutili.
     Non deve intercettare domande, conferme questionario o messaggi con contenuto sul sonno.
@@ -4823,13 +4963,6 @@ def process_response(phone, image_url=None):
     combined_raw = "\n".join(pending)
     combined = combined_raw.lower().strip()
 
-    # Se dopo un messaggio commerciale/link la mamma invia solo una reazione o una micro-conferma
-    # (es. 👍, 👌, ☝🏻, "ok guardo"), non generare una risposta GPT: evita allucinazioni
-    # come questionari via email o avvii percorso non richiesti.
-    if fase == 0 and not image_url and is_obvious_closing_message(combined_raw):
-        mark_silent_no_reply(phone, "fase 0: reazione/micro-conferma senza domanda")
-        return
-
     # Se la mamma chiede esplicitamente di non essere ricontattata, registra comunque lo stop.
     if fase == 0 and is_stop_followup_message(combined_raw):
         stop_followups(phone)
@@ -4910,6 +5043,13 @@ def process_response(phone, image_url=None):
         # Se capisce il prodotto da un messaggio informativo/problema, lo salva per non ripartire da zero.
         if detected_product in (PRODUCT_SLEEP, PRODUCT_POTTY) and get_product_type(phone) == PRODUCT_UNKNOWN:
             set_product_type(phone, detected_product)
+
+    # V52: ogni messaggio nelle fasi 0 e 4 passa prima da un classificatore dedicato.
+    # Se è soltanto una chiusura/ringraziamento/conferma operativa senza nuovi contenuti,
+    # viene salvato e mostrato su Telegram ma il bot non invia nulla su WhatsApp.
+    if should_silence_with_gpt(phone, fase, combined_raw, image_url=image_url):
+        mark_silent_no_reply(phone, f"fase {fase}: chiusura rilevata dal filtro GPT")
+        return
 
     # Router semantico: non invia nulla, serve solo per decidere meglio.
     router_result = classify_message(phone, fase, combined_raw, image_url=image_url)
@@ -5487,10 +5627,8 @@ def webhook():
         logger.info(f"Chat {phone} in pausa — messaggio salvato e inoltrato a Telegram, nessun timer")
         return Response("OK", status=200)
 
-    fase_corrente = get_fase(phone)
-    if fase_corrente in (0, 4) and not image_url_to_process and is_obvious_closing_message(text_to_process):
-        mark_silent_no_reply(phone, "chiusura breve rilevata prima del timer")
-        return Response("OK", status=200)
+    # V52: non decidiamo più qui con una lista statica se il messaggio è una chiusura.
+    # Tutti i messaggi delle fasi 0 e 4 vengono valutati dal filtro GPT dentro process_response.
 
     # ── Orario silenzio (23:00 - 07:00 ora italiana) ──────────────────────────
     if in_orario_silenzio():
