@@ -533,13 +533,41 @@ Per il sonno, i prezzi possono essere comunicati quando previsti dalla regola bu
 Il supporto emotivo forte va usato solo se lei lo palesa con frasi come "sono distrutta", "non ce la faccio", "mi sento in colpa", "sono disperata". Se racconta solo il problema, resta concreta, calda e professionale.
 Se dichiara di aver già acquistato, il codice avvia la sequenza acquisto corretta; se l'acquisto è generico, prima chiede sonno o spannolinamento.
 
-Se la persona è in percorso attivo, dai indicazioni concrete ma non troppe insieme.
-Usa il profilo del bambino e lo storico recente.
-Se c'è un miglioramento, valorizzalo in modo specifico.
-Se c'è un passo indietro, normalizzalo senza far sentire la mamma in colpa.
+Se la persona è in percorso attivo, parla in modo naturale e conversazionale, come Paola che conosce già la situazione.
+Usa il piano già inviato, il profilo del bambino e lo storico recente senza ripetere ogni volta tutto il contesto.
+Non sei obbligata a dare un consiglio in ogni messaggio: se la mamma racconta un miglioramento, un piccolo passo indietro, una difficoltà momentanea o uno sfogo, puoi semplicemente rispondere in modo umano, fare una breve lettura e fermarti lì.
+Dai una o due indicazioni pratiche solo quando sono davvero utili in quel momento.
+Non trasformare ogni aggiornamento in una mini-consulenza strutturata e non usare sempre lo stesso schema risposta + consiglio + domanda.
+Non fare domande per mantenere viva la conversazione. Fai una sola domanda soltanto se manca un dato indispensabile per capire o per evitare un'indicazione sbagliata.
+Non chiedere informazioni già presenti nel questionario, nel piano, nel profilo o nello storico e non chiudere automaticamente con “aggiornami”, “fammi sapere”, “come è andata?” o formule simili.
+Varia naturalmente lunghezza e tono: a volte basta una risposta breve, altre volte serve una spiegazione più completa.
+Se c'è un miglioramento, valorizzalo in modo specifico. Se c'è un passo indietro, normalizzalo senza far sentire la mamma in colpa.
 
 Se il messaggio è una micro-conferma, un grazie, una emoji/reazione, oppure frasi tipo "ok guardo", "ora guardo il link", "do uno sguardo", di norma non serve rispondere. Non interpretare mai queste frasi come acquisto completato e non avviare questionari. Se proprio è necessaria una risposta, deve essere minima.
 """
+
+PHASE4_CONVERSATIONAL_PROMPT = """
+SEI NELLA FASE 4 DEL SUPPORTO, DOPO CHE LA MAMMA HA GIÀ RICEVUTO IL PIANO.
+
+Comportati come Paola che conosce già mamma e bambino e sta continuando una conversazione WhatsApp reale.
+Non usare un formato fisso e non costruire ogni risposta come: analisi, consiglio, domanda finale.
+Non devi necessariamente dare un consiglio in ogni messaggio.
+
+Se la mamma:
+- racconta un miglioramento: valorizzalo in modo specifico e, se non serve altro, fermati lì;
+- racconta un piccolo passo indietro: normalizzalo e indica qualcosa solo se utile;
+- si sfoga: rispondi prima alla fatica che esprime, senza trasformare subito lo sfogo in un interrogatorio;
+- fa una domanda pratica: rispondi direttamente e in modo concreto;
+- manda un aggiornamento ordinario: fai una breve lettura naturale, senza chiedere automaticamente altri dati.
+
+Una domanda è ammessa solo quando manca un'informazione davvero indispensabile per comprendere il problema o per evitare una risposta sbagliata. In quel caso fai UNA sola domanda, breve e precisa.
+Non chiedere ciò che è già nel questionario, nel piano, nel profilo o nello storico.
+Non fare domande per cortesia, per tenere aperta la conversazione o per raccogliere più dettagli del necessario.
+Non terminare automaticamente con “aggiornami”, “fammi sapere”, “come è andata?”, “a che ora?”, “quanto?” o formule simili.
+Varia naturalmente la lunghezza: alcune risposte possono essere di due o tre frasi, altre più complete quando la situazione lo richiede.
+Mantieni sempre il metodo graduale già indicato nel piano e non cambiare più elementi insieme.
+"""
+
 
 PLAN_PROMPT = """
 Scrivi il piano personalizzato completo come Paola per una mamma che ha acquistato il percorso sonno.
@@ -3035,6 +3063,8 @@ def enforce_phase4_question_policy(phone, user_message, reply):
     if not reply or "?" not in reply:
         return reply
 
+    profile_text = profile_to_text(get_child_profile(phone))
+    recent_history = format_history_for_prompt(get_recent_history(phone, limit=14))
     default = {"question_needed": False, "reason": "fallback conservativo"}
     try:
         response = openai_chat_completion(
@@ -3043,12 +3073,23 @@ def enforce_phase4_question_policy(phone, user_message, reply):
                 {"role": "system", "content": """
 Sei un controllore di qualità per il supporto fase 4.
 Restituisci SOLO JSON con question_needed boolean e reason.
-Una domanda è necessaria soltanto se manca un dato indispensabile senza il quale la risposta pratica rischia di essere sbagliata o non può essere data.
-Domande di abitudine, richieste di aggiornamento, domande già risolte nello storico o frasi come 'come è andata?', 'mi dici?', 'fammi sapere?' NON sono necessarie.
+Una domanda è necessaria soltanto se manca un dato indispensabile senza il quale non è possibile capire la richiesta o si rischia di dare un'indicazione sbagliata.
+Domande di abitudine, domande per mantenere aperta la conversazione, richieste generiche di aggiornamento e domande su informazioni già presenti nel profilo o nello storico NON sono necessarie.
+Frasi come “come è andata?”, “mi dici?”, “fammi sapere?”, “a che ora?”, “quanto?” non sono necessarie salvo che quel singolo dato sia davvero essenziale per rispondere alla richiesta attuale.
 """},
-                {"role": "user", "content": f"Messaggio mamma:\n{user_message}\n\nRisposta proposta:\n{reply}"}
+                {"role": "user", "content": f"""Profilo noto:
+{profile_text}
+
+Storico recente:
+{recent_history}
+
+Messaggio mamma:
+{user_message}
+
+Risposta proposta:
+{reply}"""}
             ],
-            max_tokens=180,
+            max_tokens=220,
             temperature=0,
             response_format={"type": "json_object"},
             timeout=60
@@ -3059,13 +3100,12 @@ Domande di abitudine, richieste di aggiornamento, domande già risolte nello sto
         logger.error(f"Errore controllo domande fase 4 per {phone}: {e}")
         needed = False
 
-    # Anche quando serve, al massimo una domanda.
     if needed and reply.count("?") <= 1:
         return reply
 
     instruction = (
-        "Mantieni una sola domanda indispensabile e rimuovi tutte le altre." if needed
-        else "Rimuovi tutte le domande e le richieste di aggiornamento. Rispondi concretamente con una breve lettura e massimo 1 o 2 indicazioni pratiche."
+        "Mantieni una sola domanda breve e indispensabile, rimuovendo tutte le altre." if needed
+        else "Rimuovi tutte le domande e le richieste di aggiornamento. Mantieni una risposta naturale e conversazionale. Non sei obbligata ad aggiungere consigli: inserisci un'indicazione pratica solo se serve davvero per quel messaggio."
     )
     try:
         response = openai_chat_completion(
@@ -3075,7 +3115,9 @@ Domande di abitudine, richieste di aggiornamento, domande già risolte nello sto
                 {"role": "user", "content": f"""
 Riscrivi la risposta seguente per il supporto fase 4.
 {instruction}
+Deve sembrare un normale messaggio WhatsApp di Paola, non una mini-consulenza impostata e non uno schema ripetitivo.
 Non aggiungere nuovi consigli, non inserire link e non fare domande per abitudine.
+Non chiudere con formule automatiche come “aggiornami”, “fammi sapere” o “come è andata”.
 
 Messaggio della mamma:
 {user_message}
@@ -3425,17 +3467,20 @@ Inserisci una sola volta il link: {LINK_POTTY}
     if fase == 4:
         if product_type == PRODUCT_POTTY:
             return """
-La persona è in percorso attivo di spannolinamento.
-Rispondi collegandoti al piano già inviato, al profilo bambino e allo storico recente. Dai massimo 1 o 2 indicazioni pratiche su pipì, cacca, vasino/water, incidenti, nido, uscite o pannolino notturno.
-NON fare domande per abitudine e NON terminare automaticamente con una domanda. Fai una sola domanda soltanto se manca un dato indispensabile per non dare un'indicazione sbagliata. Non chiedere informazioni già presenti nel questionario, nel piano, nel profilo o nello storico.
-Non cambiare troppe cose insieme. Non forzare, non colpevolizzare e non proporre punizioni. Per dolore, stitichezza importante, trattenimento forte o dubbi sanitari, rimanda al pediatra.
+La persona è in percorso attivo di spannolinamento. Parla come Paola in una normale conversazione WhatsApp, non come un questionario o una scheda tecnica.
+Collegati al piano già inviato, al profilo bambino e allo storico recente, ma non ripetere ogni volta tutte le informazioni già note.
+Non sei obbligata a dare consigli in ogni risposta. Se la mamma racconta un miglioramento, un incidente isolato, una difficoltà momentanea o uno sfogo, rispondi in modo umano e fai una breve lettura; aggiungi un'indicazione pratica solo se serve davvero.
+Quando serve, dai massimo 1 o 2 indicazioni su pipì, cacca, vasino/water, incidenti, nido, uscite o pannolino notturno. Non cambiare troppe cose insieme.
+Non fare domande per abitudine, non chiudere automaticamente con una domanda e non chiedere dati già presenti nel questionario, nel piano, nel profilo o nello storico. Fai una sola domanda soltanto se manca un'informazione indispensabile per capire la situazione o per evitare un'indicazione sbagliata.
+Non forzare, non colpevolizzare e non proporre punizioni. Per dolore, stitichezza importante, trattenimento forte o dubbi sanitari, rimanda al pediatra.
 """
         return """
-La persona è in percorso attivo. Rispondi collegandoti al piano già inviato, al profilo bambino e allo storico recente.
-Rispondi prima alla richiesta concreta e dai massimo 1 o 2 indicazioni pratiche, senza cambiare troppe cose insieme. Se è una richiesta immediata, rispondi breve e operativo.
-NON fare domande per abitudine e NON chiudere automaticamente con richieste come "dimmi", "mi fai sapere", "a che ora", "quanto", "come è andata" o "aggiornami".
-Fai una sola domanda soltanto quando manca un dato indispensabile senza il quale rischieresti di dare un'indicazione sbagliata. Non chiedere mai informazioni già presenti nel questionario, nel piano, nel profilo o nello storico.
-Negli aggiornamenti ordinari fai una lettura breve e dai la direzione pratica, senza trasformare la risposta in un interrogatorio.
+La persona è in percorso attivo. Parla come Paola in una normale conversazione WhatsApp, non come un questionario, un checkup o una risposta sempre costruita nello stesso modo.
+Usa il piano già inviato, il profilo bambino e lo storico recente, senza ripetere informazioni già note e senza fare domande per ricostruire da capo la situazione.
+Rispondi prima a ciò che la mamma ha realmente scritto. Non sei obbligata a dare un consiglio in ogni messaggio: se racconta un miglioramento, un piccolo passo indietro, una difficoltà momentanea o uno sfogo, puoi rispondere in modo umano, fare una breve lettura e fermarti lì.
+Dai massimo 1 o 2 indicazioni pratiche solo quando sono davvero utili. Se la richiesta è immediata, rispondi breve e operativo.
+Non fare domande per abitudine e non chiudere automaticamente con “dimmi”, “mi fai sapere”, “a che ora”, “quanto”, “come è andata” o “aggiornami”. Fai una sola domanda soltanto se manca un dato indispensabile senza il quale non puoi capire bene o rischieresti di dare un'indicazione sbagliata.
+Non chiedere mai informazioni già presenti nel questionario, nel piano, nel profilo o nello storico. Non trasformare gli aggiornamenti ordinari in interrogatori o mini-consulenze strutturate. Varia naturalmente lunghezza e tono della risposta.
 Se compaiono febbre, tosse, raffreddore, dentini o malattia recente, non dare consigli medici: riconosci il maggiore bisogno di contatto e dai indicazioni solo sul rientro graduale alla routine, rimandando al pediatra per la parte sanitaria.
 """
 
@@ -3873,7 +3918,10 @@ def get_ai_response(phone, image_url=None, router_result=None):
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT_BASE},
         {"role": "system", "content": CHAT_RESPONSE_PROMPT},
-        {"role": "system", "content": f"""
+    ]
+    if fase == 4:
+        messages.append({"role": "system", "content": PHASE4_CONVERSATIONAL_PROMPT})
+    messages.append({"role": "system", "content": f"""
 Contesto operativo:
 Fase: {fase}
 Prodotto: {product_label(context.get('product_type'))}
@@ -3893,8 +3941,7 @@ Regola business per questa risposta:
 
 Profilo bambino:
 {context['profile_text']}
-"""}
-    ]
+"""})
     messages.extend(context["recent_history"])
     messages.append({"role": "user", "content": user_content})
 
@@ -5848,7 +5895,7 @@ def startup():
     init_db()
     threading.Thread(target=background_job, daemon=True).start()
     setup_telegram_webhook()
-    logger.info("Bot avviato — V50: questionario guidato intelligente, piani strutturati e fase 4 senza domande automatiche")
+    logger.info("Bot avviato — V51: questionario guidato intelligente, piani strutturati e fase 4 più conversazionale")
 
 if __name__ == "__main__":
     startup()
