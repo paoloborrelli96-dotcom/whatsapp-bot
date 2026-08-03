@@ -2772,42 +2772,37 @@ def questionnaire_answer_seems_concrete(text, part=1):
 
 
 QUESTIONNAIRE_STAGE_CLASSIFIER_PROMPT = """
-Sei un classificatore per il questionario di Genitori in Armonia.
-Devi distinguere con precisione ciò che la mamma sta facendo durante una fase già avviata del questionario.
-Restituisci SOLO JSON valido.
+Sei un controllore molto semplice del questionario di Genitori in Armonia.
+Non devi scrivere messaggi alla mamma e non devi decidere cosa inviare.
+Devi soltanto valutare se la parte del questionario attualmente mostrata è stata compilata abbastanza per passare allo step successivo.
 
-Campi obbligatori:
+Restituisci SOLO JSON valido:
 {
-  "contains_questionnaire_answers": true,
-  "answers_sufficient": false,
-  "contains_clarification_question": false,
-  "contains_other_question": false,
-  "is_deferral": false,
-  "is_courtesy_only": false,
-  "is_finish_confirmation": false,
-  "contains_additional_answers": false,
+  "answers_complete": true,
+  "latest_kind": "answers|clarification|deferral|courtesy|other_question|other",
   "needs_reply": false,
   "reason": "breve motivo"
 }
 
 Regole:
-- contains_questionnaire_answers=true se nel blocco cumulativo ci sono risposte concrete alle domande della parte corrente.
-- answers_sufficient=true solo se il blocco cumulativo contiene abbastanza informazioni per passare allo step successivo. Non basta una sola risposta breve.
-- contains_clarification_question=true se chiede come compilare, cosa scrivere, se può mandare un vocale, se deve indicare un certo dato o un altro chiarimento sul questionario.
-- contains_other_question=true se pone una domanda reale diversa dal questionario e sta aspettando una risposta. Non considerarla risposta al questionario.
-- is_deferral=true se dice che compilerà o continuerà dopo, più tardi o domani.
-- is_courtesy_only=true solo per una pura cortesia senza dati e senza domanda.
-- is_finish_confirmation=true SOLO nella fase conferma, se dice chiaramente che ha finito o risposto a tutto. Un'informazione aggiuntiva non equivale a conferma.
-- contains_additional_answers=true nella fase conferma se aggiunge dati del questionario ma non dice di avere finito.
-- needs_reply=true per chiarimenti, altre domande, rinvii o messaggi che chiaramente attendono una risposta.
-- Se ci sono risposte e anche un chiarimento sul questionario, possono essere true sia contains_questionnaire_answers sia contains_clarification_question.
-- Se dopo risposte valide scrive una domanda fuori tema, contains_other_question=true: non bisogna inviare subito lo step successivo dopo quella domanda.
-- Non inventare che abbia completato il questionario.
+- Leggi TUTTE le risposte cumulative inviate dopo il blocco fisso, non soltanto l'ultimo messaggio.
+- answers_complete=true quando la mamma ha risposto in modo concreto alla maggior parte delle domande della parte corrente e ci sono abbastanza dati per proseguire.
+- Non pretendere formule perfette o una risposta separata per ogni numero: valuta il contenuto reale.
+- answers_complete=false se ci sono soltanto saluti, ringraziamenti, rinvii, una sola risposta isolata o informazioni troppo scarse.
+- latest_kind=answers se l'ultimo messaggio contiene soprattutto risposte al questionario.
+- latest_kind=clarification solo se chiede come compilare o cosa indicare nel questionario.
+- latest_kind=deferral se dice che risponderà/continuerà più tardi o domani.
+- latest_kind=courtesy per una pura cortesia senza nuovi dati.
+- latest_kind=other_question per una domanda reale diversa dal questionario.
+- latest_kind=other negli altri casi.
+- needs_reply=true soltanto per clarification, deferral o other_question.
+- Frasi dichiarative come “so che mi risponderai domani” NON sono domande e NON sono rinvii se nello stesso messaggio ci sono già le risposte.
+- Non inventare completamenti e non generare mai Q2, conferme o piani: li invia il codice.
 """
 
 QUESTIONNAIRE_CONTEXT_REPLY_PROMPT = """
 Rispondi come Paola durante la compilazione di un questionario già inviato.
-Devi rispondere soltanto al messaggio attuale che richiede una risposta, senza modificare il flusso del questionario.
+Devi rispondere soltanto al messaggio attuale che richiede davvero una risposta, senza modificare il flusso del questionario.
 
 Regole obbligatorie:
 - Non creare nuove domande del questionario.
@@ -2819,8 +2814,10 @@ Regole obbligatorie:
 - Se sta aggiungendo informazioni dopo il messaggio "hai risposto a tutto?", riconosci che le hai aggiunte e ricordale di scrivere "ho finito" soltanto quando ha davvero concluso.
 - Non dire "hai finito?" dopo un messaggio fuori tema o dopo una domanda.
 - Non chiedere altre informazioni di tua iniziativa.
+- NON scrivere mai "ora ti mando le prossime domande", "ti mando il questionario", "te lo mando a parte" o promesse simili: gli step fissi vengono inviati dal codice, non dal GPT.
+- Se il messaggio contiene solo risposte al questionario e non contiene una domanda reale o un rinvio, rispondi esattamente NO_REPLY.
 - Non usare markdown, titoli o elenchi.
-- Scrivi solo il testo da inviare su WhatsApp.
+- Scrivi solo il testo da inviare su WhatsApp oppure NO_REPLY.
 """
 
 
@@ -2912,43 +2909,92 @@ def is_explicit_finish_confirmation(text):
     return any(p in t for p in patterns) and len(t) < 220
 
 
+def latest_message_has_real_question(text):
+    """Riconosce una domanda reale senza confondere frasi come
+    "so che mi risponderai domani" con una richiesta di chiarimento.
+
+    Durante il questionario una domanda vera può anche non avere il punto interrogativo,
+    ma deve contenere una costruzione esplicita di richiesta.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if "?" in raw:
+        return True
+
+    t = normalize_text(raw)
+    patterns = [
+        r"(?:^|[.!\n]\s*)(?:posso|devo|come|cosa|quale|quando|dove|serve|preferisci|vuoi che)\b",
+        r"\b(?:volevo chiedere|ti volevo chiedere|non ho capito|mi spieghi|mi chiarisci|mi confermi|è corretto che|e corretto che|va bene se|posso mandare|devo indicare|devo scrivere)\b",
+        r"\b(?:che cosa devo|cosa devo|come devo|quando devo|dove devo)\b",
+    ]
+    return any(re.search(pattern, t, flags=re.I) for pattern in patterns)
+
+
 def classify_questionnaire_stage_message(phone, fase, pending_text):
-    """Classifica il messaggio senza consentire a GPT di modificare il flusso fisso."""
-    stage = "parte_1" if fase == 1 else "parte_2" if fase == 2 else "conferma_finale"
+    """Valutazione semplice: GPT controlla solo se Q1/Q2 sono sufficientemente compilati.
+
+    Il codice, non GPT, invia Q2, il messaggio "hai risposto a tutto?" e programma il piano.
+    Per la conferma finale (fasi 5/6) usa prima controlli deterministici.
+    """
     cumulative = get_questionnaire_stage_text(phone, fase) or (pending_text or "")
     latest = get_latest_user_message(phone) or (pending_text or "")
-    part = 1 if fase == 1 else 2
 
-    heuristic_answers = questionnaire_answer_seems_concrete(cumulative, part=part) if fase in (1, 2) else False
+    # Conferma finale: non serve un classificatore complesso.
+    if fase in (5, 6):
+        finish = is_explicit_finish_confirmation(latest)
+        deferral = is_questionnaire_deferral(latest) and not finish
+        real_question = latest_message_has_real_question(latest)
+        additional = questionnaire_answer_seems_concrete(latest, part=2) and not finish
+        courtesy = is_obvious_closing_message(latest) and not finish
+        return {
+            "contains_questionnaire_answers": additional,
+            "answers_sufficient": False,
+            "contains_clarification_question": real_question and any(x in normalize_text(latest) for x in [
+                "questionario", "domanda", "risposta", "scrivere", "compil", "vocale", "audio"
+            ]),
+            "contains_other_question": real_question,
+            "is_deferral": deferral,
+            "is_courtesy_only": courtesy,
+            "is_finish_confirmation": finish,
+            "contains_additional_answers": additional,
+            "needs_reply": deferral or real_question or additional,
+            "latest_kind": "finish" if finish else "deferral" if deferral else "other_question" if real_question else "answers" if additional else "courtesy" if courtesy else "other",
+            "reason": "controllo deterministico conferma finale"
+        }
+
+    part = 1 if fase == 1 else 2
+    current_questions = get_questionario_1(get_product_type(phone)) if fase == 1 else get_questionario_2(get_product_type(phone))
+
+    heuristic_complete = questionnaire_answer_seems_concrete(cumulative, part=part)
     heuristic_deferral = is_questionnaire_deferral(latest)
-    heuristic_finish = is_explicit_finish_confirmation(latest) if fase in (5, 6) else False
-    heuristic_question = "?" in latest or bool(re.search(
-        r"\b(posso|devo|come|cosa|quale|quando|serve|preferisci|va bene se|ti mando|vuoi che)\b",
-        normalize_text(latest)
-    ))
+    heuristic_question = latest_message_has_real_question(latest)
+    clarification_words = [
+        "questionario", "domanda", "risposta", "scrivere", "compil", "vocale", "audio",
+        "devo indicare", "posso mandare", "come rispondo"
+    ]
+    heuristic_clarification = heuristic_question and any(x in normalize_text(latest) for x in clarification_words)
+    heuristic_courtesy = is_obvious_closing_message(latest)
+
+    if heuristic_deferral:
+        fallback_kind = "deferral"
+    elif heuristic_clarification:
+        fallback_kind = "clarification"
+    elif heuristic_question:
+        fallback_kind = "other_question"
+    elif heuristic_courtesy and not heuristic_complete:
+        fallback_kind = "courtesy"
+    elif heuristic_complete:
+        fallback_kind = "answers"
+    else:
+        fallback_kind = "other"
 
     default = {
-        "contains_questionnaire_answers": heuristic_answers,
-        "answers_sufficient": heuristic_answers,
-        "contains_clarification_question": heuristic_question and any(x in normalize_text(latest) for x in [
-            "questionario", "domanda", "risposta", "scrivere", "compil", "vocale", "audio", "orari", "devo indicare", "posso mandare"
-        ]),
-        "contains_other_question": heuristic_question,
-        "is_deferral": heuristic_deferral,
-        "is_courtesy_only": is_obvious_closing_message(latest) and not heuristic_finish,
-        "is_finish_confirmation": heuristic_finish,
-        "contains_additional_answers": fase in (5, 6) and questionnaire_answer_seems_concrete(latest, part=2) and not heuristic_finish,
-        "needs_reply": heuristic_deferral or heuristic_question,
+        "answers_complete": heuristic_complete,
+        "latest_kind": fallback_kind,
+        "needs_reply": fallback_kind in ("clarification", "deferral", "other_question"),
         "reason": "fallback euristico"
     }
-
-    current_questions = ""
-    if fase == 1:
-        current_questions = get_questionario_1(get_product_type(phone))
-    elif fase == 2:
-        current_questions = get_questionario_2(get_product_type(phone))
-    else:
-        current_questions = MSG_CONFERMA_QUESTIONARIO
 
     try:
         response = openai_chat_completion(
@@ -2956,52 +3002,70 @@ def classify_questionnaire_stage_message(phone, fase, pending_text):
             messages=[
                 {"role": "system", "content": QUESTIONNAIRE_STAGE_CLASSIFIER_PROMPT},
                 {"role": "user", "content": f"""
-Fase attuale: {stage}
-Blocco fisso inviato da Paola:
+Parte attuale: {part}
+Domande fisse inviate:
 {current_questions}
 
-Tutte le risposte della mamma dopo quel blocco:
+Tutte le risposte cumulative della mamma dopo queste domande:
 {cumulative}
 
 Ultimo messaggio della mamma:
 {latest}
 
-Classifica adesso.
+Valuta soltanto completezza e tipo dell'ultimo messaggio.
 """}
             ],
-            max_tokens=350,
+            max_tokens=260,
             temperature=0,
             response_format={"type": "json_object"},
             timeout=60
         )
-        data = parse_json_safely(response.choices[0].message.content, default)
-        if not isinstance(data, dict):
-            data = dict(default)
+        result = parse_json_safely(response.choices[0].message.content, default)
+        if not isinstance(result, dict):
+            result = dict(default)
     except Exception as e:
-        logger.error(f"Errore classificatore questionario fase {fase} per {phone}: {e}")
-        threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore questionario fase {fase} per {phone}: {e}"], daemon=True).start()
-        data = dict(default)
+        logger.error(f"Errore controllo completezza questionario fase {fase} per {phone}: {e}")
+        threading.Thread(
+            target=send_telegram,
+            args=[f"⚠️ Errore controllo questionario fase {fase} per {phone}: {e}"],
+            daemon=True
+        ).start()
+        result = dict(default)
 
-    for key, value in default.items():
-        data.setdefault(key, value)
+    answers_complete = bool(result.get("answers_complete", heuristic_complete))
+    latest_kind = str(result.get("latest_kind", fallback_kind) or fallback_kind).strip().lower()
+    allowed_kinds = {"answers", "clarification", "deferral", "courtesy", "other_question", "other"}
+    if latest_kind not in allowed_kinds:
+        latest_kind = fallback_kind
 
-    # Protezioni deterministiche: il modello non può cancellare segnali chiari.
-    if fase in (1, 2) and heuristic_answers:
-        data["contains_questionnaire_answers"] = True
-        data["answers_sufficient"] = True
+    # Protezioni semplici e deterministiche.
+    # Risposte numerate/concrete non possono essere cancellate dal modello.
+    if heuristic_complete:
+        answers_complete = True
+    # Una frase senza vera domanda non può diventare clarification/other_question.
+    if not heuristic_question and latest_kind in ("clarification", "other_question"):
+        latest_kind = "answers" if answers_complete else "other"
+    # Un vero rinvio esplicito ha priorità e non fa avanzare lo step.
     if heuristic_deferral:
-        data["is_deferral"] = True
-        data["needs_reply"] = True
-    if heuristic_finish:
-        data["is_finish_confirmation"] = True
-    if heuristic_question:
-        data["needs_reply"] = True
+        latest_kind = "deferral"
+    if heuristic_clarification:
+        latest_kind = "clarification"
 
-    # Una domanda di chiarimento non è automaticamente una domanda fuori tema.
-    if data.get("contains_clarification_question"):
-        data["contains_other_question"] = False
-
-    logger.info(f"Classificazione questionario fase {fase} per {phone}: {data}")
+    needs_reply = latest_kind in ("clarification", "deferral", "other_question")
+    data = {
+        "contains_questionnaire_answers": answers_complete or latest_kind == "answers",
+        "answers_sufficient": answers_complete,
+        "contains_clarification_question": latest_kind == "clarification",
+        "contains_other_question": latest_kind == "other_question",
+        "is_deferral": latest_kind == "deferral",
+        "is_courtesy_only": latest_kind == "courtesy",
+        "is_finish_confirmation": False,
+        "contains_additional_answers": False,
+        "needs_reply": needs_reply,
+        "latest_kind": latest_kind,
+        "reason": str(result.get("reason", default["reason"]))[:300]
+    }
+    logger.info(f"Controllo semplice questionario fase {fase} per {phone}: {data}")
     return data
 
 
@@ -3037,6 +3101,8 @@ Scrivi solo la risposta necessaria. Non aggiungere una domanda finale.
             timeout=60
         )
         reply = response.choices[0].message.content.strip().replace("!", ".")
+        if normalize_text(reply) == "no_reply":
+            return None
         reply = re.sub(r"\bcara\b", "mamma", reply, flags=re.I)
         clean, issue = validate_reply(reply, {"link_sent": True, "asks_link": False})
         if issue:
@@ -5219,98 +5285,75 @@ def process_response(phone, image_url=None):
             mark_phase0_after_assistant_reply(phone, ai_reply, router_result)
 
     elif fase == 1:
-        # Il questionario resta fisso. GPT interviene solo per chiarimenti, rinvii o domande reali.
-        q_analysis = classify_questionnaire_stage_message(phone, fase, combined_raw)
+        # Q1 -> controllo GPT semplice -> Q2 fisso inviato dal codice.
+        q_analysis = classify_questionnaire_stage_message(phone, 1, combined_raw)
+        kind = q_analysis.get("latest_kind", "other")
 
-        if q_analysis.get("is_deferral"):
-            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+        # Se dice che completerà dopo, resta in Q1 anche se ci sono risposte parziali.
+        if kind == "deferral":
+            reply = generate_questionnaire_context_reply(phone, 1, combined_raw, q_analysis)
             if reply:
                 save_message(phone, "assistant", reply)
                 send_whatsapp_message(phone, reply)
             return
 
-        if q_analysis.get("contains_other_question"):
-            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+        # GPT può rispondere solo a un vero chiarimento/domanda.
+        if kind in ("clarification", "other_question"):
+            reply = generate_questionnaire_context_reply(phone, 1, combined_raw, q_analysis)
             if reply:
                 save_message(phone, "assistant", reply)
                 send_whatsapp_message(phone, reply)
-            return
-
-        if q_analysis.get("contains_clarification_question"):
-            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
-            if reply:
-                save_message(phone, "assistant", reply)
-                send_whatsapp_message(phone, reply)
-            # Se nello stesso blocco ci sono già risposte sufficienti, dopo il chiarimento invia Q2 fisso.
-            if q_analysis.get("answers_sufficient"):
                 time.sleep(1.0)
-                q2 = get_questionario_2(get_product_type(phone))
-                send_fixed_questionnaire_step(phone, 1, 2, q2, "Questionario parte 2")
-            return
 
+        # Se Q1 è compilato abbastanza, il codice manda SEMPRE Q2.
         if q_analysis.get("answers_sufficient"):
             q2 = get_questionario_2(get_product_type(phone))
             send_fixed_questionnaire_step(phone, 1, 2, q2, "Questionario parte 2")
             return
 
-        if q_analysis.get("needs_reply") and not q_analysis.get("is_courtesy_only"):
-            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
-            if reply:
-                save_message(phone, "assistant", reply)
-                send_whatsapp_message(phone, reply)
-        else:
-            logger.info(f"Fase 1 per {phone} — risposte ancora incomplete, resto in attesa")
+        # Risposte ancora incomplete: nessun messaggio automatico e fase invariata.
+        logger.info(f"Fase 1 per {phone} — Q1 non ancora sufficiente, resto in attesa")
+        return
 
     elif fase == 2:
-        # Prima di chiedere "hai finito" verifica che siano davvero risposte alla parte 2.
-        q_analysis = classify_questionnaire_stage_message(phone, fase, combined_raw)
+        # Q2 -> controllo GPT semplice -> conferma fissa inviata dal codice.
+        q_analysis = classify_questionnaire_stage_message(phone, 2, combined_raw)
+        kind = q_analysis.get("latest_kind", "other")
 
-        if q_analysis.get("is_deferral"):
-            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+        if kind == "deferral":
+            reply = generate_questionnaire_context_reply(phone, 2, combined_raw, q_analysis)
             if reply:
                 save_message(phone, "assistant", reply)
                 send_whatsapp_message(phone, reply)
             return
 
-        if q_analysis.get("contains_other_question"):
-            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+        if kind in ("clarification", "other_question"):
+            reply = generate_questionnaire_context_reply(phone, 2, combined_raw, q_analysis)
             if reply:
                 save_message(phone, "assistant", reply)
                 send_whatsapp_message(phone, reply)
-            return
-
-        if q_analysis.get("contains_clarification_question"):
-            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
-            if reply:
-                save_message(phone, "assistant", reply)
-                send_whatsapp_message(phone, reply)
-            # Solo se nello stesso blocco ci sono risposte sufficienti, manda la conferma fissa dopo il chiarimento.
-            if q_analysis.get("answers_sufficient"):
                 time.sleep(1.0)
-                send_fixed_questionnaire_step(phone, 2, 5, MSG_CONFERMA_QUESTIONARIO, "Conferma fine questionario")
-            return
 
+        # Se Q2 è compilato abbastanza, il codice chiede SEMPRE "Hai risposto a tutto?".
         if q_analysis.get("answers_sufficient"):
-            send_fixed_questionnaire_step(phone, 2, 5, MSG_CONFERMA_QUESTIONARIO, "Conferma fine questionario")
+            send_fixed_questionnaire_step(
+                phone, 2, 5, MSG_CONFERMA_QUESTIONARIO, "Conferma fine questionario"
+            )
             return
 
-        if q_analysis.get("needs_reply") and not q_analysis.get("is_courtesy_only"):
-            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
-            if reply:
-                save_message(phone, "assistant", reply)
-                send_whatsapp_message(phone, reply)
-        else:
-            logger.info(f"Fase 2 per {phone} — risposte ancora incomplete, non chiedo se ha finito")
+        logger.info(f"Fase 2 per {phone} — Q2 non ancora sufficiente, resto in attesa")
+        return
 
     elif fase in (5, 6):
-        # Dopo "hai risposto a tutto?" il piano parte solo con una conferma reale.
-        q_analysis = classify_questionnaire_stage_message(phone, fase, combined_raw)
-
-        if q_analysis.get("is_finish_confirmation"):
+        # Dopo la domanda fissa, un sì/ho finito fa partire direttamente il piano.
+        latest = get_latest_user_message(phone) or combined_raw
+        if is_explicit_finish_confirmation(latest):
             schedule_plan_after_confirmation(phone, fase)
             return
 
-        if q_analysis.get("is_deferral") or q_analysis.get("contains_clarification_question") or q_analysis.get("contains_other_question") or q_analysis.get("contains_additional_answers") or q_analysis.get("needs_reply"):
+        # Negli altri casi resta in attesa; GPT interviene solo per chiarimenti/rinvii/dati aggiunti.
+        q_analysis = classify_questionnaire_stage_message(phone, fase, combined_raw)
+        if q_analysis.get("needs_reply"):
             reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
             if reply:
                 save_message(phone, "assistant", reply)
@@ -5321,7 +5364,8 @@ def process_response(phone, image_url=None):
             mark_silent_no_reply(phone, f"fase {fase}: cortesia durante attesa conferma")
             return
 
-        logger.info(f"Fase {fase} per {phone} — nessuna conferma reale, resto in attesa senza avviare il piano")
+        logger.info(f"Fase {fase} per {phone} — attendo una conferma esplicita senza avviare il piano")
+        return
 
     elif fase == 3:
         logger.info(f"Fase 3 per {phone} — bot in attesa del piano")
@@ -5692,7 +5736,7 @@ def webhook():
         logger.info(f"Chat {phone} in pausa — messaggio salvato e inoltrato a Telegram, nessun timer")
         return Response("OK", status=200)
 
-    # V52: non decidiamo più qui con una lista statica se il messaggio è una chiusura.
+    # V56: GPT controlla solo la completezza di Q1/Q2; il codice invia Q2, conferma e piano.
     # Tutti i messaggi delle fasi 0 e 4 vengono valutati dal filtro GPT dentro process_response.
 
     # ── Orario silenzio (23:00 - 07:00 ora italiana) ──────────────────────────
@@ -6098,7 +6142,7 @@ def startup():
     init_db()
     threading.Thread(target=background_job, daemon=True).start()
     setup_telegram_webhook()
-    logger.info("Bot avviato — V51: questionario guidato intelligente, piani strutturati e fase 4 più conversazionale")
+    logger.info("Bot avviato — V56: GPT controlla Q1/Q2, il codice invia gli step fissi e avvia il piano")
 
 if __name__ == "__main__":
     startup()
