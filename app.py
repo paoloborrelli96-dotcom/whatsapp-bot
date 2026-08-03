@@ -93,7 +93,7 @@ FOLLOWUP_QUESTION_AFTER_HOURS = float(os.environ.get("FOLLOWUP_QUESTION_AFTER_HO
 FOLLOWUP_LINK_AFTER_HOURS = float(os.environ.get("FOLLOWUP_LINK_AFTER_HOURS", "18"))
 FOLLOWUP_COLD_AFTER_HOURS = float(os.environ.get("FOLLOWUP_COLD_AFTER_HOURS", "24"))
 
-# V50: tutti i follow-up automatici restano disattivati.
+# V54: acquisto completato robusto anche al plurale; tutti i follow-up automatici restano disattivati.
 # Parte solo il template iniziale; se la persona non risponde, il bot non la ricontatta.
 AUTOMATIC_FOLLOWUPS_ENABLED = False
 
@@ -166,6 +166,7 @@ OFFERS = {
 # senza inviare nulla alla mamma. Viene escluso dallo storico mandato a OpenAI.
 SILENT_NO_REPLY_MARKER = "[SILENT_NO_REPLY]"
 NO_REPLY = "__NO_REPLY__"
+PURCHASE_CTA = "Una volta che hai acquistato, scrivimi qui che ti mando il questionario e iniziamo 🤍"
 
 
 # ─── MULTI-PRODOTTO ───────────────────────────────────────────────────────────
@@ -488,6 +489,7 @@ Non classificare come richiesta_rimborso solo perché compare la parola rimborso
 Non classificare come problema_checkout_importo solo perché compaiono 19, 37, 47 o 67. È problema_checkout_importo solo se parla di carrello, checkout, importo sbagliato, prezzo che non torna, prodotto aggiunto più volte.
 Non classificare come acquisto_completato se scrive "lo compro", "lo prendo", "acquisto subito". Quello è intenzione_acquisto_non_completato.
 È acquisto_completato solo se dice che ha già pagato, completato ordine, fatto acquisto, mostra ricevuta/conferma, oppure dice di aver scaricato/letto/ricevuto la guida, il PDF, il materiale o il percorso. Se l'acquisto è generico non devi decidere tu il prodotto: il codice chiederà sonno o spannolinamento.
+Sono acquisto_completato anche le forme plurali e familiari: "abbiamo acquistato", "abbiamo comprato", "abbiamo pagato", "abbiamo fatto l'ordine", "mio marito ha acquistato", "abbiamo iniziato a leggere le guide". Non confonderle con "vorremmo acquistare", "lo compriamo domani" o "non abbiamo ancora acquistato".
 Se la mamma è già in percorso attivo e chiede "che faccio ora", "lo sveglio", "la attacco", "come mi muovo adesso", usa richiesta_pratica_immediata.
 Se la mamma è in percorso attivo e dice che dopo alcuni giorni non vede miglioramenti, non funziona, è peggiorato, è molto stanca o non ce la fa più, usa difficolta_persistente_post_piano. Non mettere needs_human=true solo per questo: safe_auto_reply=true e needs_human=false, salvo rabbia forte o richiesta rimborso.
 Se cita febbre, tosse, raffreddore, dentini, malattia recente o malessere passato ma la domanda principale riguarda il sonno, il latte, i risvegli o il rientro alla routine, NON bloccare la risposta: usa domanda_percorso_attivo o aggiornamento_percorso_attivo, metti entities.medical_topic=true, safe_auto_reply=true e needs_human=false.
@@ -1768,6 +1770,45 @@ def reply_contains_product_link(reply):
     return any(link and link in reply for link in [LINK_PREMIUM, LINK_BASE, LINK_POTTY])
 
 
+def reply_contains_assisted_checkout_link(reply):
+    """True solo per i percorsi con questionario/piano/supporto.
+
+    La guida sonno da 37 euro è esclusa perché non comprende il questionario.
+    """
+    if not reply:
+        return False
+    return bool((LINK_PREMIUM and LINK_PREMIUM in reply) or (LINK_POTTY and LINK_POTTY in reply))
+
+
+def ensure_purchase_cta(reply, fase):
+    """Dopo un link di acquisto assistito usa sempre la frase finale approvata da Paola.
+
+    Corregge anche varianti generate dal GPT come "ti scrivo io" o
+    "appena hai completato, scrivimi qui e iniziamo".
+    Non interviene sulle sole guide digitali da 37 euro.
+    """
+    if fase != 0 or not reply_contains_assisted_checkout_link(reply):
+        return reply
+
+    cleaned_lines = []
+    for line in str(reply).splitlines():
+        normalized = normalize_text(line)
+        has_purchase_marker = any(x in normalized for x in [
+            "acquist", "completato", "pagato", "pagamento", "ordine"
+        ])
+        has_contact_marker = any(x in normalized for x in [
+            "scrivimi", "ti scrivo", "ti contatto", "questionario", "iniziamo", "partiamo"
+        ])
+        if has_purchase_marker and has_contact_marker:
+            continue
+        cleaned_lines.append(line.rstrip())
+
+    base = "\n".join(cleaned_lines).strip()
+    if PURCHASE_CTA.lower() in base.lower():
+        return base
+    return f"{base}\n\n{PURCHASE_CTA}".strip()
+
+
 def phase0_intent_is_problem(intent):
     return intent in ("descrizione_problema_sonno", "descrizione_problema_spannolinamento", "richiesta_consiglio_gratuito")
 
@@ -2303,51 +2344,73 @@ def handle_sleep_guides_purchase(phone):
     return True
 
 def acquisto_dichiarato(text):
-    """Rileva a codice quando la mamma dichiara di aver già acquistato o avuto accesso al materiale.
+    """Rileva in modo deterministico un acquisto gia completato.
 
-    Questa regola viene eseguita prima del router GPT in fase 0, così frasi come
-    "ho già acquistato", "ho scaricato la guida" o "ho letto il pdf" avviano
-    sempre la sequenza acquisto. Evita però intenzioni future tipo "lo compro".
+    Questa funzione viene eseguita PRIMA del filtro no-reply e PRIMA del router GPT,
+    cosi una conferma chiara di acquisto avvia sempre la sequenza fissa:
+    introduzione -> regole -> questionario parte 1.
+
+    Gestisce sia il singolare sia il plurale, ad esempio:
+    - ho acquistato / abbiamo acquistato
+    - ho pagato / abbiamo pagato
+    - ho fatto l'ordine / abbiamo fatto l'ordine
+    - mio marito ha acquistato
+    - abbiamo gia ricevuto o iniziato a leggere le guide
+
+    Non considera acquisto completato intenzioni future o negazioni come:
+    - vorrei acquistare
+    - lo compro domani
+    - non abbiamo ancora acquistato
     """
-    t = (text or "").lower()
+    t = normalize_text(text or "")
+    t = t.replace("’", "'")
     t = re.sub(r"\s+", " ", t).strip()
+    if not t:
+        return False
 
-    # Frasi che indicano acquisto/pagamento già completato.
-    segnali_forti = [
-        "ho acquistato", "ho già acquistato", "ho gia acquistato", "ho appena acquistato",
-        "ho comprato", "ho già comprato", "ho gia comprato", "ho appena comprato",
-        "ho fatto l'ordine", "ho effettuato l'ordine", "ordine completato", "ordine effettuato",
-        "ho fatto il pagamento", "ho effettuato il pagamento", "ho pagato",
-        "pagamento completato", "pagamento effettuato", "pagamento andato a buon fine",
-        "l'ho preso", "l ho preso", "l'ho comprato", "l ho comprato",
-        "l'ho acquistato", "l ho acquistato", "ho fatto l'acquisto", "ho fatto acquisto",
-        "ho preso il pacchetto", "ho preso il percorso", "ho acquistato il percorso",
-        "ho già acquistato il percorso", "ho gia acquistato il percorso",
-        "ho acquistato la consulenza", "ho preso la consulenza",
-        "ho preso la guida", "ho acquistato la guida", "ho comprato la guida",
+    # Prima blocca negazioni esplicite: evitano falsi positivi come
+    # "non abbiamo acquistato" o "non ho ancora fatto l'ordine".
+    negative_patterns = [
+        r"\bnon\s+(?:ho|abbiamo|ha)\s+(?:ancora\s+|gia\s+|già\s+)?(?:acquistato|comprato|pagato|ordinato)\b",
+        r"\bnon\s+(?:ho|abbiamo|ha)\s+(?:ancora\s+)?fatto\s+(?:l[' ]?)?(?:ordine|acquisto|pagamento|bonifico)\b",
+        r"\b(?:ordine|pagamento|bonifico)\s+non\s+(?:e|è)\s+(?:stato\s+)?(?:completato|effettuato|eseguito|confermato)\b",
     ]
-    if any(s in t for s in segnali_forti):
+    if any(re.search(pattern, t, flags=re.I) for pattern in negative_patterns):
+        return False
+
+    completed_patterns = [
+        # Prima persona singolare e plurale.
+        r"\b(?:io\s+)?ho\s+(?:gia\s+|già\s+|appena\s+)?(?:acquistato|comprato|pagato|ordinato)\b",
+        r"\b(?:noi\s+)?abbiamo\s+(?:gia\s+|già\s+|appena\s+)?(?:acquistato|comprato|pagato|ordinato)\b",
+
+        # Ordine/acquisto/pagamento eseguito.
+        r"\b(?:ho|abbiamo)\s+fatto\s+(?:l[' ]?)?(?:ordine|acquisto|pagamento|bonifico)\b",
+        r"\b(?:ho|abbiamo)\s+effettuato\s+(?:l[' ]?)?(?:ordine|acquisto|pagamento|bonifico)\b",
+        r"\b(?:ordine|pagamento|bonifico)\s+(?:e|è)\s+(?:stato\s+)?(?:completato|effettuato|eseguito|confermato|andato\s+a\s+buon\s+fine)\b",
+
+        # Pronomi e forme colloquiali.
+        r"\b(?:l[' ]?ho|lo\s+ho|l[' ]?abbiamo|lo\s+abbiamo)\s+(?:gia\s+|già\s+|appena\s+)?(?:acquistato|comprato|pagato|preso)\b",
+        r"\b(?:ho|abbiamo)\s+preso\s+(?:il\s+|la\s+|le\s+|i\s+)?(?:pacchetto|percorso|premium|consulenza|guida|guide)\b",
+
+        # Acquisto eseguito da partner/coniuge.
+        r"\b(?:mio\s+marito|mia\s+moglie|il\s+mio\s+compagno|la\s+mia\s+compagna|il\s+papa|il\s+papà|la\s+mamma)\s+ha\s+(?:gia\s+|già\s+|appena\s+)?(?:acquistato|comprato|pagato|ordinato)\b",
+    ]
+    if any(re.search(pattern, t, flags=re.I) for pattern in completed_patterns):
         return True
 
-    # Accesso al materiale = acquisto già fatto, ma solo se vicino a parole prodotto/materiale.
-    verbi_accesso = [
-        "ho scaricato", "ho già scaricato", "ho gia scaricato",
-        "ho letto", "ho già letto", "ho gia letto",
-        "ho ricevuto", "ho già ricevuto", "ho gia ricevuto",
-        "mi è arrivato", "mi e arrivato", "mi è arrivata", "mi e arrivata",
-        "mi hanno mandato", "mi avete mandato", "ho accesso", "sono entrata", "sono dentro"
+    # Accesso a materiale del percorso gia ricevuto/letto/scaricato.
+    access_patterns = [
+        r"\b(?:ho|abbiamo)\s+(?:gia\s+|già\s+|appena\s+)?(?:scaricato|ricevuto|letto)\b",
+        r"\b(?:ho|abbiamo)\s+iniziato\s+a\s+(?:leggere|scaricare|consultare)\b",
+        r"\b(?:mi|ci)\s+(?:e|è)\s+arrivat[oaie]\b",
+        r"\b(?:mi|ci)\s+hanno\s+mandato\b",
+        r"\b(?:ho|abbiamo)\s+accesso\b",
     ]
-    parole_materiale = [
-        "guida", "pdf", "manuale", "materiale", "percorso", "sonno magico",
-        "metodo paola", "consulenza", "pacchetto"
+    material_terms = [
+        "guida", "guide", "pdf", "manuale", "materiale", "materiali",
+        "percorso", "sonno magico", "metodo paola", "consulenza", "pacchetto", "premium"
     ]
-    if any(v in t for v in verbi_accesso) and any(p in t for p in parole_materiale):
-        return True
-
-    # Alcune mamme scrivono solo "mi è arrivato tutto" dopo checkout: consideriamolo acquisto
-    # se nel messaggio compare anche ordine/pagamento/acquisto.
-    if any(x in t for x in ["mi è arrivato tutto", "mi e arrivato tutto", "ho ricevuto tutto", "ho scaricato tutto"]) and \
-       any(x in t for x in ["ordine", "pagamento", "acquisto", "guida", "percorso"]):
+    if any(re.search(pattern, t, flags=re.I) for pattern in access_patterns) and any(term in t for term in material_terms):
         return True
 
     return False
@@ -3541,7 +3604,7 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
         if product_type == PRODUCT_SLEEP and asks_only_sleep_guides(pending_text):
             return f"Certo mamma, se preferisci esclusivamente le guide digitali da {SLEEP_GUIDES_PRICE} euro, trovi qui il link:\n{LINK_SLEEP_GUIDES}"
         link = get_product_link(product_type)
-        return f"Perfetto mamma, ti lascio il link per procedere:\n{link}\n\nAppena hai completato, scrivimi qui e iniziamo 🤍"
+        return f"Perfetto mamma, ti lascio il link per procedere:\n{link}\n\n{PURCHASE_CTA}"
 
     if intent == "richiesta_link" and confidence >= 0.75:
         if product_type == PRODUCT_UNKNOWN:
@@ -3549,7 +3612,7 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
             return "Certo mamma, te lo mando volentieri. Mi confermi solo se ti riferisci al percorso sonno o allo spannolinamento?"
         if product_type == PRODUCT_SLEEP and asks_only_sleep_guides(pending_text):
             return f"Certo, questo è il link delle sole guide sonno da {SLEEP_GUIDES_PRICE} euro:\n{LINK_SLEEP_GUIDES}"
-        return f"Certo, ti lascio il link:\n{get_product_link(product_type)}"
+        return f"Certo, ti lascio il link:\n{get_product_link(product_type)}\n\n{PURCHASE_CTA}"
 
     if intent == "richiesta_bonifico" and confidence >= 0.85:
         if product_type == PRODUCT_POTTY:
@@ -3961,6 +4024,8 @@ Profilo bambino:
             clean = re.sub(r"\bcara\b", "mamma", clean, flags=re.I)
             if fase == 4:
                 clean = enforce_phase4_question_policy(phone, user_message, clean)
+            elif fase == 0:
+                clean = ensure_purchase_cta(clean, fase)
         return clean.strip() if clean else None
     except Exception as e:
         logger.error(f"Errore OpenAI: {e}")
