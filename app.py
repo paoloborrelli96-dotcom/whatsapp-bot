@@ -32,6 +32,7 @@ TELEGRAM_BOT_TOKEN     = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID       = os.environ.get("TELEGRAM_CHAT_ID", "")
 TELEGRAM_GROUP_ID      = os.environ.get("TELEGRAM_GROUP_ID", "")
 TIMEZONE               = os.environ.get("TIMEZONE", "Europe/Rome")
+PLAN_DELAY_MINUTES     = int(os.environ.get("PLAN_DELAY_MINUTES", "60"))
 
 # ─── MODELLI OPENAI ────────────────────────────────────────────────────────────
 # Puoi cambiarli da Railway senza modificare il codice.
@@ -91,7 +92,7 @@ FOLLOWUP_QUESTION_AFTER_HOURS = float(os.environ.get("FOLLOWUP_QUESTION_AFTER_HO
 FOLLOWUP_LINK_AFTER_HOURS = float(os.environ.get("FOLLOWUP_LINK_AFTER_HOURS", "18"))
 FOLLOWUP_COLD_AFTER_HOURS = float(os.environ.get("FOLLOWUP_COLD_AFTER_HOURS", "24"))
 
-# V49: tutti i follow-up automatici restano disattivati.
+# V50: tutti i follow-up automatici restano disattivati.
 # Parte solo il template iniziale; se la persona non risponde, il bot non la ricontatta.
 AUTOMATIC_FOLLOWUPS_ENABLED = False
 
@@ -112,7 +113,7 @@ LEAD_STATUS_STOPPED = "stopped"
 LEAD_STATUS_LINK_FOLLOWUP_SENT = "link_followup_sent"
 LEAD_STATUS_COLD = "cold"
 
-# V49: lead che arrivano inviando direttamente su WhatsApp le risposte del modulo Meta.
+# V49/V50: lead che arrivano inviando direttamente su WhatsApp le risposte del modulo Meta.
 FORM_LEAD_NONE = "none"
 FORM_LEAD_SLEEP = "sleep_form"
 FORM_LEAD_POTTY = "potty_form"
@@ -541,29 +542,32 @@ Se il messaggio è una micro-conferma, un grazie, una emoji/reazione, oppure fra
 """
 
 PLAN_PROMPT = """
-Scrivi il piano personalizzato completo come Paola per una mamma che ha acquistato il percorso.
-Il piano deve sembrare scritto apposta per lei, non un modello generico.
-Usa il nome del bambino se disponibile e cita orari, abitudini, difficoltà e obiettivi emersi nel questionario.
+Scrivi il piano personalizzato completo come Paola per una mamma che ha acquistato il percorso sonno.
+Il piano deve essere specifico per il bambino e basato esclusivamente sul questionario, sul profilo e sullo storico disponibili.
+Usa il nome del bambino, gli orari, le abitudini, le difficolta e gli obiettivi realmente emersi. Non inventare dati mancanti e non fare domande nel piano.
 
-Scrivi in prosa discorsiva da WhatsApp, ordinata ma naturale.
-Non usare markdown, grassetti, titoli, bullet point o numerazioni.
-Puoi andare a capo per leggibilità, ma senza formattazione da documento.
+STRUTTURA OBBLIGATORIA
+Usa esattamente questi titoli, nello stesso ordine, ciascuno su una riga separata:
 
-Il piano deve includere in modo naturale:
-lettura iniziale della situazione specifica,
-addormentamento serale,
-risvegli notturni,
-pisolini diurni,
-finestre di veglia orientative,
-ambiente e stimoli,
-distinzione tra fame, stanchezza e bisogno di contatto,
-cosa fare se protesta,
-cosa aspettarsi nei primi giorni,
-come monitorare i progressi.
+LETTURA DELLA SITUAZIONE
+OBIETTIVO DEI PRIMI GIORNI
+ORGANIZZAZIONE DELLA GIORNATA
+ROUTINE SERALE
+ADDORMENTAMENTO
+RISVEGLI NOTTURNI
+PISOLINI E FINESTRE DI VEGLIA
+COSA FARE SE PROTESTA
+COSA OSSERVARE NEI PROSSIMI GIORNI
 
-Le indicazioni devono essere concrete e operative: orari, sequenza di azioni, cosa fare quando protesta, quanto aspettare, come capire se sta funzionando.
-Non dare diagnosi o indicazioni mediche. Se emergono temi sanitari, rimanda al pediatra.
-Non proporre troppe modifiche tutte insieme: dai una direzione chiara per i primi giorni.
+Sotto ogni titolo scrivi indicazioni concrete, personalizzate e facili da applicare.
+Quando i dati lo permettono, inserisci orari orientativi, sequenza delle azioni, cosa fare al primo tentativo, cosa fare se non funziona e quando fermarsi per non creare troppa pressione.
+Dai una sola direzione principale per i primi giorni e non cambiare troppe cose contemporaneamente.
+Distingui, quando pertinente, fame, stanchezza, bisogno di contatto e abitudine all'aiuto usato per addormentarsi.
+Spiega cosa aspettarsi nei primi giorni e quali piccoli segnali considerare come progresso.
+
+Non usare markdown, asterischi, grassetti o tabelle. I titoli in maiuscolo sopra indicati sono obbligatori e sono l'unica struttura grafica consentita.
+Non dare diagnosi o indicazioni mediche. In presenza di aspetti sanitari, rimanda al pediatra per quella parte.
+Non proporre un checkup, non chiedere ulteriori informazioni e non inserire offerte o link.
 
 Chiudi sempre e solo con:
 "Aggiornami fra qualche giorno e fammi sapere come va 🤍"
@@ -672,31 +676,29 @@ SYSTEM_PROMPT = SYSTEM_PROMPT_BASE
 
 POTTY_PLAN_PROMPT = """
 Scrivi il piano personalizzato completo come Paola per una mamma che ha acquistato il percorso spannolinamento.
-Il piano deve essere specifico sul bambino e sulla situazione descritta, non un modello generico.
-Usa il nome del bambino se disponibile e cita eta, fase attuale, nido/casa, pipi, cacca, incidenti, reazioni e obiettivi emersi nel questionario.
+Il piano deve essere specifico per il bambino e basato esclusivamente sul questionario, sul profilo e sullo storico disponibili.
+Usa nome, eta, fase attuale, gestione a casa/nido/nonni, pipi, cacca, incidenti, reazioni e obiettivi realmente emersi. Non inventare dati mancanti e non fare domande nel piano.
 
-Scrivi in prosa discorsiva da WhatsApp, ordinata ma naturale.
-Non usare markdown, grassetti, titoli, bullet point o numerazioni rigide.
-Puoi andare a capo per leggibilita, ma senza formattazione da documento.
+STRUTTURA OBBLIGATORIA
+Usa esattamente questi titoli, nello stesso ordine, ciascuno su una riga separata:
 
-Il piano deve includere in modo naturale:
-lettura iniziale della situazione,
-se il bambino sembra pronto o se conviene rallentare,
-obiettivo dei prossimi 7/9 giorni,
-come presentare vasino o water,
-routine pipi,
-indicazioni alimentari pratiche e generali solo se pertinenti, senza trasformarle in dieta clinica o prescrizione medica,
-gestione degli incidenti senza far vivere colpa o pressione,
-gestione della cacca se pertinente,
-uscite,
-nido/nonni,
-notte solo se pertinente,
-cosa osservare ogni giorno,
-quando aggiornare Paola.
+LETTURA DELLA SITUAZIONE
+OBIETTIVO DEI PROSSIMI 7-9 GIORNI
+COME PRESENTARE VASINO O WATER
+ROUTINE DELLA PIPI
+GESTIONE DELLA CACCA
+INCIDENTI E REAZIONI
+USCITE, NIDO E NONNI
+NOTTE
+COSA OSSERVARE OGNI GIORNO
 
-Non promettere che in 9 giorni sara tutto risolto. Spiega che i 9 giorni servono a dare una sequenza chiara e adattabile.
-Non forzare mai il bambino, non colpevolizzare la mamma, non usare punizioni.
-Se emergono dubbi sanitari o stitichezza importante, rimanda al pediatra. Se parli di alimentazione, resta su indicazioni generali e pratiche, non su prescrizioni mediche.
+Sotto ogni titolo scrivi indicazioni concrete, personalizzate e facili da applicare. Se una sezione non e pertinente, scrivilo brevemente senza inventare un problema.
+Non forzare il bambino, non colpevolizzare la mamma e non usare punizioni. Premi o adesivi non devono essere presentati come soluzione principale.
+Spiega che i 7-9 giorni servono a dare una sequenza chiara e adattabile, non a promettere che tutto sara risolto entro quel periodo.
+Se emergono dolore, stitichezza importante, trattenimento forte o altri dubbi sanitari, rimanda al pediatra.
+
+Non usare markdown, asterischi, grassetti o tabelle. I titoli in maiuscolo sopra indicati sono obbligatori e sono l'unica struttura grafica consentita.
+Non proporre un checkup, non chiedere ulteriori informazioni e non inserire offerte o link.
 
 Chiudi sempre e solo con:
 "Aggiornami fra qualche giorno e fammi sapere come va 🤍"
@@ -2676,6 +2678,428 @@ def questionnaire_answer_seems_concrete(text, part=1):
         return True
     return False
 
+
+QUESTIONNAIRE_STAGE_CLASSIFIER_PROMPT = """
+Sei un classificatore per il questionario di Genitori in Armonia.
+Devi distinguere con precisione ciò che la mamma sta facendo durante una fase già avviata del questionario.
+Restituisci SOLO JSON valido.
+
+Campi obbligatori:
+{
+  "contains_questionnaire_answers": true,
+  "answers_sufficient": false,
+  "contains_clarification_question": false,
+  "contains_other_question": false,
+  "is_deferral": false,
+  "is_courtesy_only": false,
+  "is_finish_confirmation": false,
+  "contains_additional_answers": false,
+  "needs_reply": false,
+  "reason": "breve motivo"
+}
+
+Regole:
+- contains_questionnaire_answers=true se nel blocco cumulativo ci sono risposte concrete alle domande della parte corrente.
+- answers_sufficient=true solo se il blocco cumulativo contiene abbastanza informazioni per passare allo step successivo. Non basta una sola risposta breve.
+- contains_clarification_question=true se chiede come compilare, cosa scrivere, se può mandare un vocale, se deve indicare un certo dato o un altro chiarimento sul questionario.
+- contains_other_question=true se pone una domanda reale diversa dal questionario e sta aspettando una risposta. Non considerarla risposta al questionario.
+- is_deferral=true se dice che compilerà o continuerà dopo, più tardi o domani.
+- is_courtesy_only=true solo per una pura cortesia senza dati e senza domanda.
+- is_finish_confirmation=true SOLO nella fase conferma, se dice chiaramente che ha finito o risposto a tutto. Un'informazione aggiuntiva non equivale a conferma.
+- contains_additional_answers=true nella fase conferma se aggiunge dati del questionario ma non dice di avere finito.
+- needs_reply=true per chiarimenti, altre domande, rinvii o messaggi che chiaramente attendono una risposta.
+- Se ci sono risposte e anche un chiarimento sul questionario, possono essere true sia contains_questionnaire_answers sia contains_clarification_question.
+- Se dopo risposte valide scrive una domanda fuori tema, contains_other_question=true: non bisogna inviare subito lo step successivo dopo quella domanda.
+- Non inventare che abbia completato il questionario.
+"""
+
+QUESTIONNAIRE_CONTEXT_REPLY_PROMPT = """
+Rispondi come Paola durante la compilazione di un questionario già inviato.
+Devi rispondere soltanto al messaggio attuale che richiede una risposta, senza modificare il flusso del questionario.
+
+Regole obbligatorie:
+- Non creare nuove domande del questionario.
+- Non riscrivere, riassumere o sostituire le domande fisse.
+- Non generare un piano e non dare una consulenza completa.
+- Se chiede come compilare, chiarisci in modo semplice e concreto.
+- Se dice che compilerà domani o più tardi, rassicurala brevemente e lascia la fase invariata.
+- Se pone una domanda diversa, rispondi brevemente solo a quella, senza concludere con un'altra domanda.
+- Se sta aggiungendo informazioni dopo il messaggio "hai risposto a tutto?", riconosci che le hai aggiunte e ricordale di scrivere "ho finito" soltanto quando ha davvero concluso.
+- Non dire "hai finito?" dopo un messaggio fuori tema o dopo una domanda.
+- Non chiedere altre informazioni di tua iniziativa.
+- Non usare markdown, titoli o elenchi.
+- Scrivi solo il testo da inviare su WhatsApp.
+"""
+
+
+def get_latest_user_message(phone):
+    """Ultimo messaggio reale della mamma, escludendo le note amministrative salvate come user."""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT content FROM messages
+            WHERE phone = %s AND role = 'user'
+              AND content NOT LIKE '[NOTA ADMIN:%%'
+            ORDER BY timestamp DESC, id DESC
+            LIMIT 1
+        """, (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row[0] if row else ""
+    except Exception as e:
+        logger.error(f"Errore get_latest_user_message per {phone}: {e}")
+        return ""
+
+
+def get_questionnaire_stage_text(phone, fase):
+    """Raccoglie tutte le risposte della mamma dopo l'ultimo blocco fisso della fase.
+
+    È importante perché un chiarimento di Paola non deve far perdere le risposte già
+    inviate prima del chiarimento.
+    """
+    product_type = get_product_type(phone)
+    if fase == 1:
+        anchor_content = get_questionario_1(product_type)
+    elif fase == 2:
+        anchor_content = get_questionario_2(product_type)
+    elif fase in (5, 6):
+        anchor_content = MSG_CONFERMA_QUESTIONARIO
+    else:
+        return ""
+
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT timestamp FROM messages
+            WHERE phone = %s AND role = 'assistant' AND content = %s
+            ORDER BY timestamp DESC, id DESC
+            LIMIT 1
+        """, (phone, anchor_content))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return ""
+        anchor_time = row[0]
+        cur.execute("""
+            SELECT content FROM messages
+            WHERE phone = %s AND role = 'user' AND timestamp > %s
+              AND content NOT LIKE '[NOTA ADMIN:%%'
+            ORDER BY timestamp ASC, id ASC
+        """, (phone, anchor_time))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return "\n".join(r[0] for r in rows if r and r[0]).strip()
+    except Exception as e:
+        logger.error(f"Errore get_questionnaire_stage_text per {phone}: {e}")
+        return ""
+
+
+def is_explicit_finish_confirmation(text):
+    """Conferma esplicita, usata solo dopo il messaggio fisso 'hai risposto a tutto?'."""
+    t = normalize_text(text or "")
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t:
+        return False
+    exact = {
+        "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto a tutto",
+        "risposto a tutto", "tutto fatto", "ho completato", "completato", "ecco tutto",
+        "ho concluso", "concluso", "sono pronta", "pronta", "yes"
+    }
+    if t in exact:
+        return True
+    patterns = [
+        "si ho finito", "sì ho finito", "si, ho finito", "sì, ho finito",
+        "ho finito tutto", "ho risposto a tutte", "ho risposto a tutti",
+        "si e tutto", "sì è tutto", "questo e tutto", "questo è tutto"
+    ]
+    return any(p in t for p in patterns) and len(t) < 220
+
+
+def classify_questionnaire_stage_message(phone, fase, pending_text):
+    """Classifica il messaggio senza consentire a GPT di modificare il flusso fisso."""
+    stage = "parte_1" if fase == 1 else "parte_2" if fase == 2 else "conferma_finale"
+    cumulative = get_questionnaire_stage_text(phone, fase) or (pending_text or "")
+    latest = get_latest_user_message(phone) or (pending_text or "")
+    part = 1 if fase == 1 else 2
+
+    heuristic_answers = questionnaire_answer_seems_concrete(cumulative, part=part) if fase in (1, 2) else False
+    heuristic_deferral = is_questionnaire_deferral(latest)
+    heuristic_finish = is_explicit_finish_confirmation(latest) if fase in (5, 6) else False
+    heuristic_question = "?" in latest or bool(re.search(
+        r"\b(posso|devo|come|cosa|quale|quando|serve|preferisci|va bene se|ti mando|vuoi che)\b",
+        normalize_text(latest)
+    ))
+
+    default = {
+        "contains_questionnaire_answers": heuristic_answers,
+        "answers_sufficient": heuristic_answers,
+        "contains_clarification_question": heuristic_question and any(x in normalize_text(latest) for x in [
+            "questionario", "domanda", "risposta", "scrivere", "compil", "vocale", "audio", "orari", "devo indicare", "posso mandare"
+        ]),
+        "contains_other_question": heuristic_question,
+        "is_deferral": heuristic_deferral,
+        "is_courtesy_only": is_obvious_closing_message(latest) and not heuristic_finish,
+        "is_finish_confirmation": heuristic_finish,
+        "contains_additional_answers": fase in (5, 6) and questionnaire_answer_seems_concrete(latest, part=2) and not heuristic_finish,
+        "needs_reply": heuristic_deferral or heuristic_question,
+        "reason": "fallback euristico"
+    }
+
+    current_questions = ""
+    if fase == 1:
+        current_questions = get_questionario_1(get_product_type(phone))
+    elif fase == 2:
+        current_questions = get_questionario_2(get_product_type(phone))
+    else:
+        current_questions = MSG_CONFERMA_QUESTIONARIO
+
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CLASSIFIER,
+            messages=[
+                {"role": "system", "content": QUESTIONNAIRE_STAGE_CLASSIFIER_PROMPT},
+                {"role": "user", "content": f"""
+Fase attuale: {stage}
+Blocco fisso inviato da Paola:
+{current_questions}
+
+Tutte le risposte della mamma dopo quel blocco:
+{cumulative}
+
+Ultimo messaggio della mamma:
+{latest}
+
+Classifica adesso.
+"""}
+            ],
+            max_tokens=350,
+            temperature=0,
+            response_format={"type": "json_object"},
+            timeout=60
+        )
+        data = parse_json_safely(response.choices[0].message.content, default)
+        if not isinstance(data, dict):
+            data = dict(default)
+    except Exception as e:
+        logger.error(f"Errore classificatore questionario fase {fase} per {phone}: {e}")
+        threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore questionario fase {fase} per {phone}: {e}"], daemon=True).start()
+        data = dict(default)
+
+    for key, value in default.items():
+        data.setdefault(key, value)
+
+    # Protezioni deterministiche: il modello non può cancellare segnali chiari.
+    if fase in (1, 2) and heuristic_answers:
+        data["contains_questionnaire_answers"] = True
+        data["answers_sufficient"] = True
+    if heuristic_deferral:
+        data["is_deferral"] = True
+        data["needs_reply"] = True
+    if heuristic_finish:
+        data["is_finish_confirmation"] = True
+    if heuristic_question:
+        data["needs_reply"] = True
+
+    # Una domanda di chiarimento non è automaticamente una domanda fuori tema.
+    if data.get("contains_clarification_question"):
+        data["contains_other_question"] = False
+
+    logger.info(f"Classificazione questionario fase {fase} per {phone}: {data}")
+    return data
+
+
+def generate_questionnaire_context_reply(phone, fase, pending_text, classification):
+    """Risponde solo a chiarimenti/rinvii/domande senza inventare nuovi step."""
+    stage = "parte 1" if fase == 1 else "parte 2" if fase == 2 else "conferma finale"
+    product_type = get_product_type(phone)
+    history = get_recent_history(phone, limit=20)
+    history_text = format_history_for_prompt(history)
+
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_BASE},
+                {"role": "system", "content": QUESTIONNAIRE_CONTEXT_REPLY_PROMPT},
+                {"role": "user", "content": f"""
+Prodotto: {product_label(product_type)}
+Fase questionario: {stage}
+Classificazione interna: {json.dumps(classification, ensure_ascii=False)}
+
+Storico recente:
+{history_text}
+
+Messaggio attuale della mamma:
+{pending_text}
+
+Scrivi solo la risposta necessaria. Non aggiungere una domanda finale.
+"""}
+            ],
+            max_tokens=700,
+            temperature=TEMP_CHAT,
+            timeout=60
+        )
+        reply = response.choices[0].message.content.strip().replace("!", ".")
+        reply = re.sub(r"\bcara\b", "mamma", reply, flags=re.I)
+        clean, issue = validate_reply(reply, {"link_sent": True, "asks_link": False})
+        if issue:
+            clean = rewrite_reply_if_needed(clean, issue, {"link_sent": True, "asks_link": False})
+        return clean.strip() if clean else None
+    except Exception as e:
+        logger.error(f"Errore risposta contestuale questionario fase {fase} per {phone}: {e}")
+        threading.Thread(target=send_telegram, args=[f"⚠️ Errore risposta questionario fase {fase} per {phone}: {e}"], daemon=True).start()
+        if classification.get("is_deferral"):
+            return "Va bene, compilalo con calma quando riesci. Rimango in attesa delle risposte 🤍"
+        if classification.get("contains_additional_answers"):
+            return "Perfetto, ho aggiunto anche questa informazione. Quando hai concluso tutto scrivimi 'ho finito', così preparo il piano 🤍"
+        return None
+
+
+def transition_phase_atomic(phone, expected_phases, new_phase, piano_scheduled_at=None):
+    """Evita che due processi inviino due volte Q2, conferma o piano."""
+    if isinstance(expected_phases, int):
+        expected_phases = [expected_phases]
+    expected_phases = list(expected_phases)
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        if piano_scheduled_at is None:
+            cur.execute("""
+                UPDATE consultations
+                SET fase = %s
+                WHERE phone = %s AND fase = ANY(%s)
+            """, (new_phase, phone, expected_phases))
+        else:
+            cur.execute("""
+                UPDATE consultations
+                SET fase = %s, piano_scheduled_at = %s
+                WHERE phone = %s AND fase = ANY(%s)
+            """, (new_phase, piano_scheduled_at, phone, expected_phases))
+        changed = cur.rowcount == 1
+        conn.commit()
+        cur.close()
+        conn.close()
+        return changed
+    except Exception as e:
+        logger.error(f"Errore transition_phase_atomic per {phone}: {e}")
+        return False
+
+
+def send_fixed_questionnaire_step(phone, expected_phase, new_phase, fixed_text, label):
+    """Cambia fase una sola volta e invia esattamente il testo fisso già configurato."""
+    if not transition_phase_atomic(phone, expected_phase, new_phase):
+        logger.info(f"{label} non inviato a {phone}: fase già cambiata da un altro processo")
+        return False
+    sent = send_whatsapp_message(phone, fixed_text)
+    if sent:
+        save_message(phone, "assistant", fixed_text)
+        logger.info(f"{label} inviato a {phone}")
+        return True
+
+    # Ripristina la fase precedente se l'invio fallisce, così il flusso può riprovare.
+    set_fase(phone, expected_phase)
+    threading.Thread(target=send_telegram, args=[f"⚠️ {label} non inviato a {phone}; fase ripristinata a {expected_phase}"], daemon=True).start()
+    return False
+
+
+def schedule_plan_after_confirmation(phone, current_phase):
+    """Programma il piano una sola volta dopo una conferma reale."""
+    piano_time = datetime.now(pytz.timezone(TIMEZONE)) + timedelta(minutes=PLAN_DELAY_MINUTES)
+    if not transition_phase_atomic(phone, [current_phase], 3, piano_scheduled_at=piano_time):
+        logger.info(f"Piano non rischedulato per {phone}: fase già cambiata")
+        return False
+    try:
+        extract_child_profile_from_history(phone)
+    except Exception as e:
+        logger.error(f"Errore estrazione profilo prima della schedulazione piano: {e}")
+    logger.info(f"Piano schedulato per {phone} alle {piano_time}")
+    return True
+
+
+def strip_question_sentences(reply):
+    """Fallback prudente: elimina solo frasi/righe interrogative da una risposta di fase 4."""
+    if not reply or "?" not in reply:
+        return reply
+    parts = re.split(r"(?<=[.!?])\s+|\n+", reply)
+    kept = [p.strip() for p in parts if p.strip() and "?" not in p]
+    return " ".join(kept).strip()
+
+
+def enforce_phase4_question_policy(phone, user_message, reply):
+    """In fase 4 mantiene al massimo una domanda e solo se davvero indispensabile."""
+    if not reply or "?" not in reply:
+        return reply
+
+    default = {"question_needed": False, "reason": "fallback conservativo"}
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CLASSIFIER,
+            messages=[
+                {"role": "system", "content": """
+Sei un controllore di qualità per il supporto fase 4.
+Restituisci SOLO JSON con question_needed boolean e reason.
+Una domanda è necessaria soltanto se manca un dato indispensabile senza il quale la risposta pratica rischia di essere sbagliata o non può essere data.
+Domande di abitudine, richieste di aggiornamento, domande già risolte nello storico o frasi come 'come è andata?', 'mi dici?', 'fammi sapere?' NON sono necessarie.
+"""},
+                {"role": "user", "content": f"Messaggio mamma:\n{user_message}\n\nRisposta proposta:\n{reply}"}
+            ],
+            max_tokens=180,
+            temperature=0,
+            response_format={"type": "json_object"},
+            timeout=60
+        )
+        result = parse_json_safely(response.choices[0].message.content, default)
+        needed = bool(result.get("question_needed", False)) if isinstance(result, dict) else False
+    except Exception as e:
+        logger.error(f"Errore controllo domande fase 4 per {phone}: {e}")
+        needed = False
+
+    # Anche quando serve, al massimo una domanda.
+    if needed and reply.count("?") <= 1:
+        return reply
+
+    instruction = (
+        "Mantieni una sola domanda indispensabile e rimuovi tutte le altre." if needed
+        else "Rimuovi tutte le domande e le richieste di aggiornamento. Rispondi concretamente con una breve lettura e massimo 1 o 2 indicazioni pratiche."
+    )
+    try:
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_BASE},
+                {"role": "user", "content": f"""
+Riscrivi la risposta seguente per il supporto fase 4.
+{instruction}
+Non aggiungere nuovi consigli, non inserire link e non fare domande per abitudine.
+
+Messaggio della mamma:
+{user_message}
+
+Risposta da correggere:
+{reply}
+
+Scrivi solo la versione finale.
+"""}
+            ],
+            max_tokens=900,
+            temperature=0.25,
+            timeout=60
+        )
+        rewritten = response.choices[0].message.content.strip().replace("!", ".")
+        if rewritten:
+            if not needed and "?" in rewritten:
+                rewritten = strip_question_sentences(rewritten)
+            return rewritten or strip_question_sentences(reply)
+    except Exception as e:
+        logger.error(f"Errore riscrittura domande fase 4 per {phone}: {e}")
+
+    return strip_question_sentences(reply) if not needed else reply
+
 def get_child_profile(phone):
     try:
         conn = get_db()
@@ -3002,12 +3426,16 @@ Inserisci una sola volta il link: {LINK_POTTY}
         if product_type == PRODUCT_POTTY:
             return """
 La persona è in percorso attivo di spannolinamento.
-Rispondi collegandoti al profilo bambino e allo storico recente. Dai massimo 1 o 2 indicazioni pratiche su pipì, cacca, vasino/water, incidenti, nido, uscite o pannolino notturno.
+Rispondi collegandoti al piano già inviato, al profilo bambino e allo storico recente. Dai massimo 1 o 2 indicazioni pratiche su pipì, cacca, vasino/water, incidenti, nido, uscite o pannolino notturno.
+NON fare domande per abitudine e NON terminare automaticamente con una domanda. Fai una sola domanda soltanto se manca un dato indispensabile per non dare un'indicazione sbagliata. Non chiedere informazioni già presenti nel questionario, nel piano, nel profilo o nello storico.
 Non cambiare troppe cose insieme. Non forzare, non colpevolizzare e non proporre punizioni. Per dolore, stitichezza importante, trattenimento forte o dubbi sanitari, rimanda al pediatra.
 """
         return """
-La persona è in percorso attivo. Rispondi collegandoti al profilo bambino e allo storico recente.
-Dai massimo 1 o 2 indicazioni pratiche, non cambiare troppe cose insieme. Se è una richiesta immediata, rispondi breve e operativo.
+La persona è in percorso attivo. Rispondi collegandoti al piano già inviato, al profilo bambino e allo storico recente.
+Rispondi prima alla richiesta concreta e dai massimo 1 o 2 indicazioni pratiche, senza cambiare troppe cose insieme. Se è una richiesta immediata, rispondi breve e operativo.
+NON fare domande per abitudine e NON chiudere automaticamente con richieste come "dimmi", "mi fai sapere", "a che ora", "quanto", "come è andata" o "aggiornami".
+Fai una sola domanda soltanto quando manca un dato indispensabile senza il quale rischieresti di dare un'indicazione sbagliata. Non chiedere mai informazioni già presenti nel questionario, nel piano, nel profilo o nello storico.
+Negli aggiornamenti ordinari fai una lettura breve e dai la direzione pratica, senza trasformare la risposta in un interrogatorio.
 Se compaiono febbre, tosse, raffreddore, dentini o malattia recente, non dare consigli medici: riconosci il maggiore bisogno di contatto e dai indicazioni solo sul rientro graduale alla routine, rimandando al pediatra per la parte sanitaria.
 """
 
@@ -3483,6 +3911,8 @@ Profilo bambino:
         clean = rewrite_reply_if_needed(clean, issue, context) if issue else clean
         if clean:
             clean = re.sub(r"\bcara\b", "mamma", clean, flags=re.I)
+            if fase == 4:
+                clean = enforce_phase4_question_policy(phone, user_message, clean)
         return clean.strip() if clean else None
     except Exception as e:
         logger.error(f"Errore OpenAI: {e}")
@@ -4537,167 +4967,109 @@ def process_response(phone, image_url=None):
             mark_phase0_after_assistant_reply(phone, ai_reply, router_result)
 
     elif fase == 1:
-        # Q1 -> Q2: manda la seconda parte solo se la mamma ha davvero iniziato a rispondere.
-        # Se scrive "ti rispondo più tardi", "lo compilo dopo", ecc. resta in attesa e non invia frasi fuori contesto.
-        if is_questionnaire_deferral(combined_raw):
-            mark_silent_no_reply(phone, "fase 1: rinvio compilazione questionario")
-            logger.info(f"Fase 1 per {phone} — rinvio/cortesia, nessun Q2 inviato")
+        # Il questionario resta fisso. GPT interviene solo per chiarimenti, rinvii o domande reali.
+        q_analysis = classify_questionnaire_stage_message(phone, fase, combined_raw)
+
+        if q_analysis.get("is_deferral"):
+            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+            if reply:
+                save_message(phone, "assistant", reply)
+                send_whatsapp_message(phone, reply)
             return
 
-        ha_risposto = questionnaire_answer_seems_concrete(combined_raw, part=1)
-        if not ha_risposto:
-            try:
-                check_response = openai_chat_completion(
-                    model=MODEL_CLASSIFIER,
-                    messages=[
-                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO solo se la mamma ha scritto risposte concrete al questionario: dati su mamma/bambino, eta e situazione iniziale del percorso: per il sonno routine/orari/addormentamento/dove dorme; per spannolinamento pannolino/vasino/pipi/cacca/inizio percorso. NON_HA_RISPOSTO se ha scritto solo cortesia o rinvio tipo ok, grazie, dopo, scrivo più tardi, ti rispondo domani, appena riesco."},
-                        {"role": "user", "content": f"Messaggi della mamma: '{combined_raw}'"}
-                    ],
-                    max_tokens=10,
-                    temperature=0,
-                    timeout=60
-                )
-                risposta = check_response.choices[0].message.content.strip().upper()
-                ha_risposto = "HA_RISPOSTO" in risposta and not is_questionnaire_deferral(combined_raw)
-                logger.info(f"Classificatore fase 1 per {phone}: {risposta}")
-            except Exception as e:
-                logger.error(f"Errore classificatore fase 1: {e}")
-                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 1 per {phone}: {e}"], daemon=True).start()
-                ha_risposto = questionnaire_answer_seems_concrete(combined_raw, part=1)
+        if q_analysis.get("contains_other_question"):
+            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+            if reply:
+                save_message(phone, "assistant", reply)
+                send_whatsapp_message(phone, reply)
+            return
 
-        if ha_risposto:
-            time.sleep(300)
+        if q_analysis.get("contains_clarification_question"):
+            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+            if reply:
+                save_message(phone, "assistant", reply)
+                send_whatsapp_message(phone, reply)
+            # Se nello stesso blocco ci sono già risposte sufficienti, dopo il chiarimento invia Q2 fisso.
+            if q_analysis.get("answers_sufficient"):
+                time.sleep(1.0)
+                q2 = get_questionario_2(get_product_type(phone))
+                send_fixed_questionnaire_step(phone, 1, 2, q2, "Questionario parte 2")
+            return
+
+        if q_analysis.get("answers_sufficient"):
             q2 = get_questionario_2(get_product_type(phone))
-            save_message(phone, "assistant", q2)
-            send_whatsapp_message(phone, q2)
-            set_fase(phone, 2)
-            logger.info(f"Questionario parte 2 inviato a {phone}")
+            send_fixed_questionnaire_step(phone, 1, 2, q2, "Questionario parte 2")
+            return
+
+        if q_analysis.get("needs_reply") and not q_analysis.get("is_courtesy_only"):
+            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+            if reply:
+                save_message(phone, "assistant", reply)
+                send_whatsapp_message(phone, reply)
         else:
-            logger.info(f"Fase 1 per {phone} — mamma non ha risposto concretamente, bot in attesa")
+            logger.info(f"Fase 1 per {phone} — risposte ancora incomplete, resto in attesa")
 
     elif fase == 2:
-        # Q2 -> conferma finale: chiedi "hai finito?" solo dopo risposte vere alla seconda parte.
-        if is_questionnaire_deferral(combined_raw):
-            mark_silent_no_reply(phone, "fase 2: rinvio compilazione questionario")
-            logger.info(f"Fase 2 per {phone} — rinvio/cortesia, nessuna conferma inviata")
+        # Prima di chiedere "hai finito" verifica che siano davvero risposte alla parte 2.
+        q_analysis = classify_questionnaire_stage_message(phone, fase, combined_raw)
+
+        if q_analysis.get("is_deferral"):
+            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+            if reply:
+                save_message(phone, "assistant", reply)
+                send_whatsapp_message(phone, reply)
             return
 
-        ha_risposto = questionnaire_answer_seems_concrete(combined_raw, part=2)
-        if not ha_risposto:
-            try:
-                check_response = openai_chat_completion(
-                    model=MODEL_CLASSIFIER,
-                    messages=[
-                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con HA_RISPOSTO o NON_HA_RISPOSTO. HA_RISPOSTO solo se la mamma ha scritto risposte concrete alla seconda parte del questionario: dettagli concreti della seconda parte: per il sonno risvegli/orari/riaddormentamento/latte/obiettivo/salute; per spannolinamento vasino/water/incidenti/cacca/nido/notte/premi/rifiuti/obiettivo. NON_HA_RISPOSTO se ha scritto solo cortesia o rinvio tipo ok, grazie, dopo, scrivo più tardi, ti rispondo domani, appena riesco."},
-                        {"role": "user", "content": f"Messaggi della mamma: '{combined_raw}'"}
-                    ],
-                    max_tokens=10,
-                    temperature=0,
-                    timeout=60
-                )
-                risposta = check_response.choices[0].message.content.strip().upper()
-                ha_risposto = "HA_RISPOSTO" in risposta and not is_questionnaire_deferral(combined_raw)
-                logger.info(f"Classificatore fase 2 per {phone}: {risposta}")
-            except Exception as e:
-                logger.error(f"Errore classificatore fase 2: {e}")
-                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 2 per {phone}: {e}"], daemon=True).start()
-                ha_risposto = questionnaire_answer_seems_concrete(combined_raw, part=2)
-
-        if ha_risposto:
-            save_message(phone, "assistant", MSG_CONFERMA_QUESTIONARIO)
-            send_whatsapp_message(phone, MSG_CONFERMA_QUESTIONARIO)
-            set_fase(phone, 5)
-            logger.info(f"Attesa conferma completamento questionario per {phone}")
-        else:
-            logger.info(f"Fase 2 per {phone} — mamma non ha risposto concretamente, bot in attesa")
-
-    elif fase == 5:
-        if is_questionnaire_deferral(combined_raw):
-            set_fase(phone, 6)
-            mark_silent_no_reply(phone, "fase 5: mamma rimanda conferma fine questionario")
-            logger.info(f"Fase 5 per {phone} — rinvio, passo a silenzio totale senza risposta")
+        if q_analysis.get("contains_other_question"):
+            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+            if reply:
+                save_message(phone, "assistant", reply)
+                send_whatsapp_message(phone, reply)
             return
 
-        parole_finito = [
-            "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto",
-            "risposto", "fatto", "ho fatto", "ecco tutto", "tutto",
-            "completato", "ho completato", "pronta", "sono pronta", "yes"
-        ]
-        ha_finito = any(combined == p or combined.startswith(p + " ") or combined.startswith(p + ",") for p in parole_finito)
-        if router_result.get("intent") == "conferma_questionario_finito" and float(router_result.get("confidence", 0) or 0) >= 0.65:
-            ha_finito = True
+        if q_analysis.get("contains_clarification_question"):
+            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+            if reply:
+                save_message(phone, "assistant", reply)
+                send_whatsapp_message(phone, reply)
+            # Solo se nello stesso blocco ci sono risposte sufficienti, manda la conferma fissa dopo il chiarimento.
+            if q_analysis.get("answers_sufficient"):
+                time.sleep(1.0)
+                send_fixed_questionnaire_step(phone, 2, 5, MSG_CONFERMA_QUESTIONARIO, "Conferma fine questionario")
+            return
 
-        if not ha_finito:
-            try:
-                check_response = openai_chat_completion(
-                    model=MODEL_CLASSIFIER,
-                    messages=[
-                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO. SI se la persona indica in qualsiasi modo che ha finito, completato, risposto a tutto, o e pronta. NO in tutti gli altri casi."},
-                        {"role": "user", "content": f"Messaggio: '{combined}'"}
-                    ],
-                    max_tokens=5,
-                    temperature=0,
-                    timeout=60
-                )
-                ha_finito = check_response.choices[0].message.content.strip().lower().startswith("si")
-            except Exception as e:
-                logger.error(f"Errore check conferma: {e}")
-                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 5 per {phone}: {e}"], daemon=True).start()
-                ha_finito = False
+        if q_analysis.get("answers_sufficient"):
+            send_fixed_questionnaire_step(phone, 2, 5, MSG_CONFERMA_QUESTIONARIO, "Conferma fine questionario")
+            return
 
-        if ha_finito:
-            try:
-                extract_child_profile_from_history(phone)
-            except Exception as e:
-                logger.error(f"Errore estrazione profilo in fase 5: {e}")
-            piano_time = datetime.now() + timedelta(hours=1)
-            set_fase(phone, 3, piano_scheduled_at=piano_time)
-            logger.info(f"Piano schedulato per {phone} alle {piano_time}")
+        if q_analysis.get("needs_reply") and not q_analysis.get("is_courtesy_only"):
+            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+            if reply:
+                save_message(phone, "assistant", reply)
+                send_whatsapp_message(phone, reply)
         else:
-            risposta = "Ok, tranquilla. Quando hai finito scrivimi 'ho finito' cosi so che posso iniziare a prepararti il piano 🤍"
-            save_message(phone, "assistant", risposta)
-            send_whatsapp_message(phone, risposta)
-            set_fase(phone, 6)
-            logger.info(f"Fase 6 per {phone} — silenzio totale")
+            logger.info(f"Fase 2 per {phone} — risposte ancora incomplete, non chiedo se ha finito")
 
-    elif fase == 6:
-        parole_finito = [
-            "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto",
-            "risposto", "fatto", "ho fatto", "ecco tutto", "tutto",
-            "completato", "ho completato", "pronta", "sono pronta", "yes"
-        ]
-        ha_finito = any(combined == p or combined.startswith(p + " ") or combined.startswith(p + ",") for p in parole_finito)
-        if router_result.get("intent") == "conferma_questionario_finito" and float(router_result.get("confidence", 0) or 0) >= 0.65:
-            ha_finito = True
+    elif fase in (5, 6):
+        # Dopo "hai risposto a tutto?" il piano parte solo con una conferma reale.
+        q_analysis = classify_questionnaire_stage_message(phone, fase, combined_raw)
 
-        if not ha_finito:
-            try:
-                check_response = openai_chat_completion(
-                    model=MODEL_CLASSIFIER,
-                    messages=[
-                        {"role": "system", "content": "Sei un classificatore. Rispondi SOLO con SI o NO. SI se la persona indica in qualsiasi modo che ha finito, completato, risposto a tutto, o e pronta. NO in tutti gli altri casi."},
-                        {"role": "user", "content": f"Messaggio: '{combined}'"}
-                    ],
-                    max_tokens=5,
-                    temperature=0,
-                    timeout=60
-                )
-                ha_finito = check_response.choices[0].message.content.strip().lower().startswith("si")
-            except Exception as e:
-                logger.error(f"Errore check conferma fase 6: {e}")
-                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore fase 6 per {phone}: {e}"], daemon=True).start()
-                ha_finito = False
+        if q_analysis.get("is_finish_confirmation"):
+            schedule_plan_after_confirmation(phone, fase)
+            return
 
-        if ha_finito:
-            try:
-                extract_child_profile_from_history(phone)
-            except Exception as e:
-                logger.error(f"Errore estrazione profilo in fase 6: {e}")
-            piano_time = datetime.now() + timedelta(hours=1)
-            set_fase(phone, 3, piano_scheduled_at=piano_time)
-            logger.info(f"Piano schedulato per {phone} alle {piano_time}")
-        else:
-            logger.info(f"Fase 6 per {phone} — silenzio totale, mamma non ha ancora finito")
+        if q_analysis.get("is_deferral") or q_analysis.get("contains_clarification_question") or q_analysis.get("contains_other_question") or q_analysis.get("contains_additional_answers") or q_analysis.get("needs_reply"):
+            reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
+            if reply:
+                save_message(phone, "assistant", reply)
+                send_whatsapp_message(phone, reply)
+            return
+
+        if q_analysis.get("is_courtesy_only"):
+            mark_silent_no_reply(phone, f"fase {fase}: cortesia durante attesa conferma")
+            return
+
+        logger.info(f"Fase {fase} per {phone} — nessuna conferma reale, resto in attesa senza avviare il piano")
 
     elif fase == 3:
         logger.info(f"Fase 3 per {phone} — bot in attesa del piano")
@@ -5476,7 +5848,7 @@ def startup():
     init_db()
     threading.Thread(target=background_job, daemon=True).start()
     setup_telegram_webhook()
-    logger.info("Bot avviato — V49: moduli Meta conversazionali, pannolino 19 euro e follow-up disattivati")
+    logger.info("Bot avviato — V50: questionario guidato intelligente, piani strutturati e fase 4 senza domande automatiche")
 
 if __name__ == "__main__":
     startup()
