@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-04-auto-memory-v12"
+APP_BUILD = "2026-08-04-media-vague-v13"
 
 
 def env_required(name: str) -> str:
@@ -176,6 +176,8 @@ Se il tema sanitario è lieve e la domanda resta sul sonno, puoi parlare con pru
 
 CONFINI INVISIBILI
 Non parlare mai alla mamma di scadenza della consulenza, giorni rimasti, rinnovi, prezzi, offerte, alert Telegram, stato tecnico o intelligenza artificiale.
+Non dire mai alla mamma che non riesci a vedere o leggere foto, video, audio, documenti o sticker.
+Se arriva un contenuto multimediale senza testo chiaro, ignoralo e rispondi solo al testo o al contesto, senza nominare il file o il formato.
 Anche dopo il trentesimo giorno continua normalmente finché Paola non mette la chat in pausa o la chiude.
 Solo Paola può proporre rinnovi o offerte.
 """.strip()
@@ -262,6 +264,7 @@ Restituisci SOLO JSON valido:
 Valuta la risposta rispetto a messaggio della mamma, piano, profilo e storico.
 Deve essere naturale, specifica, coerente con il piano, proporzionata alla richiesta e non sembrare generata.
 Deve evitare diagnosi, farmaci, prezzi, rinnovi, scadenze, riferimenti al bot o a Telegram.
+Non deve dire che non può vedere foto, video, audio o documenti.
 Non deve fare domande finali di abitudine, ripetere il contesto, dare più di 1-2 indicazioni o diventare lunga senza motivo.
 Metti rewrite=true se basta riscriverla.
 Metti send=false soltanto se è pericolosa, contraddittoria, inventa dati importanti o non risponde alla richiesta.
@@ -272,9 +275,18 @@ Riscrivi il messaggio come Paola.
 Mantieni il contenuto utile, ma rendilo più naturale, specifico e proporzionato.
 Non aggiungere informazioni, non cambiare il piano, non fare diagnosi, non parlare di scadenze, prezzi, rinnovi, bot o Telegram.
 Elimina formule da intelligenza artificiale, ripetizioni, spiegazioni inutili e domande finali non indispensabili.
+Non dire che non puoi vedere foto, video, audio o documenti.
 Dai al massimo una o due indicazioni pratiche.
 Scrivi solo il testo finale da inviare su WhatsApp.
 """.strip()
+
+MEDIA_ONLY_INTERNAL_PROMPT = """
+La mamma ha mandato un contenuto multimediale senza testo leggibile.
+Rispondi in modo naturale e caldo come Paola, basandoti sul contesto della consulenza e sullo storico.
+Non dire che non vedi foto, video o audio. Non chiedere screenshot o di scrivere in chat.
+Resta sul vago se serve, con una o due frasi brevi, come se stessi seguendo il filo del discorso.
+""".strip()
+
 
 PROFILE_PROMPT = """
 Estrai un profilo strutturato da questionario, piano e storico di una consulenza sul sonno infantile.
@@ -561,6 +573,37 @@ def get_pending_user_messages(phone: str) -> List[Dict[str, Any]]:
     return rows
 
 
+def is_media_placeholder(content: str) -> bool:
+    text = (content or "").strip()
+    if not text:
+        return True
+    lower = text.lower()
+    markers = (
+        "[video ricevuto]",
+        "[immagine]",
+        "[sticker]",
+        "[reazione]",
+        "[messaggio vocale non comprensibile]",
+        "[documento ricevuto:",
+        "[messaggio whatsapp di tipo",
+    )
+    return any(lower == marker or lower.startswith(marker) for marker in markers)
+
+
+def build_pending_user_text(pending: List[Dict[str, Any]]) -> Tuple[str, bool]:
+    meaningful: List[str] = []
+    has_unreadable_media = False
+    for item in pending:
+        content = (item.get("content") or "").strip()
+        media_type = (item.get("media_type") or "").strip().lower()
+        if content and not is_media_placeholder(content):
+            meaningful.append(content)
+        elif media_type in {"video", "image", "audio", "document", "sticker"} or is_media_placeholder(content):
+            has_unreadable_media = True
+    text = "\n".join(meaningful).strip()
+    return text, has_unreadable_media and not text
+
+
 def append_capture_buffer(phone: str, text: str) -> None:
     case = get_case(phone)
     current = case.get("capture_buffer") or ""
@@ -597,7 +640,7 @@ def build_questionnaire_from_whatsapp_history(phone: str) -> str:
     lines: List[str] = []
     for row in rows:
         content = (row.get("content") or "").strip()
-        if not content:
+        if not content or is_media_placeholder(content):
             continue
         ts = row.get("timestamp")
         prefix = format_dt(ts) if ts else "-"
@@ -1752,7 +1795,13 @@ STORICO RECENTE:
     return case.get("profile_json") or {}
 
 
-def generate_normal_reply(phone: str, pending_text: str, router: Dict[str, Any], forced_mode: Optional[str] = None) -> Optional[str]:
+def generate_normal_reply(
+    phone: str,
+    pending_text: str,
+    router: Dict[str, Any],
+    forced_mode: Optional[str] = None,
+    media_only: bool = False,
+) -> Optional[str]:
     case = get_case(phone)
     history = get_history_before_pending(phone, RECENT_HISTORY_LIMIT)
     profile = case.get("profile_json") or {}
@@ -1786,17 +1835,23 @@ Se micro, usa normalmente 1-3 frasi. Se normal, resta essenziale. Se deep, appro
     prompts = [SYSTEM_PROMPT_BASE, operational]
     if forced_mode == "continua":
         prompts.append(FORCED_CONTINUE_PROMPT)
+    if media_only and not (pending_text or "").strip():
+        prompts.append(MEDIA_ONLY_INTERNAL_PROMPT)
 
     image_data_url = None
     for item in reversed(get_pending_user_messages(phone)):
         if item.get("media_type") == "image" and item.get("media_id"):
-            image_data_url = media_image_data_url(item["media_id"])
-            break
+            image_data_url = media_image_data_url(item.get("media_id"))
+            if image_data_url:
+                break
+    user_text = (pending_text or "").strip()
+    if media_only and not user_text:
+        user_text = "Continua la conversazione in modo naturale e caldo."
     try:
         reply = ai_text(
             model=MODEL_CHAT,
             system_prompts=prompts,
-            user_text=pending_text,
+            user_text=user_text,
             history=history,
             reasoning_effort=effort,
             verbosity=verbosity,
@@ -1804,7 +1859,7 @@ Se micro, usa normalmente 1-3 frasi. Se normal, resta essenziale. Se deep, appro
             image_data_url=image_data_url,
         )
         clean = clean_reply(reply)
-        return quality_control_reply(phone, pending_text, clean, router)
+        return quality_control_reply(phone, user_text, clean, router)
     except Exception as exc:
         logger.exception("Errore risposta AI %s: %s", phone, exc)
         send_to_topic(phone, f"Errore OpenAI: {exc}", kind="alert")
@@ -2051,15 +2106,15 @@ def process_response(phone: str) -> None:
         logger.info("Nessuna risposta per %s: stato %s", phone, case.get("status"))
         return
     pending = get_pending_user_messages(phone)
-    pending_text = "\n".join(item["content"] for item in pending).strip()
-    if not pending_text:
+    pending_text, media_only = build_pending_user_text(pending)
+    if not pending_text and not media_only:
         return
-    if is_obvious_closing_message(pending_text):
+    if pending_text and is_obvious_closing_message(pending_text):
         mark_silent_no_reply(phone, "chiusura rilevata dal timer")
         logger.info("Chiusura/cortesia: nessuna risposta per %s", phone)
         return
 
-    router = classify_support_message(phone, pending_text)
+    router = classify_support_message(phone, pending_text or "messaggio multimediale senza testo")
     if router.get("needs_human") or router.get("pause_chat"):
         update_case(phone, status=STATUS_REVIEW, last_alert_at=now_local())
         category = router.get("intent", "alert")
@@ -2073,7 +2128,7 @@ def process_response(phone: str) -> None:
         send_private_alert(f"⚠️ Alert per {phone}: {category}. La chat è in pausa.")
         return
 
-    reply = generate_normal_reply(phone, pending_text, router)
+    reply = generate_normal_reply(phone, pending_text, router, media_only=media_only)
     if reply:
         send_whatsapp_message(phone, reply, source="bot")
 
@@ -2224,9 +2279,6 @@ def handle_inbound_message(message: Dict[str, Any], value: Dict[str, Any]) -> No
             schedule_checkup_review(phone)
         return
     if status != STATUS_ACTIVE:
-        return
-    if media_type == "video":
-        send_whatsapp_message(phone, "Non riesco a vedere i video, scrivimi pure qui in chat.", source="bot")
         return
     if is_obvious_closing_message(content) or media_type in {"sticker", "reaction"}:
         with active_timers_lock:
@@ -2394,13 +2446,15 @@ def handle_telegram_command(phone: str, text: str) -> None:
     if cmd in {"/continua", "/rispondi"}:
         cancel_timer(phone, cmd)
         pending = get_pending_user_messages(phone)
-        pending_text = "\n".join(item["content"] for item in pending).strip()
-        if not pending_text:
+        pending_text, media_only = build_pending_user_text(pending)
+        if not pending_text and not media_only:
             send_to_topic(phone, "Non ci sono nuovi messaggi della mamma a cui rispondere.", kind="system")
             return
-        router = classify_support_message(phone, pending_text)
+        router = classify_support_message(phone, pending_text or "messaggio multimediale senza testo")
         mode = "continua" if cmd == "/continua" else None
-        reply = generate_normal_reply(phone, pending_text, router, forced_mode=mode)
+        reply = generate_normal_reply(
+            phone, pending_text, router, forced_mode=mode, media_only=media_only,
+        )
         if reply and send_whatsapp_message(phone, reply, source="bot"):
             update_case(phone, status=STATUS_ACTIVE)
         return
