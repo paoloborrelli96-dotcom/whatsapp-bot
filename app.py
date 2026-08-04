@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-04-pdf-plan-v10"
+APP_BUILD = "2026-08-04-topic-full-phone-v11"
 
 
 def env_required(name: str) -> str:
@@ -750,7 +750,7 @@ def get_or_create_topic(phone: str, display_name: Optional[str] = None) -> Optio
 
     label = (display_name or "Mamma").strip()
     label = re.sub(r"[\r\n\t]+", " ", label)[:80]
-    topic_name = f"{label} · {phone_last4(phone)}"
+    topic_name = f"{label} · {normalize_phone(phone)}"
     try:
         result = telegram_api("createForumTopic", json_data={"chat_id": TELEGRAM_GROUP_ID, "name": topic_name})
         thread_id = int(result["message_thread_id"])
