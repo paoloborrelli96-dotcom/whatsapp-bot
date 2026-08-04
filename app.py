@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-04-template-audit-v9"
+APP_BUILD = "2026-08-04-pdf-plan-v10"
 
 
 def env_required(name: str) -> str:
@@ -369,6 +369,10 @@ def init_db() -> None:
         "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS checkup_started_at TIMESTAMPTZ",
         "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS checkup_ready_alert_sent BOOLEAN DEFAULT FALSE",
         "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS last_alert_at TIMESTAMPTZ",
+
+        "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS plan_filename TEXT",
+        "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS plan_file_mime TEXT",
+        "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS plan_file_data BYTEA",
         "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()",
         "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()",
 
@@ -446,7 +450,7 @@ def update_case(phone: str, **fields: Any) -> None:
         "display_name", "status", "questionnaire", "plan", "profile_json", "admin_notes",
         "capture_mode", "capture_buffer", "activated_at", "support_end_at",
         "expiration_alert_sent", "checkup_started_at", "checkup_ready_alert_sent",
-        "last_alert_at",
+        "last_alert_at", "plan_filename", "plan_file_mime", "plan_file_data",
     }
     clean = {k: v for k, v in fields.items() if k in allowed}
     if not clean:
@@ -830,6 +834,27 @@ def extract_document_text(data: bytes, filename: str) -> str:
         doc = Document(io.BytesIO(data))
         return "\n".join(p.text for p in doc.paragraphs if p.text.strip()).strip()
     raise RuntimeError("Formato non supportato. Usa TXT, PDF o DOCX.")
+
+
+def guess_document_mime(filename: str) -> str:
+    lower = (filename or "").lower()
+    if lower.endswith(".pdf"):
+        return "application/pdf"
+    if lower.endswith(".docx"):
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if lower.endswith(".txt"):
+        return "text/plain"
+    return "application/octet-stream"
+
+
+def as_bytes(value: Any) -> bytes:
+    if value is None:
+        return b""
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    if isinstance(value, bytes):
+        return value
+    return bytes(value)
 
 
 # =============================================================================
@@ -1346,6 +1371,85 @@ def send_whatsapp_message(phone: str, text: str, source: str = "bot") -> bool:
             send_private_alert(f"⚠️ Invio WhatsApp non riuscito per {phone}: {exc}")
             return False
     return sent
+
+
+def upload_whatsapp_media(data: bytes, mime_type: str, filename: str) -> str:
+    url = f"https://graph.facebook.com/{META_API_VERSION}/{META_PHONE_NUMBER_ID}/media"
+    headers = {"Authorization": f"Bearer {META_ACCESS_TOKEN}"}
+    files = {"file": (filename, data, mime_type)}
+    form = {"messaging_product": "whatsapp", "type": mime_type}
+    response = requests.post(url, headers=headers, data=form, files=files, timeout=120)
+    if response.status_code >= 400:
+        raise RuntimeError(f"Meta media upload {response.status_code}: {response.text[:800]}")
+    payload = response.json()
+    media_id = payload.get("id")
+    if not media_id:
+        raise RuntimeError(f"Meta media upload senza id: {payload}")
+    return str(media_id)
+
+
+def send_whatsapp_document(
+    phone: str,
+    data: bytes,
+    filename: str,
+    mime_type: Optional[str] = None,
+    caption: Optional[str] = None,
+    source: str = "paola",
+) -> Tuple[bool, Optional[str]]:
+    recipient = phone_for_meta(phone)
+    if not recipient:
+        return False, "numero destinatario non valido"
+    if not data:
+        return False, "file vuoto"
+    safe_name = (filename or "documento.pdf").strip() or "documento.pdf"
+    mime = mime_type or guess_document_mime(safe_name)
+    try:
+        media_id = upload_whatsapp_media(data, mime, safe_name)
+        document_payload: Dict[str, Any] = {
+            "id": media_id,
+            "filename": safe_name,
+        }
+        if caption:
+            document_payload["caption"] = caption[:1024]
+        result = meta_api("POST", f"{META_PHONE_NUMBER_ID}/messages", json_data={
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": recipient,
+            "type": "document",
+            "document": document_payload,
+        })
+        message_id = None
+        if result.get("messages"):
+            message_id = result["messages"][0].get("id")
+        role = "admin" if source == "paola" else "assistant"
+        label = caption or f"[documento:{safe_name}]"
+        save_message(phone, role, "meta_api", label, provider_message_id=message_id)
+        send_to_topic(phone, f"📎 {label}", kind="paola" if source == "paola" else "bot")
+        return True, None
+    except Exception as exc:
+        logger.exception("Errore invio documento WhatsApp %s: %s", phone, exc)
+        error = format_meta_error(exc)
+        send_to_topic(phone, f"Invio documento WhatsApp non riuscito: {error}", kind="alert")
+        send_private_alert(f"⚠️ Invio documento WhatsApp non riuscito per {phone}: {error}")
+        return False, error
+
+
+def send_saved_plan_pdf(phone: str, caption: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+    case = get_case(phone)
+    data = as_bytes(case.get("plan_file_data"))
+    filename = (case.get("plan_filename") or "piano.pdf").strip()
+    mime = (case.get("plan_file_mime") or guess_document_mime(filename)).strip()
+    if not data:
+        return False, "nessun PDF del piano salvato: usa /piano e carica un PDF prima di /fine o /inviapiano"
+    default_caption = "Ecco il piano personalizzato per il sonno del tuo bambino 🌙"
+    return send_whatsapp_document(
+        phone,
+        data,
+        filename,
+        mime_type=mime,
+        caption=caption or default_caption,
+        source="paola",
+    )
 
 
 def get_meta_media(media_id: str) -> Tuple[bytes, str]:
@@ -2100,6 +2204,7 @@ def case_status_text(phone: str) -> str:
         f"Stato bot: {case.get('status')}\n"
         f"Questionario: {'presente' if case.get('questionnaire') else 'mancante'}\n"
         f"Piano: {'presente' if case.get('plan') else 'mancante'}\n"
+        f"PDF piano salvato: {'sì' if case.get('plan_file_data') else 'no'}\n"
         f"Attivazione: {format_dt(case.get('activated_at'))}\n"
         f"Scadenza: {format_dt(case.get('support_end_at'))}\n"
         f"Alert scadenza inviato: {'sì' if case.get('expiration_alert_sent') else 'no'}\n"
@@ -2122,6 +2227,19 @@ def handle_capture_message(phone: str, message: Dict[str, Any]) -> bool:
             if text:
                 extracted = f"{text}\n\n{extracted}".strip()
             append_capture_buffer(phone, extracted)
+            if mode == CAPTURE_PLAN and filename.lower().endswith(".pdf"):
+                update_case(
+                    phone,
+                    plan_filename=filename,
+                    plan_file_mime="application/pdf",
+                    plan_file_data=data,
+                )
+                send_to_topic(
+                    phone,
+                    f"PDF del piano salvato ({filename}, {len(data)} byte). "
+                    "Con /fine lo invio anche su WhatsApp alla mamma.",
+                    kind="system",
+                )
             send_to_topic(phone, f"Documento aggiunto a {mode}: {len(extracted)} caratteri.", kind="system")
         except Exception as exc:
             send_to_topic(phone, f"Non sono riuscito a leggere il documento: {exc}", kind="alert")
@@ -2161,8 +2279,20 @@ def handle_telegram_command(phone: str, text: str) -> None:
         send_to_topic(phone, "Modalità questionario attiva. Incolla uno o più messaggi oppure un file TXT/PDF/DOCX, poi usa /fine.", kind="system")
         return
     if cmd == "/piano":
-        update_case(phone, capture_mode=CAPTURE_PLAN, capture_buffer="")
-        send_to_topic(phone, "Modalità piano attiva. Incolla uno o più messaggi oppure un file TXT/PDF/DOCX, poi usa /fine.", kind="system")
+        update_case(
+            phone,
+            capture_mode=CAPTURE_PLAN,
+            capture_buffer="",
+            plan_filename=None,
+            plan_file_mime=None,
+            plan_file_data=None,
+        )
+        send_to_topic(
+            phone,
+            "Modalità piano attiva. Carica un PDF (consigliato) o TXT/DOCX, poi usa /fine. "
+            "Il PDF verrà inviato alla mamma su WhatsApp.",
+            kind="system",
+        )
         return
     if cmd == "/fine":
         case = get_case(phone)
@@ -2177,6 +2307,21 @@ def handle_telegram_command(phone: str, text: str) -> None:
         field = "questionnaire" if mode == CAPTURE_QUESTIONNAIRE else "plan"
         update_case(phone, **{field: buffer, "capture_mode": CAPTURE_NONE, "capture_buffer": ""})
         send_to_topic(phone, f"✅ {('Questionario' if field == 'questionnaire' else 'Piano')} salvato: {len(buffer)} caratteri.", kind="system")
+        if mode == CAPTURE_PLAN:
+            sent, error = send_saved_plan_pdf(phone)
+            if sent:
+                send_to_topic(phone, "📎 PDF del piano inviato alla mamma su WhatsApp.", kind="system")
+            elif case.get("plan_file_data"):
+                send_to_topic(phone, f"PDF non inviato: {error}", kind="alert")
+            else:
+                send_to_topic(phone, "Piano salvato come testo (nessun PDF da inviare).", kind="system")
+        return
+    if cmd == "/inviapiano":
+        sent, error = send_saved_plan_pdf(phone)
+        if sent:
+            send_to_topic(phone, "📎 PDF del piano inviato alla mamma su WhatsApp.", kind="system")
+        else:
+            send_to_topic(phone, f"PDF non inviato: {error}", kind="alert")
         return
     if cmd == "/attiva":
         case = get_case(phone)
@@ -2441,6 +2586,23 @@ def process_telegram_update(update: Dict[str, Any]) -> None:
         handle_telegram_command(phone, text)
         return
     if handle_capture_message(phone, message):
+        return
+
+    document = message.get("document")
+    if document:
+        try:
+            data, file_path = download_telegram_file(document["file_id"])
+            filename = document.get("file_name") or file_path
+            if filename.lower().endswith(".pdf"):
+                cancel_timer(phone, "documento manuale da Telegram")
+                caption = (message.get("caption") or "").strip() or None
+                sent, error = send_whatsapp_document(phone, data, filename, caption=caption, source="paola")
+                if not sent:
+                    send_to_topic(phone, f"PDF non inviato: {error}", kind="alert")
+                return
+            send_to_topic(phone, "Per ora posso inoltrare su WhatsApp solo file PDF.", kind="system")
+        except Exception as exc:
+            send_to_topic(phone, f"Non sono riuscito a inoltrare il documento: {exc}", kind="alert")
         return
 
     if text:
