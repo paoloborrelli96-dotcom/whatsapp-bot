@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-04-template-audit-v7"
+APP_BUILD = "2026-08-04-template-audit-v8"
 
 
 def env_required(name: str) -> str:
@@ -1058,14 +1058,23 @@ def list_meta_message_templates(waba_id: Optional[str] = None, limit: int = 100)
 
 
 def get_phone_number_waba_id() -> Optional[str]:
-    data = meta_api(
-        "GET",
-        META_PHONE_NUMBER_ID,
-        params={"fields": "through_whatsapp_business_account"},
-    )
-    waba = data.get("through_whatsapp_business_account") or {}
-    waba_id = waba.get("id")
-    return str(waba_id).strip() if waba_id else None
+    for fields in ("whatsapp_business_account", "through_whatsapp_business_account"):
+        try:
+            data = meta_api("GET", META_PHONE_NUMBER_ID, params={"fields": fields})
+            waba = data.get(fields) or {}
+            if isinstance(waba, dict) and waba.get("id"):
+                return str(waba["id"]).strip()
+        except Exception as exc:
+            logger.debug("Campo %s non disponibile sul phone number: %s", fields, exc)
+
+    if META_WABA_ID:
+        try:
+            phones = list_waba_phone_numbers()
+            if any(str(p.get("id")) == str(META_PHONE_NUMBER_ID) for p in phones):
+                return META_WABA_ID
+        except Exception as exc:
+            logger.warning("Non riesco a verificare il WABA via phone_numbers: %s", exc)
+    return None
 
 
 def summarize_templates(templates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1081,14 +1090,32 @@ def summarize_templates(templates: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     ]
 
 
+def list_owned_waba_ids() -> List[str]:
+    business_id = os.environ.get("META_BUSINESS_ID", "").strip()
+    if not business_id:
+        return []
+    try:
+        result = meta_api(
+            "GET",
+            f"{business_id}/owned_whatsapp_business_accounts",
+            params={"fields": "id,name", "limit": 50},
+        )
+        return [str(item.get("id")).strip() for item in result.get("data", []) if item.get("id")]
+    except Exception as exc:
+        logger.warning("Non riesco a leggere i WABA del business %s: %s", business_id, exc)
+        return []
+
+
 def meta_waba_audit() -> Dict[str, Any]:
     phone_waba_id = get_phone_number_waba_id()
     configured_waba_id = META_WABA_ID or None
-    waba_ids = []
-    if configured_waba_id:
-        waba_ids.append(configured_waba_id)
-    if phone_waba_id and phone_waba_id not in waba_ids:
-        waba_ids.append(phone_waba_id)
+    waba_ids: List[str] = []
+    for candidate in [configured_waba_id, phone_waba_id]:
+        if candidate and candidate not in waba_ids:
+            waba_ids.append(candidate)
+    for candidate in list_owned_waba_ids():
+        if candidate not in waba_ids:
+            waba_ids.append(candidate)
 
     templates_by_waba: Dict[str, List[Dict[str, Any]]] = {}
     for waba_id in waba_ids:
@@ -1113,9 +1140,12 @@ def meta_waba_audit() -> Dict[str, Any]:
                     "body_variables": count_template_body_variables(item),
                 })
 
+    resolved = get_template_definition()
     return {
         "configured_waba_id": configured_waba_id,
         "phone_number_waba_id": phone_waba_id,
+        "business_id": os.environ.get("META_BUSINESS_ID", "").strip() or None,
+        "waba_ids_checked": waba_ids,
         "waba_ids_match": bool(
             configured_waba_id and phone_waba_id and configured_waba_id == phone_waba_id
         ),
@@ -1127,7 +1157,12 @@ def meta_waba_audit() -> Dict[str, Any]:
         },
         "template_names": all_names,
         "consulenza_like_templates": consulenza_like,
-        "resolved_template": get_template_definition(),
+        "resolved_template": {
+            "name": resolved.get("name"),
+            "status": resolved.get("status"),
+            "language": template_language_code(resolved),
+            "body_variables": count_template_body_variables(resolved),
+        } if resolved else None,
     }
 
 
