@@ -94,6 +94,9 @@ QUIET_HOURS_END = int(os.environ.get("QUIET_HOURS_END", "7"))
 SUPPORT_DURATION_DAYS = int(os.environ.get("SUPPORT_DURATION_DAYS", "30"))
 EXPIRATION_POLL_SECONDS = int(os.environ.get("EXPIRATION_POLL_SECONDS", "900"))
 RECENT_HISTORY_LIMIT = int(os.environ.get("RECENT_HISTORY_LIMIT", "30"))
+RECOVERY_POLL_SECONDS = int(os.environ.get("RECOVERY_POLL_SECONDS", "300"))
+RECOVERY_DELAY_MIN_SECONDS = int(os.environ.get("RECOVERY_DELAY_MIN_SECONDS", "300"))
+RECOVERY_DELAY_MAX_SECONDS = int(os.environ.get("RECOVERY_DELAY_MAX_SECONDS", "600"))
 
 STATUS_PAUSED = "paused"
 STATUS_ACTIVE = "active"
@@ -104,6 +107,7 @@ STATUS_CLOSED = "closed"
 CAPTURE_NONE = "none"
 CAPTURE_QUESTIONNAIRE = "questionnaire"
 CAPTURE_PLAN = "plan"
+SILENT_NO_REPLY_MARKER = "[SILENT_NO_REPLY]"
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -111,6 +115,8 @@ active_timers: Dict[str, threading.Timer] = {}
 active_timers_lock = threading.Lock()
 expiration_worker_started = False
 expiration_worker_lock = threading.Lock()
+recovery_worker_started = False
+recovery_worker_lock = threading.Lock()
 
 
 # =============================================================================
@@ -240,6 +246,32 @@ Non dire che c'è stato un alert.
 Rispondi alla domanda concreta, collegati al piano e dai massimo una o due indicazioni per oggi o stanotte.
 Se il tema sanitario è delicato, rimanda al pediatra e non dare indicazioni mediche.
 Tono prudente, umano, diretto e non eccessivamente lungo.
+""".strip()
+
+QUALITY_PROMPT = """
+Sei il controllo qualità finale di una risposta WhatsApp scritta come Paola durante una consulenza sul sonno già attiva.
+Restituisci SOLO JSON valido:
+{
+  "send": true,
+  "rewrite": false,
+  "reason": "breve motivo"
+}
+
+Valuta la risposta rispetto a messaggio della mamma, piano, profilo e storico.
+Deve essere naturale, specifica, coerente con il piano, proporzionata alla richiesta e non sembrare generata.
+Deve evitare diagnosi, farmaci, prezzi, rinnovi, scadenze, riferimenti al bot o a Telegram.
+Non deve fare domande finali di abitudine, ripetere il contesto, dare più di 1-2 indicazioni o diventare lunga senza motivo.
+Metti rewrite=true se basta riscriverla.
+Metti send=false soltanto se è pericolosa, contraddittoria, inventa dati importanti o non risponde alla richiesta.
+""".strip()
+
+QUALITY_REWRITE_PROMPT = """
+Riscrivi il messaggio come Paola.
+Mantieni il contenuto utile, ma rendilo più naturale, specifico e proporzionato.
+Non aggiungere informazioni, non cambiare il piano, non fare diagnosi, non parlare di scadenze, prezzi, rinnovi, bot o Telegram.
+Elimina formule da intelligenza artificiale, ripetizioni, spiegazioni inutili e domande finali non indispensabili.
+Dai al massimo una o due indicazioni pratiche.
+Scrivi solo il testo finale da inviare su WhatsApp.
 """.strip()
 
 PROFILE_PROMPT = """
@@ -415,9 +447,10 @@ def get_recent_history(phone: str, limit: int = RECENT_HISTORY_LIMIT) -> List[Di
     cur.execute("""
         SELECT role, content, source FROM messages
         WHERE phone = %s
+          AND content <> %s
         ORDER BY timestamp DESC, id DESC
         LIMIT %s
-    """, (phone, limit))
+    """, (phone, SILENT_NO_REPLY_MARKER, limit))
     rows = list(reversed(cur.fetchall()))
     cur.close()
     conn.close()
@@ -430,6 +463,19 @@ def get_recent_history(phone: str, limit: int = RECENT_HISTORY_LIMIT) -> List[Di
             continue
         history.append({"role": role, "content": row["content"]})
     return history
+
+
+def mark_silent_no_reply(phone: str, reason: str = "") -> None:
+    saved = save_message(phone, "assistant", "system", SILENT_NO_REPLY_MARKER)
+    if saved:
+        logger.info("Chiusura registrata senza risposta per %s: %s", phone, reason)
+
+
+def get_history_before_pending(phone: str, limit: int = RECENT_HISTORY_LIMIT) -> List[Dict[str, str]]:
+    history = get_recent_history(phone, limit + 20)
+    while history and history[-1].get("role") == "user":
+        history.pop()
+    return history[-limit:]
 
 
 def get_pending_user_messages(phone: str) -> List[Dict[str, Any]]:
@@ -1163,7 +1209,7 @@ STORICO RECENTE:
 
 def generate_normal_reply(phone: str, pending_text: str, router: Dict[str, Any], forced_mode: Optional[str] = None) -> Optional[str]:
     case = get_case(phone)
-    history = get_recent_history(phone, RECENT_HISTORY_LIMIT)
+    history = get_history_before_pending(phone, RECENT_HISTORY_LIMIT)
     profile = case.get("profile_json") or {}
     depth = router.get("response_depth", "normal")
     if depth not in {"micro", "normal", "deep"}:
@@ -1212,12 +1258,72 @@ Se micro, usa normalmente 1-3 frasi. Se normal, resta essenziale. Se deep, appro
             max_output_tokens=max_tokens,
             image_data_url=image_data_url,
         )
-        return clean_reply(reply)
+        clean = clean_reply(reply)
+        return quality_control_reply(phone, pending_text, clean, router)
     except Exception as exc:
         logger.exception("Errore risposta AI %s: %s", phone, exc)
         send_to_topic(phone, f"Errore OpenAI: {exc}", kind="alert")
         send_private_alert(f"⚠️ Errore OpenAI per {phone}: {exc}")
         return None
+
+
+def quality_control_reply(
+    phone: str,
+    pending_text: str,
+    reply: str,
+    router: Dict[str, Any],
+) -> Optional[str]:
+    if not reply:
+        return None
+    case = get_case(phone)
+    context = f"""
+MESSAGGIO DELLA MAMMA:
+{pending_text}
+
+RISPOSTA PROPOSTA:
+{reply}
+
+CLASSIFICAZIONE:
+{json.dumps(router, ensure_ascii=False)}
+
+PROFILO:
+{profile_to_text(case.get('profile_json') or {})}
+
+PIANO:
+{case.get('plan') or ''}
+""".strip()
+    default = {"send": True, "rewrite": False, "reason": "fallback"}
+    try:
+        result_text = ai_text(
+            model=MODEL_CLASSIFIER,
+            system_prompts=[QUALITY_PROMPT],
+            user_text=context,
+            reasoning_effort="none",
+            verbosity="low",
+            max_output_tokens=300,
+        )
+        result = safe_json_loads(result_text, default)
+        if not bool(result.get("send", True)):
+            send_to_topic(phone, f"Risposta bloccata dal controllo qualità: {result.get('reason', '')}", kind="alert")
+            return None
+        if not bool(result.get("rewrite", False)):
+            return reply
+        rewritten = ai_text(
+            model=MODEL_CHAT,
+            system_prompts=[SYSTEM_PROMPT_BASE, QUALITY_REWRITE_PROMPT],
+            user_text=f"""Messaggio mamma:
+{pending_text}
+
+Risposta da correggere:
+{reply}""",
+            reasoning_effort="low",
+            verbosity="low",
+            max_output_tokens=900,
+        )
+        return clean_reply(rewritten)
+    except Exception as exc:
+        logger.exception("Errore controllo qualità %s: %s", phone, exc)
+        return reply
 
 
 def clean_reply(reply: str) -> str:
@@ -1332,7 +1438,7 @@ STORICO E RISPOSTE AL CHECKUP:
 # =============================================================================
 # TIMER E RISPOSTE
 # =============================================================================
-def schedule_response(phone: str, latest_text: str) -> None:
+def schedule_response(phone: str, latest_text: str, recovery: bool = False) -> None:
     if is_quiet_hours():
         logger.info("Orario silenzio: nessun timer per %s", phone)
         return
@@ -1340,7 +1446,9 @@ def schedule_response(phone: str, latest_text: str) -> None:
         if phone in active_timers:
             logger.info("Timer già attivo per %s", phone)
             return
-        if is_immediate_question(latest_text):
+        if recovery:
+            delay = random.randint(RECOVERY_DELAY_MIN_SECONDS, RECOVERY_DELAY_MAX_SECONDS)
+        elif is_immediate_question(latest_text):
             delay = random.randint(IMMEDIATE_DELAY_MIN_SECONDS, IMMEDIATE_DELAY_MAX_SECONDS)
         else:
             delay = random.randint(NORMAL_DELAY_MIN_SECONDS, NORMAL_DELAY_MAX_SECONDS)
@@ -1402,6 +1510,7 @@ def process_response(phone: str) -> None:
     if not pending_text:
         return
     if is_obvious_closing_message(pending_text):
+        mark_silent_no_reply(phone, "chiusura rilevata dal timer")
         logger.info("Chiusura/cortesia: nessuna risposta per %s", phone)
         return
 
@@ -1464,6 +1573,61 @@ def expiration_worker() -> None:
         time.sleep(EXPIRATION_POLL_SECONDS)
 
 
+def pending_recovery_worker() -> None:
+    while True:
+        try:
+            if not is_quiet_hours():
+                conn = get_db()
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute("""
+                    SELECT c.phone, c.status
+                    FROM support_cases c
+                    WHERE c.status IN (%s, %s)
+                      AND EXISTS (
+                          SELECT 1 FROM messages u
+                          WHERE u.phone = c.phone
+                            AND u.role = 'user'
+                            AND u.timestamp > COALESCE(
+                                (SELECT MAX(a.timestamp) FROM messages a
+                                 WHERE a.phone = c.phone AND a.role IN ('assistant', 'admin')),
+                                NOW() - INTERVAL '45 days'
+                            )
+                      )
+                """, (STATUS_ACTIVE, STATUS_CHECKUP))
+                rows = [dict(r) for r in cur.fetchall()]
+                cur.close()
+                conn.close()
+                for row in rows:
+                    phone = row["phone"]
+                    with active_timers_lock:
+                        has_timer = phone in active_timers
+                    if has_timer:
+                        continue
+                    if row["status"] == STATUS_CHECKUP:
+                        schedule_checkup_review(phone)
+                    else:
+                        pending = get_pending_user_messages(phone)
+                        pending_text = "\n".join(x.get("content", "") for x in pending).strip()
+                        if pending_text:
+                            if is_obvious_closing_message(pending_text):
+                                mark_silent_no_reply(phone, "recupero messaggio notturno di cortesia")
+                            else:
+                                schedule_response(phone, pending_text, recovery=True)
+        except Exception as exc:
+            logger.exception("Errore recupero timer pendenti: %s", exc)
+        time.sleep(RECOVERY_POLL_SECONDS)
+
+
+def start_recovery_worker_once() -> None:
+    global recovery_worker_started
+    with recovery_worker_lock:
+        if recovery_worker_started:
+            return
+        thread = threading.Thread(target=pending_recovery_worker, daemon=True, name="pending-recovery-worker")
+        thread.start()
+        recovery_worker_started = True
+
+
 def start_expiration_worker_once() -> None:
     global expiration_worker_started
     with expiration_worker_lock:
@@ -1519,6 +1683,13 @@ def handle_inbound_message(message: Dict[str, Any], value: Dict[str, Any]) -> No
         send_whatsapp_message(phone, "Non riesco a vedere i video, scrivimi pure qui in chat.", source="bot")
         return
     if is_obvious_closing_message(content) or media_type in {"sticker", "reaction"}:
+        with active_timers_lock:
+            has_timer = phone in active_timers
+        if not has_timer:
+            pending = get_pending_user_messages(phone)
+            pending_text = "\n".join(x.get("content", "") for x in pending).strip()
+            if pending_text and is_obvious_closing_message(pending_text):
+                mark_silent_no_reply(phone, "chiusura breve senza timer attivo")
         return
     schedule_response(phone, content)
 
@@ -1767,6 +1938,25 @@ def process_telegram_update(update: Dict[str, Any]) -> None:
         send_whatsapp_message(phone, text, source="paola")
 
 
+def setup_telegram_webhook_if_configured() -> None:
+    base = public_base_url()
+    if not base:
+        logger.info("PUBLIC_BASE_URL non impostata: webhook Telegram da configurare manualmente")
+        return
+    try:
+        payload: Dict[str, Any] = {
+            "url": f"{base}/telegram_webhook",
+            "allowed_updates": ["message", "edited_message"],
+            "drop_pending_updates": False,
+        }
+        if TELEGRAM_WEBHOOK_SECRET:
+            payload["secret_token"] = TELEGRAM_WEBHOOK_SECRET
+        telegram_api("setWebhook", json_data=payload)
+        logger.info("Webhook Telegram configurato su %s/telegram_webhook", base)
+    except Exception as exc:
+        logger.exception("Errore configurazione webhook Telegram: %s", exc)
+
+
 # =============================================================================
 # ROUTES
 # =============================================================================
@@ -1884,7 +2074,9 @@ def admin_reload_profile(phone: str):
 # AVVIO
 # =============================================================================
 init_db()
+setup_telegram_webhook_if_configured()
 start_expiration_worker_once()
+start_recovery_worker_once()
 ensure_meta_subscriptions()
 
 if __name__ == "__main__":
