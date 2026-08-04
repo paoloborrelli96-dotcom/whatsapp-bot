@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-04-topic-full-phone-v11"
+APP_BUILD = "2026-08-04-auto-memory-v12"
 
 
 def env_required(name: str) -> str:
@@ -566,6 +566,79 @@ def append_capture_buffer(phone: str, text: str) -> None:
     current = case.get("capture_buffer") or ""
     new_value = f"{current}\n\n{text.strip()}".strip()
     update_case(phone, capture_buffer=new_value)
+
+
+def count_whatsapp_user_messages(phone: str) -> int:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COUNT(*) FROM messages
+        WHERE phone = %s AND role = 'user' AND source = 'whatsapp'
+          AND content <> %s
+    """, (phone, SILENT_NO_REPLY_MARKER))
+    count = int(cur.fetchone()[0])
+    cur.close()
+    conn.close()
+    return count
+
+
+def build_questionnaire_from_whatsapp_history(phone: str) -> str:
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT content, timestamp FROM messages
+        WHERE phone = %s AND role = 'user' AND source = 'whatsapp'
+          AND content <> %s
+        ORDER BY timestamp ASC, id ASC
+    """, (phone, SILENT_NO_REPLY_MARKER))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    lines: List[str] = []
+    for row in rows:
+        content = (row.get("content") or "").strip()
+        if not content:
+            continue
+        ts = row.get("timestamp")
+        prefix = format_dt(ts) if ts else "-"
+        lines.append(f"[{prefix}] {content}")
+    return "\n\n".join(lines)
+
+
+def refresh_questionnaire_memory(phone: str) -> str:
+    text = build_questionnaire_from_whatsapp_history(phone)
+    if text.strip():
+        update_case(phone, questionnaire=text)
+    return text
+
+
+def ingest_plan_document(
+    phone: str,
+    data: bytes,
+    filename: str,
+    caption: Optional[str] = None,
+) -> int:
+    extracted = extract_document_text(data, filename)
+    if caption:
+        extracted = f"{caption}\n\n{extracted}".strip()
+    updates: Dict[str, Any] = {"plan": extracted}
+    lower = (filename or "").lower()
+    if lower.endswith(".pdf"):
+        updates["plan_filename"] = filename
+        updates["plan_file_mime"] = "application/pdf"
+        updates["plan_file_data"] = data
+    update_case(phone, **updates)
+    return len(extracted)
+
+
+def sync_case_memory(phone: str) -> Dict[str, int]:
+    questionnaire = refresh_questionnaire_memory(phone)
+    case = get_case(phone)
+    return {
+        "mother_messages": count_whatsapp_user_messages(phone),
+        "questionnaire_chars": len(questionnaire or ""),
+        "plan_chars": len((case.get("plan") or "")),
+    }
 
 
 def add_alert(phone: str, category: str, severity: str, reason: str) -> None:
@@ -1440,7 +1513,7 @@ def send_saved_plan_pdf(phone: str, caption: Optional[str] = None) -> Tuple[bool
     filename = (case.get("plan_filename") or "piano.pdf").strip()
     mime = (case.get("plan_file_mime") or guess_document_mime(filename)).strip()
     if not data:
-        return False, "nessun PDF del piano salvato: usa /piano e carica un PDF prima di /fine o /inviapiano"
+        return False, "nessun PDF del piano salvato: carica un PDF nel topic prima di usare /inviapiano"
     default_caption = "Ecco il piano personalizzato per il sonno del tuo bambino 🌙"
     return send_whatsapp_document(
         phone,
@@ -2141,6 +2214,7 @@ def handle_inbound_message(message: Dict[str, Any], value: Dict[str, Any]) -> No
     if not inserted:
         return
     send_to_topic(phone, content, kind="mother")
+    refresh_questionnaire_memory(phone)
 
     status = case.get("status", STATUS_PAUSED)
     if status in {STATUS_PAUSED, STATUS_REVIEW, STATUS_CLOSED}:
@@ -2200,55 +2274,17 @@ def telegram_admin_allowed(message: Dict[str, Any]) -> bool:
 
 def case_status_text(phone: str) -> str:
     case = get_case(phone)
+    memory = sync_case_memory(phone)
     return (
         f"Stato bot: {case.get('status')}\n"
-        f"Questionario: {'presente' if case.get('questionnaire') else 'mancante'}\n"
-        f"Piano: {'presente' if case.get('plan') else 'mancante'}\n"
+        f"Messaggi WhatsApp mamma: {memory['mother_messages']}\n"
+        f"Memoria questionario: {memory['questionnaire_chars']} caratteri\n"
+        f"Memoria piano: {memory['plan_chars']} caratteri\n"
         f"PDF piano salvato: {'sì' if case.get('plan_file_data') else 'no'}\n"
         f"Attivazione: {format_dt(case.get('activated_at'))}\n"
         f"Scadenza: {format_dt(case.get('support_end_at'))}\n"
-        f"Alert scadenza inviato: {'sì' if case.get('expiration_alert_sent') else 'no'}\n"
-        f"Modalità caricamento: {case.get('capture_mode')}"
+        f"Alert scadenza inviato: {'sì' if case.get('expiration_alert_sent') else 'no'}"
     )
-
-
-def handle_capture_message(phone: str, message: Dict[str, Any]) -> bool:
-    case = get_case(phone)
-    mode = case.get("capture_mode", CAPTURE_NONE)
-    if mode == CAPTURE_NONE:
-        return False
-    text = (message.get("text") or message.get("caption") or "").strip()
-    document = message.get("document")
-    if document:
-        try:
-            data, file_path = download_telegram_file(document["file_id"])
-            filename = document.get("file_name") or file_path
-            extracted = extract_document_text(data, filename)
-            if text:
-                extracted = f"{text}\n\n{extracted}".strip()
-            append_capture_buffer(phone, extracted)
-            if mode == CAPTURE_PLAN and filename.lower().endswith(".pdf"):
-                update_case(
-                    phone,
-                    plan_filename=filename,
-                    plan_file_mime="application/pdf",
-                    plan_file_data=data,
-                )
-                send_to_topic(
-                    phone,
-                    f"PDF del piano salvato ({filename}, {len(data)} byte). "
-                    "Con /fine lo invio anche su WhatsApp alla mamma.",
-                    kind="system",
-                )
-            send_to_topic(phone, f"Documento aggiunto a {mode}: {len(extracted)} caratteri.", kind="system")
-        except Exception as exc:
-            send_to_topic(phone, f"Non sono riuscito a leggere il documento: {exc}", kind="alert")
-        return True
-    if text and not text.startswith("/"):
-        append_capture_buffer(phone, text)
-        send_to_topic(phone, f"Parte aggiunta a {mode}: {len(text)} caratteri.", kind="system")
-        return True
-    return False
 
 
 def handle_telegram_command(phone: str, text: str) -> None:
@@ -2274,48 +2310,6 @@ def handle_telegram_command(phone: str, text: str) -> None:
             )
         return
 
-    if cmd == "/questionario":
-        update_case(phone, capture_mode=CAPTURE_QUESTIONNAIRE, capture_buffer="")
-        send_to_topic(phone, "Modalità questionario attiva. Incolla uno o più messaggi oppure un file TXT/PDF/DOCX, poi usa /fine.", kind="system")
-        return
-    if cmd == "/piano":
-        update_case(
-            phone,
-            capture_mode=CAPTURE_PLAN,
-            capture_buffer="",
-            plan_filename=None,
-            plan_file_mime=None,
-            plan_file_data=None,
-        )
-        send_to_topic(
-            phone,
-            "Modalità piano attiva. Carica un PDF (consigliato) o TXT/DOCX, poi usa /fine. "
-            "Il PDF verrà inviato alla mamma su WhatsApp.",
-            kind="system",
-        )
-        return
-    if cmd == "/fine":
-        case = get_case(phone)
-        mode = case.get("capture_mode")
-        buffer = (case.get("capture_buffer") or "").strip()
-        if mode not in {CAPTURE_QUESTIONNAIRE, CAPTURE_PLAN}:
-            send_to_topic(phone, "Non c'è un caricamento attivo.", kind="system")
-            return
-        if not buffer:
-            send_to_topic(phone, "Non ho ricevuto contenuti. Il caricamento resta aperto.", kind="alert")
-            return
-        field = "questionnaire" if mode == CAPTURE_QUESTIONNAIRE else "plan"
-        update_case(phone, **{field: buffer, "capture_mode": CAPTURE_NONE, "capture_buffer": ""})
-        send_to_topic(phone, f"✅ {('Questionario' if field == 'questionnaire' else 'Piano')} salvato: {len(buffer)} caratteri.", kind="system")
-        if mode == CAPTURE_PLAN:
-            sent, error = send_saved_plan_pdf(phone)
-            if sent:
-                send_to_topic(phone, "📎 PDF del piano inviato alla mamma su WhatsApp.", kind="system")
-            elif case.get("plan_file_data"):
-                send_to_topic(phone, f"PDF non inviato: {error}", kind="alert")
-            else:
-                send_to_topic(phone, "Piano salvato come testo (nessun PDF da inviare).", kind="system")
-        return
     if cmd == "/inviapiano":
         sent, error = send_saved_plan_pdf(phone)
         if sent:
@@ -2324,15 +2318,14 @@ def handle_telegram_command(phone: str, text: str) -> None:
             send_to_topic(phone, f"PDF non inviato: {error}", kind="alert")
         return
     if cmd == "/attiva":
-        case = get_case(phone)
-        missing = []
-        if not (case.get("questionnaire") or "").strip():
-            missing.append("questionario")
-        if not (case.get("plan") or "").strip():
-            missing.append("piano")
-        if missing:
-            send_to_topic(phone, f"Non posso attivare: manca {', '.join(missing)}.", kind="alert")
-            return
+        memory = sync_case_memory(phone)
+        if memory["mother_messages"] == 0 and memory["plan_chars"] == 0:
+            send_to_topic(
+                phone,
+                "Attenzione: non ho ancora messaggi WhatsApp della mamma né un piano salvato. "
+                "Attivo comunque il bot con la memoria disponibile.",
+                kind="alert",
+            )
         cancel_timer(phone, "attivazione")
         profile = extract_profile(phone)
         activated = now_local()
@@ -2345,14 +2338,19 @@ def handle_telegram_command(phone: str, text: str) -> None:
             expiration_alert_sent=False,
             checkup_started_at=None,
             checkup_ready_alert_sent=False,
+            capture_mode=CAPTURE_NONE,
+            capture_buffer="",
         )
         send_to_topic(
             phone,
             "✅ SUPPORTO ATTIVATO\n\n"
             f"Attivazione: {format_dt(activated)}\n"
             f"Alert fine consulenza: {format_dt(end_at)}\n"
+            f"Messaggi mamma in memoria: {memory['mother_messages']}\n"
+            f"Questionario (da chat): {memory['questionnaire_chars']} caratteri\n"
+            f"Piano in memoria: {memory['plan_chars']} caratteri\n"
             f"Profilo estratto: {'sì' if profile else 'parziale'}\n"
-            "Il bot continuerà a rispondere anche dopo l'alert dei 30 giorni.",
+            "Il bot usa la chat WhatsApp e il piano caricato. Continua anche dopo l'alert dei 30 giorni.",
             kind="system",
         )
         return
@@ -2514,7 +2512,17 @@ def handle_new_case_command(message: Dict[str, Any], text: str) -> None:
         return
 
     ensure_case(phone, display_name)
-    update_case(phone, status=STATUS_PAUSED)
+    update_case(
+        phone,
+        status=STATUS_PAUSED,
+        questionnaire=None,
+        plan=None,
+        plan_filename=None,
+        plan_file_mime=None,
+        plan_file_data=None,
+        capture_mode=CAPTURE_NONE,
+        capture_buffer="",
+    )
 
     thread_id = get_or_create_topic(phone, display_name)
     if not thread_id:
@@ -2585,24 +2593,32 @@ def process_telegram_update(update: Dict[str, Any]) -> None:
     if text.startswith("/"):
         handle_telegram_command(phone, text)
         return
-    if handle_capture_message(phone, message):
-        return
 
     document = message.get("document")
     if document:
         try:
             data, file_path = download_telegram_file(document["file_id"])
             filename = document.get("file_name") or file_path
-            if filename.lower().endswith(".pdf"):
-                cancel_timer(phone, "documento manuale da Telegram")
-                caption = (message.get("caption") or "").strip() or None
-                sent, error = send_whatsapp_document(phone, data, filename, caption=caption, source="paola")
-                if not sent:
-                    send_to_topic(phone, f"PDF non inviato: {error}", kind="alert")
-                return
-            send_to_topic(phone, "Per ora posso inoltrare su WhatsApp solo file PDF.", kind="system")
+            caption = (message.get("caption") or "").strip() or None
+            lower = filename.lower()
+            if lower.endswith((".pdf", ".txt", ".docx")):
+                chars = ingest_plan_document(phone, data, filename, caption=caption)
+                send_to_topic(
+                    phone,
+                    f"📎 Piano letto e salvato in memoria ({chars} caratteri).",
+                    kind="system",
+                )
+                if lower.endswith(".pdf"):
+                    cancel_timer(phone, "documento piano da Telegram")
+                    sent, error = send_whatsapp_document(
+                        phone, data, filename, caption=caption, source="paola",
+                    )
+                    if not sent:
+                        send_to_topic(phone, f"PDF non inviato su WhatsApp: {error}", kind="alert")
+            else:
+                send_to_topic(phone, "Per il piano usa PDF, TXT o DOCX.", kind="system")
         except Exception as exc:
-            send_to_topic(phone, f"Non sono riuscito a inoltrare il documento: {exc}", kind="alert")
+            send_to_topic(phone, f"Non sono riuscito a gestire il documento: {exc}", kind="alert")
         return
 
     if text:
