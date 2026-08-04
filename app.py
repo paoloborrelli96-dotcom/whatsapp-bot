@@ -67,11 +67,7 @@ META_APP_SECRET = env_required("META_APP_SECRET")
 META_VERIFY_TOKEN = env_required("META_VERIFY_TOKEN")
 META_PHONE_NUMBER_ID = env_required("META_PHONE_NUMBER_ID")
 META_WABA_ID = os.environ.get("META_WABA_ID", "").strip()
-META_APP_ID = os.environ.get("META_APP_ID", "").strip()
-META_API_VERSION = os.environ.get("META_API_VERSION", "v22.0").strip()
-ADMIN_SETUP_SECRET = os.environ.get("ADMIN_SETUP_SECRET", "").strip()
-META_TEMPLATE_CONSULENZA = os.environ.get("META_TEMPLATE_CONSULENZA", "consulenza").strip()
-META_TEMPLATE_CONSULENZA_LANG = os.environ.get("META_TEMPLATE_CONSULENZA_LANG", "it").strip()
+META_API_VERSION = os.environ.get("META_API_VERSION", "v26.0").strip()
 
 TIMEZONE = os.environ.get("TIMEZONE", "Europe/Rome")
 TZ = pytz.timezone(TIMEZONE)
@@ -97,6 +93,7 @@ RECENT_HISTORY_LIMIT = int(os.environ.get("RECENT_HISTORY_LIMIT", "30"))
 RECOVERY_POLL_SECONDS = int(os.environ.get("RECOVERY_POLL_SECONDS", "300"))
 RECOVERY_DELAY_MIN_SECONDS = int(os.environ.get("RECOVERY_DELAY_MIN_SECONDS", "300"))
 RECOVERY_DELAY_MAX_SECONDS = int(os.environ.get("RECOVERY_DELAY_MAX_SECONDS", "600"))
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
 
 STATUS_PAUSED = "paused"
 STATUS_ACTIVE = "active"
@@ -247,6 +244,7 @@ Rispondi alla domanda concreta, collegati al piano e dai massimo una o due indic
 Se il tema sanitario è delicato, rimanda al pediatra e non dare indicazioni mediche.
 Tono prudente, umano, diretto e non eccessivamente lungo.
 """.strip()
+
 
 QUALITY_PROMPT = """
 Sei il controllo qualità finale di una risposta WhatsApp scritta come Paola durante una consulenza sul sonno già attiva.
@@ -465,19 +463,6 @@ def get_recent_history(phone: str, limit: int = RECENT_HISTORY_LIMIT) -> List[Di
     return history
 
 
-def mark_silent_no_reply(phone: str, reason: str = "") -> None:
-    saved = save_message(phone, "assistant", "system", SILENT_NO_REPLY_MARKER)
-    if saved:
-        logger.info("Chiusura registrata senza risposta per %s: %s", phone, reason)
-
-
-def get_history_before_pending(phone: str, limit: int = RECENT_HISTORY_LIMIT) -> List[Dict[str, str]]:
-    history = get_recent_history(phone, limit + 20)
-    while history and history[-1].get("role") == "user":
-        history.pop()
-    return history[-limit:]
-
-
 def get_pending_user_messages(phone: str) -> List[Dict[str, Any]]:
     conn = get_db()
     cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -497,6 +482,19 @@ def get_pending_user_messages(phone: str) -> List[Dict[str, Any]]:
     cur.close()
     conn.close()
     return rows
+
+
+def mark_silent_no_reply(phone: str, reason: str = "") -> None:
+    saved = save_message(phone, "assistant", "system", SILENT_NO_REPLY_MARKER)
+    if saved:
+        logger.info("Chiusura registrata senza risposta per %s: %s", phone, reason)
+
+
+def get_history_before_pending(phone: str, limit: int = RECENT_HISTORY_LIMIT) -> List[Dict[str, str]]:
+    history = get_recent_history(phone, limit + 20)
+    while history and history[-1].get("role") == "user":
+        history.pop()
+    return history[-limit:]
 
 
 def append_capture_buffer(phone: str, text: str) -> None:
@@ -785,169 +783,13 @@ def verify_meta_signature(raw_body: bytes, signature_header: str) -> bool:
     return hmac.compare_digest(expected, received)
 
 
-def meta_api(
-    method: str,
-    path: str,
-    *,
-    json_data: Optional[Dict[str, Any]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    timeout: int = 60,
-):
+def meta_api(method: str, path: str, *, json_data: Optional[Dict[str, Any]] = None, timeout: int = 60):
     url = f"https://graph.facebook.com/{META_API_VERSION}/{path.lstrip('/')}"
-    headers = {"Authorization": f"Bearer {META_ACCESS_TOKEN}"}
-    if json_data is not None:
-        headers["Content-Type"] = "application/json"
-    response = requests.request(method, url, headers=headers, json=json_data, params=params, timeout=timeout)
+    headers = {"Authorization": f"Bearer {META_ACCESS_TOKEN}", "Content-Type": "application/json"}
+    response = requests.request(method, url, headers=headers, json=json_data, timeout=timeout)
     if response.status_code >= 400:
         raise RuntimeError(f"Meta API {response.status_code}: {response.text[:800]}")
-    if not response.text.strip():
-        return {}
     return response.json()
-
-
-def public_base_url() -> str:
-    explicit = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
-    if explicit:
-        return explicit
-    railway = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
-    if railway:
-        return f"https://{railway}"
-    return ""
-
-
-def meta_webhook_url() -> str:
-    base = public_base_url()
-    return f"{base}/meta_webhook" if base else "/meta_webhook"
-
-
-def admin_authorized() -> bool:
-    secret = ADMIN_SETUP_SECRET or META_VERIFY_TOKEN
-    received = request.headers.get("X-Admin-Secret", "")
-    return bool(secret) and hmac.compare_digest(received, secret)
-
-
-def list_waba_phone_numbers() -> List[Dict[str, Any]]:
-    if not META_WABA_ID:
-        return []
-    data = meta_api(
-        "GET",
-        f"{META_WABA_ID}/phone_numbers",
-        params={"fields": "id,display_phone_number,verified_name,quality_rating,code_verification_status"},
-    )
-    return data.get("data") or []
-
-
-def get_configured_phone_number() -> Dict[str, Any]:
-    return meta_api(
-        "GET",
-        META_PHONE_NUMBER_ID,
-        params={"fields": "id,display_phone_number,verified_name,quality_rating,code_verification_status"},
-    )
-
-
-def is_waba_subscribed() -> bool:
-    if not META_WABA_ID:
-        return False
-    data = meta_api("GET", f"{META_WABA_ID}/subscribed_apps")
-    return bool(data.get("data"))
-
-
-def subscribe_waba_to_app() -> Dict[str, Any]:
-    if not META_WABA_ID:
-        raise RuntimeError("META_WABA_ID mancante")
-    return meta_api("POST", f"{META_WABA_ID}/subscribed_apps")
-
-
-def meta_setup_status() -> Dict[str, Any]:
-    status: Dict[str, Any] = {
-        "api_version": META_API_VERSION,
-        "webhook_url": meta_webhook_url(),
-        "phone_number_id": META_PHONE_NUMBER_ID,
-        "waba_id": META_WABA_ID or None,
-        "app_id": META_APP_ID or None,
-        "waba_subscribed": False,
-        "configured_phone": None,
-        "waba_phones": [],
-        "phone_id_matches_waba": None,
-        "errors": [],
-    }
-    try:
-        status["configured_phone"] = get_configured_phone_number()
-    except Exception as exc:
-        status["errors"].append(f"phone_number: {exc}")
-    if META_WABA_ID:
-        try:
-            status["waba_subscribed"] = is_waba_subscribed()
-        except Exception as exc:
-            status["errors"].append(f"waba_subscription: {exc}")
-        try:
-            phones = list_waba_phone_numbers()
-            status["waba_phones"] = phones
-            configured_id = str(META_PHONE_NUMBER_ID)
-            status["phone_id_matches_waba"] = any(str(p.get("id")) == configured_id for p in phones)
-        except Exception as exc:
-            status["errors"].append(f"waba_phones: {exc}")
-    return status
-
-
-def ensure_meta_subscriptions() -> None:
-    if not META_WABA_ID:
-        logger.warning("META_WABA_ID non impostato: salto subscribe WABA")
-        return
-    try:
-        if not is_waba_subscribed():
-            subscribe_waba_to_app()
-            logger.info("App iscritta al WABA %s", META_WABA_ID)
-        else:
-            logger.info("App già iscritta al WABA %s", META_WABA_ID)
-    except Exception as exc:
-        logger.exception("Impossibile iscrivere l'app al WABA: %s", exc)
-
-
-def send_whatsapp_template(
-    phone: str,
-    template_name: str = META_TEMPLATE_CONSULENZA,
-    language: str = META_TEMPLATE_CONSULENZA_LANG,
-    body_parameters: Optional[List[str]] = None,
-) -> Tuple[bool, Optional[str]]:
-    recipient = phone_for_meta(phone)
-    if not recipient:
-        return False, "numero destinatario non valido"
-    template_payload: Dict[str, Any] = {
-        "name": template_name,
-        "language": {"code": language},
-    }
-    if body_parameters:
-        template_payload["components"] = [{
-            "type": "body",
-            "parameters": [{"type": "text", "text": str(p)} for p in body_parameters],
-        }]
-    try:
-        result = meta_api("POST", f"{META_PHONE_NUMBER_ID}/messages", json_data={
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": recipient,
-            "type": "template",
-            "template": template_payload,
-        })
-        message_id = None
-        if result.get("messages"):
-            message_id = result["messages"][0].get("id")
-        save_message(phone, "assistant", "meta_api", f"[template:{template_name}]", provider_message_id=message_id)
-        send_to_topic(phone, f"[template:{template_name}]", kind="bot")
-        return True, None
-    except Exception as exc:
-        logger.exception("Errore invio template WhatsApp %s: %s", phone, exc)
-        return False, str(exc)
-
-
-def send_consulenza_template(phone: str, body_parameters: Optional[List[str]] = None) -> Tuple[bool, Optional[str]]:
-    return send_whatsapp_template(
-        phone,
-        META_TEMPLATE_CONSULENZA,
-        META_TEMPLATE_CONSULENZA_LANG,
-        body_parameters,
-    )
 
 
 def send_whatsapp_message(phone: str, text: str, source: str = "bot") -> bool:
@@ -1939,20 +1781,19 @@ def process_telegram_update(update: Dict[str, Any]) -> None:
 
 
 def setup_telegram_webhook_if_configured() -> None:
-    base = public_base_url()
-    if not base:
+    if not PUBLIC_BASE_URL:
         logger.info("PUBLIC_BASE_URL non impostata: webhook Telegram da configurare manualmente")
         return
     try:
         payload: Dict[str, Any] = {
-            "url": f"{base}/telegram_webhook",
+            "url": f"{PUBLIC_BASE_URL}/telegram_webhook",
             "allowed_updates": ["message", "edited_message"],
             "drop_pending_updates": False,
         }
         if TELEGRAM_WEBHOOK_SECRET:
             payload["secret_token"] = TELEGRAM_WEBHOOK_SECRET
         telegram_api("setWebhook", json_data=payload)
-        logger.info("Webhook Telegram configurato su %s/telegram_webhook", base)
+        logger.info("Webhook Telegram configurato su %s/telegram_webhook", PUBLIC_BASE_URL)
     except Exception as exc:
         logger.exception("Errore configurazione webhook Telegram: %s", exc)
 
@@ -1962,13 +1803,7 @@ def setup_telegram_webhook_if_configured() -> None:
 # =============================================================================
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({
-        "ok": True,
-        "service": "supporto-fase4-meta",
-        "time": now_local().isoformat(),
-        "meta_webhook": meta_webhook_url(),
-        "phone_number_id": META_PHONE_NUMBER_ID,
-    })
+    return jsonify({"ok": True, "service": "supporto-fase4-meta", "time": now_local().isoformat()})
 
 
 @app.route("/meta_webhook", methods=["GET"])
@@ -2004,70 +1839,6 @@ def telegram_webhook():
     return Response("OK", status=200)
 
 
-@app.route("/admin/meta/status", methods=["GET"])
-def admin_meta_status():
-    if not admin_authorized():
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
-    return jsonify({"ok": True, "meta": meta_setup_status()})
-
-
-@app.route("/admin/meta/setup", methods=["POST"])
-def admin_meta_setup():
-    if not admin_authorized():
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
-    try:
-        result = subscribe_waba_to_app()
-        return jsonify({"ok": True, "subscribed": result, "meta": meta_setup_status()})
-    except Exception as exc:
-        logger.exception("Errore setup Meta: %s", exc)
-        return jsonify({"ok": False, "error": str(exc), "meta": meta_setup_status()}), 500
-
-
-@app.route("/admin/meta/test", methods=["POST"])
-def admin_meta_test_message():
-    if not admin_authorized():
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
-    payload = request.get_json(silent=True) or {}
-    phone = normalize_phone(payload.get("to", ""))
-    text = (payload.get("text") or "Test connessione WhatsApp Cloud API - Genitori in Armonia").strip()
-    use_template = payload.get("template", True)
-    template_params = payload.get("template_params") or payload.get("parameters")
-    if template_params and not isinstance(template_params, list):
-        template_params = None
-    if not phone:
-        return jsonify({"ok": False, "error": "Campo 'to' obbligatorio, es. +393331234567"}), 400
-    error = None
-    if use_template:
-        sent, error = send_consulenza_template(phone, template_params)
-        if sent:
-            return jsonify({
-                "ok": True,
-                "to": phone,
-                "mode": f"template:{META_TEMPLATE_CONSULENZA}:{META_TEMPLATE_CONSULENZA_LANG}",
-                "meta": meta_setup_status(),
-            })
-    recipient = phone_for_meta(phone)
-    try:
-        meta_api("POST", f"{META_PHONE_NUMBER_ID}/messages", json_data={
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": recipient,
-            "type": "text",
-            "text": {"preview_url": False, "body": text},
-        })
-        return jsonify({"ok": True, "to": phone, "mode": "text", "meta": meta_setup_status()})
-    except Exception as exc:
-        error = str(exc)
-    return jsonify({"ok": False, "to": phone, "error": error, "hint": "Aggiungi il numero come destinatario di test in Meta Passaggio 1, oppure invia prima un messaggio al numero +1 555-647-0518", "meta": meta_setup_status()}), 502
-
-
-@app.route("/admin/reload_profile/<path:phone>", methods=["POST"])
-def admin_reload_profile(phone: str):
-    # Endpoint tecnico: proteggerlo a livello Railway/rete se viene usato.
-    normalized = normalize_phone(phone)
-    if not normalized:
-        return jsonify({"ok": False, "error": "phone non valido"}), 400
-    return jsonify({"ok": True, "profile": extract_profile(normalized)})
 
 
 # =============================================================================
@@ -2077,7 +1848,6 @@ init_db()
 setup_telegram_webhook_if_configured()
 start_expiration_worker_once()
 start_recovery_worker_once()
-ensure_meta_subscriptions()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
