@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-04-telegram-nuova-v4"
+APP_BUILD = "2026-08-04-template-telegram-v5"
 
 
 def env_required(name: str) -> str:
@@ -72,7 +72,7 @@ META_WABA_ID = os.environ.get("META_WABA_ID", "").strip()
 META_APP_ID = os.environ.get("META_APP_ID", "").strip()
 META_API_VERSION = os.environ.get("META_API_VERSION", "v22.0").strip()
 ADMIN_SETUP_SECRET = os.environ.get("ADMIN_SETUP_SECRET", "").strip()
-# Template Meta approvato, definito direttamente nel codice.
+# Template Meta approvato: configurato direttamente nel codice.
 META_TEMPLATE_CONSULENZA = "consulenza"
 META_TEMPLATE_CONSULENZA_LANG = "it"
 
@@ -296,7 +296,7 @@ def get_db():
 
 
 def init_db() -> None:
-    """Crea le tabelle e aggiorna in sicurezza gli schemi già esistenti."""
+    """Crea le tabelle e aggiorna gli schemi PostgreSQL già esistenti."""
     conn = get_db()
     cur = conn.cursor()
 
@@ -395,19 +395,19 @@ def init_db() -> None:
             conn.commit()
         except Exception as exc:
             conn.rollback()
-            logger.warning("Migrazione database non applicata (%s): %s", statement, exc)
+            logger.warning("Migrazione non applicata (%s): %s", statement, exc)
 
-    index_statements = [
+    indexes = [
         "CREATE INDEX IF NOT EXISTS idx_messages_phone_time ON messages(phone, timestamp)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_messages_provider_message_id ON messages(provider_message_id)",
     ]
-    for statement in index_statements:
+    for statement in indexes:
         try:
             cur.execute(statement)
             conn.commit()
         except Exception as exc:
             conn.rollback()
-            logger.warning("Indice database non applicato (%s): %s", statement, exc)
+            logger.warning("Indice non applicato (%s): %s", statement, exc)
 
     cur.close()
     conn.close()
@@ -1007,6 +1007,102 @@ def send_consulenza_template(phone: str, body_parameters: Optional[List[str]] = 
         META_TEMPLATE_CONSULENZA_LANG,
         body_parameters,
     )
+
+
+
+def get_template_definition() -> Optional[Dict[str, Any]]:
+    """Prova a leggere da Meta lingua e variabili del template approvato."""
+    if not META_WABA_ID:
+        return None
+    try:
+        result = meta_api(
+            "GET",
+            f"{META_WABA_ID}/message_templates",
+            params={
+                "fields": "name,status,language,components",
+                "limit": 100,
+            },
+        )
+        for item in result.get("data", []) or []:
+            if (
+                str(item.get("name", "")).strip() == META_TEMPLATE_CONSULENZA
+                and str(item.get("status", "")).upper() == "APPROVED"
+            ):
+                return item
+    except Exception as exc:
+        logger.warning("Non riesco a leggere il template da Meta: %s", exc)
+    return None
+
+
+def count_template_body_variables(template: Dict[str, Any]) -> int:
+    maximum = 0
+    for component in template.get("components", []) or []:
+        if str(component.get("type", "")).upper() != "BODY":
+            continue
+        body_text = str(component.get("text") or "")
+        for value in re.findall(r"\{\{(\d+)\}\}", body_text):
+            maximum = max(maximum, int(value))
+    return maximum
+
+
+def send_consulenza_template_auto(
+    phone: str,
+    display_name: str = "Mamma",
+) -> Tuple[bool, Optional[str], Optional[str]]:
+    """Invia il template provando automaticamente lingua e presenza variabili."""
+    attempts: List[Tuple[str, Optional[List[str]], str]] = []
+    definition = get_template_definition()
+
+    if definition:
+        language = str(definition.get("language") or META_TEMPLATE_CONSULENZA_LANG)
+        variable_count = count_template_body_variables(definition)
+        if variable_count == 0:
+            attempts.append((language, None, "definizione Meta senza variabili"))
+        elif variable_count == 1:
+            attempts.append((language, [display_name], "definizione Meta con nome"))
+        else:
+            return (
+                False,
+                f"Il template approvato contiene {variable_count} variabili nel corpo. "
+                "Servono i valori esatti per tutte le variabili.",
+                None,
+            )
+
+    # Fallback: funziona sia per template senza variabili sia con una variabile nome.
+    attempts.extend([
+        (META_TEMPLATE_CONSULENZA_LANG, None, "fallback it senza variabili"),
+        (META_TEMPLATE_CONSULENZA_LANG, [display_name], "fallback it con nome"),
+        ("it_IT", None, "fallback it_IT senza variabili"),
+        ("it_IT", [display_name], "fallback it_IT con nome"),
+    ])
+
+    unique_attempts: List[Tuple[str, Optional[List[str]], str]] = []
+    seen = set()
+    for language, parameters, label in attempts:
+        key = (language, tuple(parameters or []))
+        if key not in seen:
+            seen.add(key)
+            unique_attempts.append((language, parameters, label))
+
+    errors: List[str] = []
+    for language, parameters, label in unique_attempts:
+        sent, error = send_whatsapp_template(
+            phone,
+            template_name=META_TEMPLATE_CONSULENZA,
+            language=language,
+            body_parameters=parameters,
+        )
+        if sent:
+            logger.info(
+                "Template %s inviato a %s con %s",
+                META_TEMPLATE_CONSULENZA,
+                phone,
+                label,
+            )
+            return True, None, label
+        errors.append(f"{label}: {error}")
+
+    return False, " | ".join(errors[-4:]), None
 
 
 def send_whatsapp_message(phone: str, text: str, source: str = "bot") -> bool:
@@ -1832,11 +1928,19 @@ def handle_telegram_command(phone: str, text: str) -> None:
     if cmd == "/template":
         case = get_case(phone)
         display_name = (case.get("display_name") or "Mamma").strip()
-        sent, error = send_new_case_template(phone, display_name)
+        sent, error, mode = send_consulenza_template_auto(phone, display_name)
         if sent:
-            send_to_topic(phone, "✅ Template consulenza inviato.", kind="system")
+            send_to_topic(
+                phone,
+                f"✅ Template {META_TEMPLATE_CONSULENZA} inviato ({mode}).",
+                kind="system",
+            )
         else:
-            send_to_topic(phone, f"Template non inviato: {error}", kind="alert")
+            send_to_topic(
+                phone,
+                f"Template non inviato. Errore Meta: {error}",
+                kind="alert",
+            )
         return
 
     if cmd == "/questionario":
@@ -1979,6 +2083,117 @@ def handle_telegram_command(phone: str, text: str) -> None:
     send_to_topic(phone, f"Comando non riconosciuto: {cmd}", kind="system")
 
 
+
+def send_to_telegram_context(message: Dict[str, Any], text: str) -> bool:
+    payload: Dict[str, Any] = {
+        "chat_id": TELEGRAM_GROUP_ID,
+        "text": text,
+    }
+    thread_id = message.get("message_thread_id")
+    if thread_id:
+        payload["message_thread_id"] = int(thread_id)
+    try:
+        telegram_api("sendMessage", json_data=payload)
+        return True
+    except Exception as exc:
+        logger.exception("Errore risposta al comando Telegram: %s", exc)
+        return False
+
+
+def get_topic_thread_id(phone: str) -> Optional[int]:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT thread_id FROM telegram_topics WHERE phone = %s", (phone,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return int(row[0]) if row else None
+
+
+def configured_sender_phone() -> str:
+    """Restituisce il numero mittente Meta, quando leggibile."""
+    try:
+        data = get_configured_phone_number()
+        return normalize_phone(data.get("display_phone_number"))
+    except Exception:
+        return ""
+
+
+def handle_new_case_command(message: Dict[str, Any], text: str) -> None:
+    parts = text.strip().split(maxsplit=2)
+    if len(parts) < 2:
+        send_to_telegram_context(
+            message,
+            "Uso corretto: /nuova +393331234567 NomeMamma",
+        )
+        return
+
+    phone = normalize_phone(parts[1])
+    display_name = parts[2].strip() if len(parts) >= 3 else "Mamma"
+
+    if len(phone_for_meta(phone)) < 10:
+        send_to_telegram_context(
+            message,
+            "Numero non valido. Usa il prefisso internazionale, per esempio +393331234567.",
+        )
+        return
+
+    current_thread = message.get("message_thread_id")
+    if current_thread and get_thread_phone(int(current_thread)):
+        send_to_telegram_context(
+            message,
+            "Scrivi /nuova nel topic Generale, non nel topic di una mamma.",
+        )
+        return
+
+    sender_phone = configured_sender_phone()
+    if sender_phone and phone_for_meta(sender_phone) == phone_for_meta(phone):
+        send_to_telegram_context(
+            message,
+            "Questo è lo stesso numero mittente collegato a Meta. "
+            "Per provare il template usa un altro numero WhatsApp.",
+        )
+        return
+
+    ensure_case(phone, display_name)
+    update_case(phone, status=STATUS_PAUSED)
+
+    thread_id = get_or_create_topic(phone, display_name)
+    if not thread_id:
+        send_to_telegram_context(
+            message,
+            f"Non sono riuscito a creare o recuperare il topic per {phone}.",
+        )
+        return
+
+    sent, error, mode = send_consulenza_template_auto(phone, display_name)
+    if not sent:
+        send_to_telegram_context(
+            message,
+            f"✅ Topic creato per {display_name}, ma il template non è partito.\n\n"
+            f"Errore Meta:\n{error}",
+        )
+        send_to_topic(
+            phone,
+            f"Template non inviato. Errore Meta: {error}\n"
+            "Puoi riprovare da questo topic con /template.",
+            kind="alert",
+        )
+        return
+
+    send_to_telegram_context(
+        message,
+        f"✅ {display_name} creata in pausa.\n"
+        f"Topic Telegram pronto.\n"
+        f"Template {META_TEMPLATE_CONSULENZA} inviato a {phone} ({mode}).",
+    )
+    send_to_topic(
+        phone,
+        "Template iniziale inviato. La chat resta in pausa finché non usi /attiva.",
+        kind="system",
+    )
+
+
 def process_telegram_update(update: Dict[str, Any]) -> None:
     message = update.get("message") or update.get("edited_message") or {}
     if not message or (message.get("from") or {}).get("is_bot"):
@@ -1997,8 +2212,6 @@ def process_telegram_update(update: Dict[str, Any]) -> None:
         send_to_telegram_context(message, f"Versione attiva: {APP_BUILD}")
         return
 
-    # Va gestito prima della ricerca del numero, perché il topic Generale
-    # non è associato a una mamma nel database.
     if command == "/nuova":
         handle_new_case_command(message, text)
         return
