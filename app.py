@@ -70,6 +70,8 @@ META_WABA_ID = os.environ.get("META_WABA_ID", "").strip()
 META_APP_ID = os.environ.get("META_APP_ID", "").strip()
 META_API_VERSION = os.environ.get("META_API_VERSION", "v22.0").strip()
 ADMIN_SETUP_SECRET = os.environ.get("ADMIN_SETUP_SECRET", "").strip()
+META_TEMPLATE_CONSULENZA = os.environ.get("META_TEMPLATE_CONSULENZA", "consulenza").strip()
+META_TEMPLATE_CONSULENZA_LANG = os.environ.get("META_TEMPLATE_CONSULENZA_LANG", "it").strip()
 
 TIMEZONE = os.environ.get("TIMEZONE", "Europe/Rome")
 TZ = pytz.timezone(TIMEZONE)
@@ -856,29 +858,50 @@ def ensure_meta_subscriptions() -> None:
         logger.exception("Impossibile iscrivere l'app al WABA: %s", exc)
 
 
-def send_whatsapp_template(phone: str, template_name: str = "hello_world", language: str = "en_US") -> Tuple[bool, Optional[str]]:
+def send_whatsapp_template(
+    phone: str,
+    template_name: str = META_TEMPLATE_CONSULENZA,
+    language: str = META_TEMPLATE_CONSULENZA_LANG,
+    body_parameters: Optional[List[str]] = None,
+) -> Tuple[bool, Optional[str]]:
     recipient = phone_for_meta(phone)
     if not recipient:
         return False, "numero destinatario non valido"
+    template_payload: Dict[str, Any] = {
+        "name": template_name,
+        "language": {"code": language},
+    }
+    if body_parameters:
+        template_payload["components"] = [{
+            "type": "body",
+            "parameters": [{"type": "text", "text": str(p)} for p in body_parameters],
+        }]
     try:
         result = meta_api("POST", f"{META_PHONE_NUMBER_ID}/messages", json_data={
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
             "to": recipient,
             "type": "template",
-            "template": {
-                "name": template_name,
-                "language": {"code": language},
-            },
+            "template": template_payload,
         })
         message_id = None
         if result.get("messages"):
             message_id = result["messages"][0].get("id")
         save_message(phone, "assistant", "meta_api", f"[template:{template_name}]", provider_message_id=message_id)
+        send_to_topic(phone, f"[template:{template_name}]", kind="bot")
         return True, None
     except Exception as exc:
         logger.exception("Errore invio template WhatsApp %s: %s", phone, exc)
         return False, str(exc)
+
+
+def send_consulenza_template(phone: str, body_parameters: Optional[List[str]] = None) -> Tuple[bool, Optional[str]]:
+    return send_whatsapp_template(
+        phone,
+        META_TEMPLATE_CONSULENZA,
+        META_TEMPLATE_CONSULENZA_LANG,
+        body_parameters,
+    )
 
 
 def send_whatsapp_message(phone: str, text: str, source: str = "bot") -> bool:
@@ -1818,13 +1841,21 @@ def admin_meta_test_message():
     phone = normalize_phone(payload.get("to", ""))
     text = (payload.get("text") or "Test connessione WhatsApp Cloud API - Genitori in Armonia").strip()
     use_template = payload.get("template", True)
+    template_params = payload.get("template_params") or payload.get("parameters")
+    if template_params and not isinstance(template_params, list):
+        template_params = None
     if not phone:
         return jsonify({"ok": False, "error": "Campo 'to' obbligatorio, es. +393331234567"}), 400
     error = None
     if use_template:
-        sent, error = send_whatsapp_template(phone)
+        sent, error = send_consulenza_template(phone, template_params)
         if sent:
-            return jsonify({"ok": True, "to": phone, "mode": "template:hello_world", "meta": meta_setup_status()})
+            return jsonify({
+                "ok": True,
+                "to": phone,
+                "mode": f"template:{META_TEMPLATE_CONSULENZA}:{META_TEMPLATE_CONSULENZA_LANG}",
+                "meta": meta_setup_status(),
+            })
     recipient = phone_for_meta(phone)
     try:
         meta_api("POST", f"{META_PHONE_NUMBER_ID}/messages", json_data={
