@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-04-template-audit-v8"
+APP_BUILD = "2026-08-04-template-audit-v9"
 
 
 def env_required(name: str) -> str:
@@ -2550,21 +2550,14 @@ def admin_meta_audit():
 def admin_meta_templates():
     if not admin_authorized():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
+    probe_waba = (request.args.get("waba_id") or "").strip()
     try:
-        templates = list_meta_message_templates()
-        summary = [
-            {
-                "name": item.get("name"),
-                "status": item.get("status"),
-                "language": template_language_code(item),
-                "category": item.get("category"),
-                "body_variables": count_template_body_variables(item),
-            }
-            for item in templates
-        ]
-        configured = get_template_definition()
+        templates = list_meta_message_templates(probe_waba or None)
+        summary = summarize_templates(templates)
+        configured = get_template_definition() if not probe_waba else None
         return jsonify({
             "ok": True,
+            "waba_id": probe_waba or META_WABA_ID,
             "configured_template": META_TEMPLATE_CONSULENZA,
             "configured_language": META_TEMPLATE_CONSULENZA_LANG,
             "resolved_template": {
