@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-04-template-fix-v6"
+APP_BUILD = "2026-08-04-template-audit-v7"
 
 
 def env_required(name: str) -> str:
@@ -1037,18 +1037,98 @@ def format_meta_error(exc: Exception) -> str:
         return raw
 
 
-def list_meta_message_templates(limit: int = 100) -> List[Dict[str, Any]]:
-    if not META_WABA_ID:
+def list_meta_message_templates(waba_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    waba = (waba_id or META_WABA_ID or "").strip()
+    if not waba:
         return []
-    result = meta_api(
+    items: List[Dict[str, Any]] = []
+    params: Dict[str, Any] = {
+        "fields": "name,status,language,components,category",
+        "limit": limit,
+    }
+    while True:
+        result = meta_api("GET", f"{waba}/message_templates", params=params)
+        items.extend(list(result.get("data", []) or []))
+        paging = result.get("paging") or {}
+        after = (paging.get("cursors") or {}).get("after")
+        if not after or not paging.get("next"):
+            break
+        params["after"] = after
+    return items
+
+
+def get_phone_number_waba_id() -> Optional[str]:
+    data = meta_api(
         "GET",
-        f"{META_WABA_ID}/message_templates",
-        params={
-            "fields": "name,status,language,components,category",
-            "limit": limit,
-        },
+        META_PHONE_NUMBER_ID,
+        params={"fields": "through_whatsapp_business_account"},
     )
-    return list(result.get("data", []) or [])
+    waba = data.get("through_whatsapp_business_account") or {}
+    waba_id = waba.get("id")
+    return str(waba_id).strip() if waba_id else None
+
+
+def summarize_templates(templates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "name": item.get("name"),
+            "status": item.get("status"),
+            "language": template_language_code(item),
+            "category": item.get("category"),
+            "body_variables": count_template_body_variables(item),
+        }
+        for item in templates
+    ]
+
+
+def meta_waba_audit() -> Dict[str, Any]:
+    phone_waba_id = get_phone_number_waba_id()
+    configured_waba_id = META_WABA_ID or None
+    waba_ids = []
+    if configured_waba_id:
+        waba_ids.append(configured_waba_id)
+    if phone_waba_id and phone_waba_id not in waba_ids:
+        waba_ids.append(phone_waba_id)
+
+    templates_by_waba: Dict[str, List[Dict[str, Any]]] = {}
+    for waba_id in waba_ids:
+        try:
+            templates_by_waba[waba_id] = list_meta_message_templates(waba_id)
+        except Exception as exc:
+            templates_by_waba[waba_id] = []
+            logger.warning("Errore lettura template WABA %s: %s", waba_id, exc)
+
+    all_names: List[str] = []
+    consulenza_like: List[Dict[str, Any]] = []
+    for waba_id, templates in templates_by_waba.items():
+        for item in templates:
+            name = str(item.get("name", "")).strip()
+            all_names.append(f"{name} ({template_language_code(item)}) @ {waba_id}")
+            if "consulenza" in name.lower():
+                consulenza_like.append({
+                    "waba_id": waba_id,
+                    "name": item.get("name"),
+                    "status": item.get("status"),
+                    "language": template_language_code(item),
+                    "body_variables": count_template_body_variables(item),
+                })
+
+    return {
+        "configured_waba_id": configured_waba_id,
+        "phone_number_waba_id": phone_waba_id,
+        "waba_ids_match": bool(
+            configured_waba_id and phone_waba_id and configured_waba_id == phone_waba_id
+        ),
+        "configured_template": META_TEMPLATE_CONSULENZA,
+        "configured_language": META_TEMPLATE_CONSULENZA_LANG,
+        "templates_by_waba": {
+            waba_id: summarize_templates(templates)
+            for waba_id, templates in templates_by_waba.items()
+        },
+        "template_names": all_names,
+        "consulenza_like_templates": consulenza_like,
+        "resolved_template": get_template_definition(),
+    }
 
 
 def count_template_variables(text: str) -> int:
@@ -2417,6 +2497,18 @@ def admin_meta_setup():
     except Exception as exc:
         logger.exception("Errore setup Meta: %s", exc)
         return jsonify({"ok": False, "error": str(exc), "meta": meta_setup_status()}), 500
+
+
+@app.route("/admin/meta/audit", methods=["GET"])
+def admin_meta_audit():
+    if not admin_authorized():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    try:
+        audit = meta_waba_audit()
+        return jsonify({"ok": True, "audit": audit, "meta": meta_setup_status()})
+    except Exception as exc:
+        logger.exception("Errore audit Meta: %s", exc)
+        return jsonify({"ok": False, "error": format_meta_error(exc)}), 502
 
 
 @app.route("/admin/meta/templates", methods=["GET"])
