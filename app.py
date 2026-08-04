@@ -536,6 +536,8 @@ Per il sonno, i prezzi possono essere comunicati quando previsti dalla regola bu
 Il supporto emotivo forte va usato solo se lei lo palesa con frasi come "sono distrutta", "non ce la faccio", "mi sento in colpa", "sono disperata". Se racconta solo il problema, resta concreta, calda e professionale.
 Se dichiara di aver già acquistato, il codice avvia la sequenza acquisto corretta; se l'acquisto è generico, prima chiede sonno o spannolinamento.
 
+Quando in fase 0 invii il link di un percorso con piano e supporto, non aggiungere nessuna domanda, proposta di approfondimento o invito a continuare dopo il link. La risposta deve chiudersi esattamente con: "Una volta che hai acquistato, scrivimi qui che ti mando il questionario e iniziamo 🤍". Dopo questa frase non scrivere altro.
+
 Se la persona è in percorso attivo, parla in modo naturale e conversazionale, come Paola che conosce già la situazione.
 Usa il piano già inviato, il profilo del bambino e lo storico recente senza ripetere ogni volta tutto il contesto.
 Non sei obbligata a dare un consiglio in ogni messaggio: se la mamma racconta un miglioramento, un piccolo passo indietro, una difficoltà momentanea o uno sfogo, puoi semplicemente rispondere in modo umano, fare una breve lettura e fermarti lì.
@@ -1781,17 +1783,40 @@ def reply_contains_assisted_checkout_link(reply):
 
 
 def ensure_purchase_cta(reply, fase):
-    """Dopo un link di acquisto assistito usa sempre la frase finale approvata da Paola.
+    """Chiude in modo definitivo ogni messaggio che contiene un link di acquisto assistito.
 
-    Corregge anche varianti generate dal GPT come "ti scrivo io" o
-    "appena hai completato, scrivimi qui e iniziamo".
-    Non interviene sulle sole guide digitali da 37 euro.
+    Dopo il link non deve restare nessuna domanda, proposta di approfondimento,
+    invito a continuare la conversazione o altra frase generata da GPT.
+    La risposta termina sempre e soltanto con PURCHASE_CTA.
+    Non interviene sul link delle sole guide digitali da 37 euro.
     """
     if fase != 0 or not reply_contains_assisted_checkout_link(reply):
         return reply
 
+    raw = str(reply or "").strip()
+    if not raw:
+        return reply
+
+    # Individua il link assistito realmente presente nella risposta.
+    present_links = [
+        link for link in (LINK_PREMIUM, LINK_POTTY)
+        if link and link in raw
+    ]
+    if not present_links:
+        return reply
+
+    # Conserva tutto fino alla fine del primo link assistito e scarta QUALSIASI
+    # contenuto successivo. In questo modo spariscono anche frasi senza punto
+    # interrogativo, ad esempio: "Se vuoi posso spiegarti anche...".
+    link_positions = [(raw.find(link), link) for link in present_links]
+    link_start, checkout_link = min(link_positions, key=lambda item: item[0])
+    link_end = link_start + len(checkout_link)
+    base = raw[:link_end].rstrip()
+
+    # Elimina eventuali varianti della CTA che GPT avesse inserito prima del link,
+    # evitando doppioni e mantenendo una sola chiusura canonica.
     cleaned_lines = []
-    for line in str(reply).splitlines():
+    for line in base.splitlines():
         normalized = normalize_text(line)
         has_purchase_marker = any(x in normalized for x in [
             "acquist", "completato", "pagato", "pagamento", "ordine"
@@ -1799,13 +1824,11 @@ def ensure_purchase_cta(reply, fase):
         has_contact_marker = any(x in normalized for x in [
             "scrivimi", "ti scrivo", "ti contatto", "questionario", "iniziamo", "partiamo"
         ])
-        if has_purchase_marker and has_contact_marker:
+        if has_purchase_marker and has_contact_marker and checkout_link not in line:
             continue
         cleaned_lines.append(line.rstrip())
 
     base = "\n".join(cleaned_lines).strip()
-    if PURCHASE_CTA.lower() in base.lower():
-        return base
     return f"{base}\n\n{PURCHASE_CTA}".strip()
 
 
@@ -6142,7 +6165,7 @@ def startup():
     init_db()
     threading.Thread(target=background_job, daemon=True).start()
     setup_telegram_webhook()
-    logger.info("Bot avviato — V56: GPT controlla Q1/Q2, il codice invia gli step fissi e avvia il piano")
+    logger.info("Bot avviato — V57: GPT controlla Q1/Q2, il codice invia gli step fissi e avvia il piano")
 
 if __name__ == "__main__":
     startup()
