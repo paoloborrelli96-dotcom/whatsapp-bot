@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-04-template-telegram-v5"
+APP_BUILD = "2026-08-04-template-fix-v6"
 
 
 def env_required(name: str) -> str:
@@ -72,9 +72,8 @@ META_WABA_ID = os.environ.get("META_WABA_ID", "").strip()
 META_APP_ID = os.environ.get("META_APP_ID", "").strip()
 META_API_VERSION = os.environ.get("META_API_VERSION", "v22.0").strip()
 ADMIN_SETUP_SECRET = os.environ.get("ADMIN_SETUP_SECRET", "").strip()
-# Template Meta approvato: configurato direttamente nel codice.
-META_TEMPLATE_CONSULENZA = "consulenza"
-META_TEMPLATE_CONSULENZA_LANG = "it"
+META_TEMPLATE_CONSULENZA = os.environ.get("META_TEMPLATE_CONSULENZA", "consulenza").strip()
+META_TEMPLATE_CONSULENZA_LANG = os.environ.get("META_TEMPLATE_CONSULENZA_LANG", "it").strip()
 
 TIMEZONE = os.environ.get("TIMEZONE", "Europe/Rome")
 TZ = pytz.timezone(TIMEZONE)
@@ -754,10 +753,12 @@ def get_or_create_topic(phone: str, display_name: Optional[str] = None) -> Optio
         conn = get_db()
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO telegram_topics (phone, thread_id)
-            VALUES (%s, %s)
-            ON CONFLICT (phone) DO UPDATE SET thread_id = EXCLUDED.thread_id
-        """, (phone, thread_id))
+            INSERT INTO telegram_topics (phone, thread_id, topic_name)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (phone) DO UPDATE SET
+                thread_id = EXCLUDED.thread_id,
+                topic_name = EXCLUDED.topic_name
+        """, (phone, thread_id, topic_name))
         conn.commit()
         cur.close()
         conn.close()
@@ -968,6 +969,7 @@ def send_whatsapp_template(
     template_name: str = META_TEMPLATE_CONSULENZA,
     language: str = META_TEMPLATE_CONSULENZA_LANG,
     body_parameters: Optional[List[str]] = None,
+    components: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[bool, Optional[str]]:
     recipient = phone_for_meta(phone)
     if not recipient:
@@ -976,7 +978,9 @@ def send_whatsapp_template(
         "name": template_name,
         "language": {"code": language},
     }
-    if body_parameters:
+    if components:
+        template_payload["components"] = components
+    elif body_parameters:
         template_payload["components"] = [{
             "type": "body",
             "parameters": [{"type": "text", "text": str(p)} for p in body_parameters],
@@ -997,7 +1001,7 @@ def send_whatsapp_template(
         return True, None
     except Exception as exc:
         logger.exception("Errore invio template WhatsApp %s: %s", phone, exc)
-        return False, str(exc)
+        return False, format_meta_error(exc)
 
 
 def send_consulenza_template(phone: str, body_parameters: Optional[List[str]] = None) -> Tuple[bool, Optional[str]]:
@@ -1009,29 +1013,93 @@ def send_consulenza_template(phone: str, body_parameters: Optional[List[str]] = 
     )
 
 
+def format_meta_error(exc: Exception) -> str:
+    raw = str(exc)
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
+        return raw
+    try:
+        payload = json.loads(match.group(0))
+        err = payload.get("error") or {}
+        message = err.get("message") or raw
+        details = err.get("error_data") or err.get("error_user_msg")
+        code = err.get("code")
+        subcode = err.get("error_subcode")
+        parts = [message]
+        if details:
+            parts.append(str(details))
+        if code:
+            parts.append(f"code={code}")
+        if subcode:
+            parts.append(f"subcode={subcode}")
+        return " | ".join(parts)
+    except Exception:
+        return raw
+
+
+def list_meta_message_templates(limit: int = 100) -> List[Dict[str, Any]]:
+    if not META_WABA_ID:
+        return []
+    result = meta_api(
+        "GET",
+        f"{META_WABA_ID}/message_templates",
+        params={
+            "fields": "name,status,language,components,category",
+            "limit": limit,
+        },
+    )
+    return list(result.get("data", []) or [])
+
+
+def count_template_variables(text: str) -> int:
+    maximum = 0
+    for value in re.findall(r"\{\{(\d+)\}\}", text or ""):
+        maximum = max(maximum, int(value))
+    return maximum
+
+
+def template_language_code(template: Dict[str, Any]) -> str:
+    language = template.get("language")
+    if isinstance(language, dict):
+        return str(language.get("code") or "").strip()
+    return str(language or "").strip()
+
 
 def get_template_definition() -> Optional[Dict[str, Any]]:
-    """Prova a leggere da Meta lingua e variabili del template approvato."""
-    if not META_WABA_ID:
-        return None
+    """Legge da Meta il template approvato configurato (nome + lingua preferita)."""
     try:
-        result = meta_api(
-            "GET",
-            f"{META_WABA_ID}/message_templates",
-            params={
-                "fields": "name,status,language,components",
-                "limit": 100,
-            },
-        )
-        for item in result.get("data", []) or []:
-            if (
-                str(item.get("name", "")).strip() == META_TEMPLATE_CONSULENZA
-                and str(item.get("status", "")).upper() == "APPROVED"
-            ):
-                return item
+        templates = list_meta_message_templates()
     except Exception as exc:
-        logger.warning("Non riesco a leggere il template da Meta: %s", exc)
-    return None
+        logger.warning("Non riesco a leggere i template da Meta: %s", exc)
+        return None
+
+    target_name = META_TEMPLATE_CONSULENZA.lower()
+    approved = [
+        item for item in templates
+        if str(item.get("name", "")).strip().lower() == target_name
+        and str(item.get("status", "")).upper() == "APPROVED"
+    ]
+    if not approved:
+        logger.warning(
+            "Template approvato '%s' non trovato. Disponibili: %s",
+            META_TEMPLATE_CONSULENZA,
+            [f"{t.get('name')} ({template_language_code(t)})" for t in templates[:20]],
+        )
+        return None
+
+    preferred_langs = [
+        META_TEMPLATE_CONSULENZA_LANG.lower(),
+        "it",
+        "it_it",
+        "italian",
+    ]
+    for preferred in preferred_langs:
+        normalized = preferred.replace("_", "")
+        for item in approved:
+            lang = template_language_code(item).lower().replace("_", "")
+            if lang == normalized:
+                return item
+    return approved[0]
 
 
 def count_template_body_variables(template: Dict[str, Any]) -> int:
@@ -1039,70 +1107,100 @@ def count_template_body_variables(template: Dict[str, Any]) -> int:
     for component in template.get("components", []) or []:
         if str(component.get("type", "")).upper() != "BODY":
             continue
-        body_text = str(component.get("text") or "")
-        for value in re.findall(r"\{\{(\d+)\}\}", body_text):
-            maximum = max(maximum, int(value))
+        maximum = max(maximum, count_template_variables(str(component.get("text") or "")))
     return maximum
+
+
+def build_template_components(
+    template: Dict[str, Any],
+    display_name: str,
+) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    """Costruisce i componenti Meta in base alla definizione approvata."""
+    components: List[Dict[str, Any]] = []
+    for component in template.get("components", []) or []:
+        ctype = str(component.get("type", "")).upper()
+        if ctype == "HEADER":
+            header_format = str(component.get("format", "TEXT")).upper()
+            if header_format != "TEXT":
+                continue
+            variable_count = count_template_variables(str(component.get("text") or ""))
+            if variable_count == 0:
+                continue
+            if variable_count > 1:
+                return None, f"header con {variable_count} variabili: servono valori espliciti"
+            components.append({
+                "type": "header",
+                "parameters": [{"type": "text", "text": display_name}],
+            })
+        elif ctype == "BODY":
+            variable_count = count_template_variables(str(component.get("text") or ""))
+            if variable_count == 0:
+                continue
+            if variable_count > 1:
+                return None, f"body con {variable_count} variabili: servono valori espliciti"
+            components.append({
+                "type": "body",
+                "parameters": [{"type": "text", "text": display_name}],
+            })
+    return components, None
 
 
 def send_consulenza_template_auto(
     phone: str,
     display_name: str = "Mamma",
 ) -> Tuple[bool, Optional[str], Optional[str]]:
-    """Invia il template provando automaticamente lingua e presenza variabili."""
-    attempts: List[Tuple[str, Optional[List[str]], str]] = []
+    """Invia il template provando lingua e variabili in base alla definizione Meta."""
+    attempts: List[Tuple[str, Optional[List[str]], Optional[List[Dict[str, Any]]], str]] = []
     definition = get_template_definition()
 
     if definition:
-        language = str(definition.get("language") or META_TEMPLATE_CONSULENZA_LANG)
-        variable_count = count_template_body_variables(definition)
-        if variable_count == 0:
-            attempts.append((language, None, "definizione Meta senza variabili"))
-        elif variable_count == 1:
-            attempts.append((language, [display_name], "definizione Meta con nome"))
-        else:
-            return (
-                False,
-                f"Il template approvato contiene {variable_count} variabili nel corpo. "
-                "Servono i valori esatti per tutte le variabili.",
-                None,
-            )
+        language = template_language_code(definition) or META_TEMPLATE_CONSULENZA_LANG
+        components, component_error = build_template_components(definition, display_name)
+        if component_error:
+            return False, component_error, None
+        attempts.append((language, None, components, "definizione Meta"))
+    else:
+        logger.warning(
+            "Template '%s' non letto da Meta: userò tentativi di fallback",
+            META_TEMPLATE_CONSULENZA,
+        )
 
-    # Fallback: funziona sia per template senza variabili sia con una variabile nome.
     attempts.extend([
-        (META_TEMPLATE_CONSULENZA_LANG, None, "fallback it senza variabili"),
-        (META_TEMPLATE_CONSULENZA_LANG, [display_name], "fallback it con nome"),
-        ("it_IT", None, "fallback it_IT senza variabili"),
-        ("it_IT", [display_name], "fallback it_IT con nome"),
+        (META_TEMPLATE_CONSULENZA_LANG, None, None, "fallback it senza variabili"),
+        (META_TEMPLATE_CONSULENZA_LANG, [display_name], None, "fallback it con nome"),
+        ("it_IT", None, None, "fallback it_IT senza variabili"),
+        ("it_IT", [display_name], None, "fallback it_IT con nome"),
     ])
 
-    unique_attempts: List[Tuple[str, Optional[List[str]], str]] = []
+    unique_attempts: List[Tuple[str, Optional[List[str]], Optional[List[Dict[str, Any]]], str]] = []
     seen = set()
-    for language, parameters, label in attempts:
-        key = (language, tuple(parameters or []))
+    for language, parameters, components, label in attempts:
+        key = (language, tuple(parameters or []), json.dumps(components or [], sort_keys=True))
         if key not in seen:
             seen.add(key)
-            unique_attempts.append((language, parameters, label))
+            unique_attempts.append((language, parameters, components, label))
 
     errors: List[str] = []
-    for language, parameters, label in unique_attempts:
+    for language, parameters, components, label in unique_attempts:
         sent, error = send_whatsapp_template(
             phone,
             template_name=META_TEMPLATE_CONSULENZA,
             language=language,
             body_parameters=parameters,
+            components=components,
         )
         if sent:
             logger.info(
-                "Template %s inviato a %s con %s",
+                "Template %s inviato a %s con %s (lang=%s)",
                 META_TEMPLATE_CONSULENZA,
                 phone,
                 label,
+                language,
             )
-            return True, None, label
-        errors.append(f"{label}: {error}")
+            return True, None, f"{label} ({language})"
+        errors.append(f"{label} [{language}]: {error}")
 
-    return False, " | ".join(errors[-4:]), None
+    return False, " | ".join(errors[-6:]), None
 
 
 def send_whatsapp_message(phone: str, text: str, source: str = "bot") -> bool:
@@ -2321,6 +2419,40 @@ def admin_meta_setup():
         return jsonify({"ok": False, "error": str(exc), "meta": meta_setup_status()}), 500
 
 
+@app.route("/admin/meta/templates", methods=["GET"])
+def admin_meta_templates():
+    if not admin_authorized():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    try:
+        templates = list_meta_message_templates()
+        summary = [
+            {
+                "name": item.get("name"),
+                "status": item.get("status"),
+                "language": template_language_code(item),
+                "category": item.get("category"),
+                "body_variables": count_template_body_variables(item),
+            }
+            for item in templates
+        ]
+        configured = get_template_definition()
+        return jsonify({
+            "ok": True,
+            "configured_template": META_TEMPLATE_CONSULENZA,
+            "configured_language": META_TEMPLATE_CONSULENZA_LANG,
+            "resolved_template": {
+                "name": configured.get("name"),
+                "status": configured.get("status"),
+                "language": template_language_code(configured),
+                "body_variables": count_template_body_variables(configured),
+            } if configured else None,
+            "templates": summary,
+        })
+    except Exception as exc:
+        logger.exception("Errore lettura template Meta: %s", exc)
+        return jsonify({"ok": False, "error": format_meta_error(exc)}), 502
+
+
 @app.route("/admin/meta/test", methods=["POST"])
 def admin_meta_test_message():
     if not admin_authorized():
@@ -2329,21 +2461,27 @@ def admin_meta_test_message():
     phone = normalize_phone(payload.get("to", ""))
     text = (payload.get("text") or "Test connessione WhatsApp Cloud API - Genitori in Armonia").strip()
     use_template = payload.get("template", True)
-    template_params = payload.get("template_params") or payload.get("parameters")
-    if template_params and not isinstance(template_params, list):
-        template_params = None
+    fallback_text = bool(payload.get("fallback_text", False))
+    display_name = (payload.get("display_name") or payload.get("name") or "Mamma").strip()
     if not phone:
         return jsonify({"ok": False, "error": "Campo 'to' obbligatorio, es. +393331234567"}), 400
-    error = None
     if use_template:
-        sent, error = send_consulenza_template(phone, template_params)
+        sent, error, mode = send_consulenza_template_auto(phone, display_name)
         if sent:
             return jsonify({
                 "ok": True,
                 "to": phone,
-                "mode": f"template:{META_TEMPLATE_CONSULENZA}:{META_TEMPLATE_CONSULENZA_LANG}",
+                "mode": f"template:{META_TEMPLATE_CONSULENZA}:{mode}",
                 "meta": meta_setup_status(),
             })
+        if not fallback_text:
+            return jsonify({
+                "ok": False,
+                "to": phone,
+                "error": error,
+                "hint": "Verifica nome/lingua del template in Meta o usa fallback_text=true per provare un messaggio di testo.",
+                "meta": meta_setup_status(),
+            }), 502
     recipient = phone_for_meta(phone)
     try:
         meta_api("POST", f"{META_PHONE_NUMBER_ID}/messages", json_data={
@@ -2355,8 +2493,14 @@ def admin_meta_test_message():
         })
         return jsonify({"ok": True, "to": phone, "mode": "text", "meta": meta_setup_status()})
     except Exception as exc:
-        error = str(exc)
-    return jsonify({"ok": False, "to": phone, "error": error, "hint": "Aggiungi il numero come destinatario di test in Meta Passaggio 1, oppure invia prima un messaggio al numero +1 555-647-0518", "meta": meta_setup_status()}), 502
+        error = format_meta_error(exc)
+    return jsonify({
+        "ok": False,
+        "to": phone,
+        "error": error,
+        "hint": "Aggiungi il numero come destinatario di test in Meta Passaggio 1, oppure invia prima un messaggio al numero business.",
+        "meta": meta_setup_status(),
+    }), 502
 
 
 @app.route("/admin/reload_profile/<path:phone>", methods=["POST"])
