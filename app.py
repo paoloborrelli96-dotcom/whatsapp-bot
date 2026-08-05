@@ -224,7 +224,6 @@ topic_cache_lock = threading.Lock()
 # 3  = questionario completo, piano schedulato (1 ora)
 # 4  = piano inviato, percorso attivo
 # 5  = attesa conferma completamento questionario
-# 6  = silenzio totale — aspetta solo "ho finito"
 # 99 = chat in pausa
 
 # ─── TESTI FISSI ───────────────────────────────────────────────────────────────
@@ -936,9 +935,9 @@ def telegram_webhook():
             elif cmd == "/acquisto":
                 threading.Thread(target=invia_sequenza_acquisto, args=[phone], daemon=True).start()
             elif cmd in ("/acquisto_sonno", "/acquisto_sleep"):
-                threading.Thread(target=invia_sequenza_acquisto, args=[phone, None, PRODUCT_SLEEP], daemon=True).start()
+                threading.Thread(target=invia_sequenza_acquisto, args=[phone, PRODUCT_SLEEP], daemon=True).start()
             elif cmd in ("/acquisto_spannolinamento", "/acquisto_pannolino", "/acquisto_potty"):
-                threading.Thread(target=invia_sequenza_acquisto, args=[phone, None, PRODUCT_POTTY], daemon=True).start()
+                threading.Thread(target=invia_sequenza_acquisto, args=[phone, PRODUCT_POTTY], daemon=True).start()
             elif cmd == "/q1":
                 product_type = get_product_type(phone)
                 set_fase(phone, 1)
@@ -1093,6 +1092,12 @@ def init_db():
         )
     """)
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS processed_message_sids (
+            message_sid TEXT PRIMARY KEY,
+            processed_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    """)
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS child_profiles (
             phone TEXT PRIMARY KEY,
             mother_name TEXT,
@@ -1133,6 +1138,43 @@ def save_message(phone, role, content):
         conn.close()
     except Exception as e:
         logger.error(f"Errore salvataggio messaggio: {e}")
+
+def claim_message_sid(message_sid):
+    """Deduplica webhook Twilio: in-memory veloce + persistenza DB per sopravvivere ai restart."""
+    if not message_sid:
+        return True
+
+    with processed_sids_lock:
+        if message_sid in processed_sids:
+            return False
+
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO processed_message_sids (message_sid) VALUES (%s) ON CONFLICT DO NOTHING RETURNING message_sid",
+            (message_sid,)
+        )
+        inserted = cur.fetchone() is not None
+        conn.commit()
+        cur.close()
+        conn.close()
+        if not inserted:
+            return False
+        with processed_sids_lock:
+            processed_sids.add(message_sid)
+            if len(processed_sids) > 1000:
+                processed_sids.clear()
+        return True
+    except Exception as e:
+        logger.error(f"Errore dedup MessageSid {message_sid}: {e}")
+        with processed_sids_lock:
+            if message_sid in processed_sids:
+                return False
+            processed_sids.add(message_sid)
+            if len(processed_sids) > 1000:
+                processed_sids.clear()
+        return True
 
 def get_history(phone, days=30):
     try:
@@ -2422,6 +2464,14 @@ def acquisto_dichiarato(text):
     if any(re.search(pattern, t, flags=re.I) for pattern in completed_patterns):
         return True
 
+    colloquial_patterns = [
+        r"^(?:acquisto|pagato|comprato)\s*[.!]?\s*$",
+        r"\bordine\s+fatto\b",
+        r"\bcomprato\s+(?:quello|il|la)\b",
+    ]
+    if any(re.search(pattern, t, flags=re.I) for pattern in colloquial_patterns):
+        return True
+
     # Accesso a materiale del percorso gia ricevuto/letto/scaricato.
     access_patterns = [
         r"\b(?:ho|abbiamo)\s+(?:gia\s+|già\s+|appena\s+)?(?:scaricato|ricevuto|letto)\b",
@@ -2877,7 +2927,7 @@ def get_questionnaire_stage_text(phone, fase):
         anchor_content = get_questionario_1(product_type)
     elif fase == 2:
         anchor_content = get_questionario_2(product_type)
-    elif fase in (5, 6):
+    elif fase == 5:
         anchor_content = MSG_CONFERMA_QUESTIONARIO
     else:
         return ""
@@ -2996,13 +3046,13 @@ def classify_questionnaire_stage_message(phone, fase, pending_text):
     """Valutazione semplice: GPT controlla solo se Q1/Q2 sono sufficientemente compilati.
 
     Il codice, non GPT, invia Q2, il messaggio "hai risposto a tutto?" e programma il piano.
-    Per la conferma finale (fasi 5/6) usa prima controlli deterministici.
+    Per la conferma finale (fase 5) usa prima controlli deterministici.
     """
     cumulative = get_questionnaire_stage_text(phone, fase) or (pending_text or "")
     latest = get_latest_user_message(phone) or (pending_text or "")
 
     # Conferma finale: non serve un classificatore complesso.
-    if fase in (5, 6):
+    if fase == 5:
         finish = is_explicit_finish_confirmation(latest)
         deferral = is_questionnaire_deferral(latest) and not finish
         real_question = latest_message_has_real_question(latest)
@@ -3770,9 +3820,6 @@ def direct_reply_for_intent(phone, fase, router_result, pending_text):
             f"Poi riprova: l'importo previsto per il prodotto che stai scegliendo è {expected} euro 🤍"
         )
 
-    if intent == "bonifico_effettuato" and confidence >= 0.80:
-        return "Perfetto, appena verifico il pagamento ti avvio il questionario così partiamo con l'analisi personalizzata 🤍"
-
     if intent == "messaggio_cortesia" and confidence >= 0.80:
         return NO_REPLY
 
@@ -4252,6 +4299,7 @@ def should_silence_with_gpt(phone, fase, text, image_url=None):
     must_reply_patterns = [
         "ho finito", "ho risposto a tutto", "questionario completato",
         "ho acquistato", "ho comprato", "ho pagato", "bonifico",
+        "pagato", "comprato", "ordine fatto",
         "rimborso", "non funziona", "non riesco", "ho bisogno",
         "voglio parlare con paola", "mi chiami", "urgente",
         "che faccio", "cosa faccio", "come faccio", "non ho capito",
@@ -5069,39 +5117,138 @@ def send_piano(phone, force=False):
     return True
 
 # ─── SEQUENZA ACQUISTO ─────────────────────────────────────────────────────────
-def invia_sequenza_acquisto(phone, intro_text=None, product_type=None):
+def receipt_image_confirms_purchase(image_url):
+    """True se l'immagine allegata sembra una ricevuta o conferma d'ordine."""
+    if not image_url:
+        return False
+    try:
+        img_response = requests.get(image_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=30)
+        img_data = base64.b64encode(img_response.content).decode("utf-8")
+        content_type = img_response.headers.get("Content-Type", "image/jpeg")
+        check_response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=[
+                {"role": "system", "content": "Rispondi SOLO con SI o NO."},
+                {"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{img_data}"}},
+                    {"type": "text", "text": "Questa immagine mostra una conferma d'ordine o ricevuta di pagamento?"}
+                ]}
+            ],
+            max_tokens=5,
+            temperature=0,
+            timeout=60
+        )
+        return check_response.choices[0].message.content.strip().lower().startswith("si")
+    except Exception as e:
+        logger.error(f"Errore check immagine: {e}")
+        return False
+
+
+def is_acquisto_confermato(combined_raw, image_url=None, router_result=None):
+    """Unico punto di rilevamento acquisto: regex, router GPT e ricevuta immagine."""
+    if acquisto_dichiarato(combined_raw):
+        return True
+
+    if router_result:
+        intent = router_result.get("intent", "")
+        confidence = float(router_result.get("confidence", 0) or 0)
+        if intent == "acquisto_completato" and confidence >= 0.75:
+            return True
+        if intent == "bonifico_effettuato" and confidence >= 0.80:
+            return True
+
+    if image_url and receipt_image_confirms_purchase(image_url):
+        return True
+
+    return False
+
+
+def handle_acquisto_phase0(phone, combined_raw, image_url=None, router_result=None):
+    """Gate unico fase 0: avvia sequenza acquisto o chiede chiarimento prodotto."""
+    if not is_acquisto_confermato(combined_raw, image_url=image_url, router_result=router_result):
+        return False
+
+    logger.info(f"Acquisto confermato per {phone}")
+    product_type = product_from_context_or_text(phone, combined_raw)
+    if product_type == PRODUCT_UNKNOWN:
+        set_awaiting_product_choice(phone, True, "purchase")
+        risposta = build_product_clarification(phone, combined_raw, reason="purchase")
+        save_message(phone, "assistant", risposta)
+        send_whatsapp_message(phone, risposta)
+        return True
+
+    if image_url and product_type == PRODUCT_SLEEP and not combined_raw.strip():
+        set_awaiting_product_choice(phone, True, "sleep_purchase_tier")
+        risposta = ask_sleep_purchase_tier()
+        save_message(phone, "assistant", risposta)
+        send_whatsapp_message(phone, risposta)
+        return True
+
+    if product_type == PRODUCT_SLEEP and sleep_guides_purchase_context(phone, combined_raw):
+        handle_sleep_guides_purchase(phone)
+        return True
+
+    if product_type == PRODUCT_SLEEP and generic_sleep_material_purchase(combined_raw):
+        set_awaiting_product_choice(phone, True, "sleep_purchase_tier")
+        risposta = ask_sleep_purchase_tier()
+        save_message(phone, "assistant", risposta)
+        send_whatsapp_message(phone, risposta)
+        return True
+
+    invia_sequenza_acquisto(phone, product_type=product_type)
+    return True
+
+
+def invia_sequenza_acquisto(phone, product_type=None):
     if get_fase(phone) != 0:
         logger.info(f"Sequenza acquisto gia avviata per {phone} — skip")
-        return
+        return False
 
     if product_type not in (PRODUCT_SLEEP, PRODUCT_POTTY):
         product_type = get_product_type(phone)
     if product_type not in (PRODUCT_SLEEP, PRODUCT_POTTY):
-        # Per compatibilità con il vecchio comando /acquisto, se Paola non ha specificato nulla resta sonno.
         product_type = PRODUCT_SLEEP
 
     set_product_type(phone, product_type)
     set_awaiting_product_choice(phone, False)
     clear_lead_state(phone)
-    set_fase(phone, 1)
     logger.info(f"Avvio sequenza acquisto per {phone} — prodotto {product_type}")
 
-    intro = intro_text or build_contextual_purchase_intro(phone, "", product_type)
+    intro = MSG_BENVENUTO
+    if not send_whatsapp_message(phone, intro):
+        threading.Thread(
+            target=send_telegram,
+            args=[f"⚠️ Sequenza acquisto interrotta per {phone}: benvenuto non inviato"],
+            daemon=True
+        ).start()
+        return False
     save_message(phone, "assistant", intro)
-    send_whatsapp_message(phone, intro)
     time.sleep(2)
 
-    regole = get_msg_regole(product_type)
-    save_message(phone, "assistant", regole)
     for regole_part in get_msg_regole_parts(product_type):
-        send_whatsapp_message(phone, regole_part)
+        if not send_whatsapp_message(phone, regole_part):
+            threading.Thread(
+                target=send_telegram,
+                args=[f"⚠️ Sequenza acquisto interrotta per {phone}: regole non inviate"],
+                daemon=True
+            ).start()
+            return False
         time.sleep(1.0)
     time.sleep(2)
 
     q1 = get_questionario_1(product_type)
+    if not send_whatsapp_message(phone, q1):
+        threading.Thread(
+            target=send_telegram,
+            args=[f"⚠️ Sequenza acquisto interrotta per {phone}: Q1 non inviato"],
+            daemon=True
+        ).start()
+        return False
     save_message(phone, "assistant", q1)
-    send_whatsapp_message(phone, q1)
+
+    set_fase(phone, 1)
     logger.info(f"Sequenza acquisto completata per {phone} — prodotto {product_type}")
+    return True
 
 
 def classify_sleep_lead_answers(text):
@@ -5309,8 +5456,7 @@ def process_response(phone, image_url=None):
             if full_sleep_path_choice(combined_raw):
                 set_product_type(phone, PRODUCT_SLEEP)
                 set_awaiting_product_choice(phone, False)
-                intro = build_contextual_purchase_intro(phone, combined_raw, PRODUCT_SLEEP)
-                invia_sequenza_acquisto(phone, intro_text=intro, product_type=PRODUCT_SLEEP)
+                invia_sequenza_acquisto(phone, product_type=PRODUCT_SLEEP)
                 return
             risposta = ask_sleep_purchase_tier()
             save_message(phone, "assistant", risposta)
@@ -5324,35 +5470,11 @@ def process_response(phone, image_url=None):
                 if detected_product == PRODUCT_SLEEP and sleep_guides_purchase_context(phone, combined_raw):
                     handle_sleep_guides_purchase(phone)
                     return
-                intro = build_contextual_purchase_intro(phone, combined_raw, detected_product)
-                invia_sequenza_acquisto(phone, intro_text=intro, product_type=detected_product)
+                invia_sequenza_acquisto(phone, product_type=detected_product)
                 return
             risposta = product_specific_first_question(detected_product)
             save_message(phone, "assistant", risposta)
             send_whatsapp_message(phone, risposta)
-            return
-
-        # Priorità assoluta: se dichiara acquisto ma il prodotto è generico, chiedi prima quale percorso.
-        if acquisto_dichiarato(combined_raw):
-            logger.info(f"Acquisto dichiarato rilevato a codice per {phone}")
-            product_type = product_from_context_or_text(phone, combined_raw)
-            if product_type == PRODUCT_UNKNOWN:
-                set_awaiting_product_choice(phone, True, "purchase")
-                risposta = build_product_clarification(phone, combined_raw, reason="purchase")
-                save_message(phone, "assistant", risposta)
-                send_whatsapp_message(phone, risposta)
-                return
-            if product_type == PRODUCT_SLEEP and sleep_guides_purchase_context(phone, combined_raw):
-                handle_sleep_guides_purchase(phone)
-                return
-            if product_type == PRODUCT_SLEEP and generic_sleep_material_purchase(combined_raw):
-                set_awaiting_product_choice(phone, True, "sleep_purchase_tier")
-                risposta = ask_sleep_purchase_tier()
-                save_message(phone, "assistant", risposta)
-                send_whatsapp_message(phone, risposta)
-                return
-            intro = build_contextual_purchase_intro(phone, combined_raw, product_type)
-            invia_sequenza_acquisto(phone, intro_text=intro, product_type=product_type)
             return
 
         # Se capisce il prodotto da un messaggio informativo/problema, lo salva per non ripartire da zero.
@@ -5406,60 +5528,7 @@ def process_response(phone, image_url=None):
         return
 
     if fase == 0:
-        is_acquisto = acquisto_dichiarato(combined_raw)
-        if router_result.get("intent") == "acquisto_completato" and float(router_result.get("confidence", 0) or 0) >= 0.75:
-            is_acquisto = True
-
-        # Manteniamo il controllo immagine/ricevuta del vecchio codice.
-        if not is_acquisto and image_url:
-            try:
-                img_response = requests.get(image_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=30)
-                img_data = base64.b64encode(img_response.content).decode("utf-8")
-                content_type = img_response.headers.get("Content-Type", "image/jpeg")
-                check_response = openai_chat_completion(
-                    model=MODEL_CHAT,
-                    messages=[
-                        {"role": "system", "content": "Rispondi SOLO con SI o NO."},
-                        {"role": "user", "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:{content_type};base64,{img_data}"}},
-                            {"type": "text", "text": "Questa immagine mostra una conferma d'ordine o ricevuta di pagamento?"}
-                        ]}
-                    ],
-                    max_tokens=5,
-                    temperature=0,
-                    timeout=60
-                )
-                if check_response.choices[0].message.content.strip().lower().startswith("si"):
-                    is_acquisto = True
-            except Exception as e:
-                logger.error(f"Errore check immagine: {e}")
-                threading.Thread(target=send_telegram, args=[f"⚠️ Errore classificatore immagine per {phone}: {e}"], daemon=True).start()
-
-        if is_acquisto:
-            product_type = product_from_context_or_text(phone, combined_raw)
-            if product_type == PRODUCT_UNKNOWN:
-                set_awaiting_product_choice(phone, True, "purchase")
-                risposta = build_product_clarification(phone, combined_raw, reason="purchase")
-                save_message(phone, "assistant", risposta)
-                send_whatsapp_message(phone, risposta)
-                return
-            if image_url and product_type == PRODUCT_SLEEP and not combined_raw.strip():
-                set_awaiting_product_choice(phone, True, "sleep_purchase_tier")
-                risposta = ask_sleep_purchase_tier()
-                save_message(phone, "assistant", risposta)
-                send_whatsapp_message(phone, risposta)
-                return
-            if product_type == PRODUCT_SLEEP and sleep_guides_purchase_context(phone, combined_raw):
-                handle_sleep_guides_purchase(phone)
-                return
-            if product_type == PRODUCT_SLEEP and generic_sleep_material_purchase(combined_raw):
-                set_awaiting_product_choice(phone, True, "sleep_purchase_tier")
-                risposta = ask_sleep_purchase_tier()
-                save_message(phone, "assistant", risposta)
-                send_whatsapp_message(phone, risposta)
-                return
-            intro = build_contextual_purchase_intro(phone, combined_raw, product_type)
-            invia_sequenza_acquisto(phone, intro_text=intro, product_type=product_type)
+        if handle_acquisto_phase0(phone, combined_raw, image_url=image_url, router_result=router_result):
             return
 
         ai_reply = get_ai_response(phone, image_url=image_url, router_result=router_result)
@@ -5528,7 +5597,7 @@ def process_response(phone, image_url=None):
         logger.info(f"Fase 2 per {phone} — Q2 non ancora sufficiente, resto in attesa")
         return
 
-    elif fase in (5, 6):
+    elif fase == 5:
         # Dopo la domanda fissa, una conferma reale fa partire il piano.
         latest = get_latest_user_message(phone) or combined_raw
         if is_explicit_finish_confirmation(latest):
@@ -5690,14 +5759,9 @@ def webhook():
     logger.info(f"Messaggio da {phone}: '{body}' | media: {num_media}")
 
     message_sid = request.form.get("MessageSid", "")
-    if message_sid:
-        with processed_sids_lock:
-            if message_sid in processed_sids:
-                logger.info(f"Duplicato ignorato: {message_sid}")
-                return Response("OK", status=200)
-            processed_sids.add(message_sid)
-            if len(processed_sids) > 1000:
-                processed_sids.clear()
+    if message_sid and not claim_message_sid(message_sid):
+        logger.info(f"Duplicato ignorato: {message_sid}")
+        return Response("OK", status=200)
 
     # ── Comandi admin ──────────────────────────────────────────────────────────
     if body.strip().lower().startswith("/contatta_sonno"):
@@ -5755,14 +5819,14 @@ def webhook():
         parts = body.strip().split()
         if len(parts) == 2:
             target = parts[1].replace("+", "").replace(" ", "")
-            threading.Thread(target=invia_sequenza_acquisto, args=[target, None, PRODUCT_POTTY], daemon=True).start()
+            threading.Thread(target=invia_sequenza_acquisto, args=[target, PRODUCT_POTTY], daemon=True).start()
         return Response("OK", status=200)
 
     if body.startswith("/acquisto_sonno"):
         parts = body.strip().split()
         if len(parts) == 2:
             target = parts[1].replace("+", "").replace(" ", "")
-            threading.Thread(target=invia_sequenza_acquisto, args=[target, None, PRODUCT_SLEEP], daemon=True).start()
+            threading.Thread(target=invia_sequenza_acquisto, args=[target, PRODUCT_SLEEP], daemon=True).start()
         return Response("OK", status=200)
 
     if body.startswith("/acquisto"):
@@ -5948,8 +6012,6 @@ def webhook():
         elif fase == 2:
             delay = 1800
         elif fase == 5:
-            delay = 5      # conferma finale: va elaborata subito
-        elif fase == 6:
             delay = 5      # conferma finale: va elaborata subito
         elif fase == 4:
             if is_immediate_question(text_to_process):
@@ -6338,7 +6400,7 @@ def startup():
 if __name__ == "__main__":
     startup()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-else:
+elif os.environ.get("BOT_SKIP_STARTUP") != "1":
     startup()
 
 
