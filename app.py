@@ -33,6 +33,7 @@ TELEGRAM_CHAT_ID       = os.environ.get("TELEGRAM_CHAT_ID", "")
 TELEGRAM_GROUP_ID      = os.environ.get("TELEGRAM_GROUP_ID", "")
 TIMEZONE               = os.environ.get("TIMEZONE", "Europe/Rome")
 PLAN_DELAY_MINUTES     = int(os.environ.get("PLAN_DELAY_MINUTES", "60"))
+BACKGROUND_JOB_INTERVAL_SECONDS = int(os.environ.get("BACKGROUND_JOB_INTERVAL_SECONDS", "60"))
 NO_REPLY_MIN_CONFIDENCE = float(os.environ.get("NO_REPLY_MIN_CONFIDENCE", "0.88"))
 
 # ─── MODELLI OPENAI ────────────────────────────────────────────────────────────
@@ -955,7 +956,7 @@ def telegram_webhook():
                     if phone in active_timers:
                         active_timers[phone].cancel()
                         active_timers.pop(phone, None)
-                threading.Thread(target=send_piano, args=[phone], daemon=True).start()
+                threading.Thread(target=send_piano, args=[phone, True], daemon=True).start()
             elif cmd in ("/checkup", "/chekup", "/check", "/ceckup"):
                 with active_timers_lock:
                     if phone in active_timers:
@@ -2912,24 +2913,61 @@ def get_questionnaire_stage_text(phone, fase):
 
 
 def is_explicit_finish_confirmation(text):
-    """Conferma esplicita, usata solo dopo il messaggio fisso 'hai risposto a tutto?'."""
-    t = normalize_text(text or "")
+    """Riconosce una conferma finale reale dopo "Hai risposto a tutto?".
+
+    Accetta anche formule naturali come "Sì sì fatto", "sì, tutto fatto" e
+    "ho fatto tutto grazie", ma esclude rinvii o negazioni come "non ancora".
+    """
+    raw = normalize_text(text or "")
+    if not raw:
+        return False
+
+    # Uniforma accenti e punteggiatura per rendere robusto il riconoscimento.
+    t = "".join(
+        ch for ch in unicodedata.normalize("NFD", raw)
+        if unicodedata.category(ch) != "Mn"
+    )
+    t = re.sub(r"[^a-z0-9\s]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     if not t:
         return False
+
+    negative_patterns = [
+        "non ho finito", "non ancora", "devo finire", "devo completare",
+        "finisco dopo", "finisco domani", "completo dopo", "completo domani",
+        "manca ancora", "non e tutto", "non ho risposto a tutto"
+    ]
+    if any(pattern in t for pattern in negative_patterns):
+        return False
+
+    # Elimina cortesie/appellativi iniziali o finali che non cambiano il significato.
+    courtesy_words = {"grazie", "mille", "paola", "perfetto", "ok", "bene", "certo"}
+    words = t.split()
+    while words and words[0] in courtesy_words:
+        words.pop(0)
+    while words and words[-1] in courtesy_words:
+        words.pop()
+    t = " ".join(words).strip()
+
     exact = {
-        "si", "sì", "si si", "sì sì", "ho finito", "finito", "ho risposto a tutto",
-        "risposto a tutto", "tutto fatto", "ho completato", "completato", "ecco tutto",
-        "ho concluso", "concluso", "sono pronta", "pronta", "yes"
+        "si", "si si", "si fatto", "si si fatto", "fatto", "tutto fatto",
+        "si tutto fatto", "si si tutto fatto", "ho finito", "si ho finito",
+        "ho finito tutto", "ho risposto a tutto", "risposto a tutto",
+        "ho risposto a tutte", "ho risposto a tutti", "ho completato",
+        "completato", "ho completato tutto", "ecco tutto", "questo e tutto",
+        "ho concluso", "concluso", "ho fatto tutto", "si ho fatto tutto",
+        "sono pronta", "pronta", "yes"
     }
     if t in exact:
         return True
-    patterns = [
-        "si ho finito", "sì ho finito", "si, ho finito", "sì, ho finito",
-        "ho finito tutto", "ho risposto a tutte", "ho risposto a tutti",
-        "si e tutto", "sì è tutto", "questo e tutto", "questo è tutto"
+
+    positive_patterns = [
+        r"^(?:si\s+){1,3}(?:fatto|tutto fatto|ho finito|ho fatto tutto|ho completato tutto)$",
+        r"^(?:ho\s+)?(?:finito|completato|concluso)(?:\s+tutto)?$",
+        r"^(?:si\s+)?(?:ho\s+)?risposto\s+a\s+tutt[ioe]$",
+        r"^(?:si\s+)?(?:questo|ecco)\s+e\s+tutto$",
     ]
-    return any(p in t for p in patterns) and len(t) < 220
+    return any(re.fullmatch(pattern, t) for pattern in positive_patterns)
 
 
 def latest_message_has_real_question(text):
@@ -4855,10 +4893,116 @@ def maybe_send_post_plan_alert(phone, router_result, pending_text):
     return True
 
 
-def send_piano(phone):
-    logger.info(f"Generazione piano per {phone}")
+def claim_due_plan(phone):
+    """Prenota atomicamente un piano dovuto per evitare invii doppi con più worker.
 
-    # Aggiorna profilo strutturato prima del piano, senza interrompere se fallisce.
+    Sposta temporaneamente la scadenza avanti di 20 minuti. Se il processo cade,
+    il piano tornerà automaticamente eleggibile allo scadere del lock.
+    """
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE consultations
+            SET piano_scheduled_at = NOW() + INTERVAL '20 minutes'
+            WHERE phone = %s
+              AND fase = 3
+              AND piano_scheduled_at IS NOT NULL
+              AND piano_scheduled_at <= NOW()
+            RETURNING phone
+        """, (phone,))
+        claimed = cur.fetchone() is not None
+        conn.commit()
+        cur.close()
+        conn.close()
+        return claimed
+    except Exception as e:
+        logger.error(f"Errore claim piano per {phone}: {e}")
+        return False
+
+
+def reschedule_plan_retry(phone, minutes=10, reason=""):
+    """Mantiene la fase 3 e riprogramma il piano dopo un errore temporaneo."""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO consultations (phone, fase, piano_scheduled_at)
+            VALUES (%s, 3, NOW() + (%s * INTERVAL '1 minute'))
+            ON CONFLICT (phone) DO UPDATE
+            SET fase = 3,
+                piano_scheduled_at = NOW() + (%s * INTERVAL '1 minute')
+        """, (phone, int(minutes), int(minutes)))
+        conn.commit()
+        cur.close()
+        conn.close()
+        logger.warning(f"Piano riprogrammato per {phone} tra {minutes} minuti — {reason}")
+    except Exception as e:
+        logger.error(f"Errore riprogrammazione piano per {phone}: {e}")
+
+
+def send_whatsapp_message_reliable(phone, text, retries=3):
+    """Invia tutti i blocchi del piano con retry; True solo se ogni blocco parte."""
+    normalized_phone = normalize_phone_number(phone)
+    if not is_valid_italian_mobile(normalized_phone):
+        mark_invalid_phone_and_stop_followups(normalized_phone, "invio piano bloccato")
+        return False
+
+    chunks = smart_split_message(text, max_chars=1450)
+    if not chunks:
+        return False
+
+    for index, chunk in enumerate(chunks):
+        sent = False
+        for attempt in range(1, retries + 1):
+            try:
+                twilio_client.messages.create(
+                    from_=f"whatsapp:{TWILIO_WHATSAPP_NUMBER}",
+                    to=f"whatsapp:{normalized_phone}",
+                    body=chunk
+                )
+                sent = True
+                threading.Thread(
+                    target=send_to_topic,
+                    args=[normalized_phone, chunk, True],
+                    daemon=True
+                ).start()
+                break
+            except Exception as e:
+                logger.warning(
+                    f"Errore invio piano a {normalized_phone}, blocco {index + 1}/{len(chunks)}, "
+                    f"tentativo {attempt}/{retries}: {e}"
+                )
+                if attempt < retries:
+                    time.sleep(2 * attempt)
+
+        if not sent:
+            threading.Thread(
+                target=send_telegram,
+                args=[f"⚠️ Piano NON inviato a {normalized_phone}: fallito il blocco {index + 1}/{len(chunks)} dopo {retries} tentativi"],
+                daemon=True
+            ).start()
+            return False
+
+        if index < len(chunks) - 1:
+            time.sleep(0.9)
+
+    return True
+
+
+def send_piano(phone, force=False):
+    """Genera e invia il piano.
+
+    In automatico prende un lock atomico sul piano dovuto. Con /piano, force=True
+    permette a Paola di forzare subito l'invio anche se la chat non è ancora in fase 3.
+    La fase passa a 4 soltanto dopo l'invio completo su WhatsApp.
+    """
+    if not force and not claim_due_plan(phone):
+        logger.info(f"Piano per {phone} non preso in carico: non dovuto o già gestito da un altro worker")
+        return False
+
+    logger.info(f"Generazione piano per {phone} — force={force}")
+
     try:
         extract_child_profile_from_history(phone)
     except Exception as e:
@@ -4881,6 +5025,7 @@ def send_piano(phone):
         "Inizia direttamente con il piano senza premesse. "
         "Usa il nome del bambino. Sii specifico sulla sua situazione.]"
     )})
+
     try:
         response = openai_chat_completion(
             model=MODEL_PLAN,
@@ -4889,23 +5034,39 @@ def send_piano(phone):
             temperature=TEMP_PLAN,
             timeout=180
         )
-        piano = response.choices[0].message.content.strip()
+        piano = (response.choices[0].message.content or "").strip()
+        if not piano:
+            raise ValueError("OpenAI ha restituito un piano vuoto")
         logger.info(f"Piano generato per {phone} — lunghezza {len(piano)} caratteri")
         context = {"link_sent": True, "asks_link": False}
         piano, issue = validate_reply(piano, context)
         if issue:
             piano = rewrite_reply_if_needed(piano, issue, context)
+        if not piano or len(piano.strip()) < 100:
+            raise ValueError("Piano non valido o troppo corto dopo la validazione")
     except Exception as e:
-        logger.error(f"Errore generazione piano: {e}")
-        threading.Thread(target=send_telegram, args=[f"⚠️ Errore piano per {phone}: {e}"], daemon=True).start()
-        return
+        logger.error(f"Errore generazione piano per {phone}: {e}")
+        reschedule_plan_retry(phone, minutes=10, reason=f"generazione: {e}")
+        threading.Thread(
+            target=send_telegram,
+            args=[f"⚠️ Errore generazione piano per {phone}. Riprovo automaticamente tra 10 minuti. Dettaglio: {e}"],
+            daemon=True
+        ).start()
+        return False
+
+    sent = send_whatsapp_message_reliable(phone, piano, retries=3)
+    if not sent:
+        reschedule_plan_retry(phone, minutes=10, reason="invio WhatsApp fallito")
+        return False
+
+    # Salva e chiude la schedulazione soltanto dopo che TUTTI i blocchi sono partiti.
     save_message(phone, "assistant", piano)
-    send_whatsapp_message(phone, piano)
-    logger.info(f"Piano inviato a {phone}")
     set_fase(phone, 4)
     set_start_date(phone, datetime.now().date())
     set_checkup_pending(phone, False)
     set_last_plan_sent_at(phone)
+    logger.info(f"Piano inviato completamente a {phone}; fase impostata a 4")
+    return True
 
 # ─── SEQUENZA ACQUISTO ─────────────────────────────────────────────────────────
 def invia_sequenza_acquisto(phone, intro_text=None, product_type=None):
@@ -5368,14 +5529,21 @@ def process_response(phone, image_url=None):
         return
 
     elif fase in (5, 6):
-        # Dopo la domanda fissa, un sì/ho finito fa partire direttamente il piano.
+        # Dopo la domanda fissa, una conferma reale fa partire il piano.
         latest = get_latest_user_message(phone) or combined_raw
         if is_explicit_finish_confirmation(latest):
+            logger.info(f"Conferma finale deterministica rilevata per {phone}: {latest[:120]}")
+            schedule_plan_after_confirmation(phone, fase)
+            return
+
+        # GPT è solo una seconda protezione per formule naturali non previste dal codice.
+        q_analysis = classify_questionnaire_stage_message(phone, fase, combined_raw)
+        if q_analysis.get("is_finish_confirmation"):
+            logger.info(f"Conferma finale GPT rilevata per {phone}: {latest[:120]}")
             schedule_plan_after_confirmation(phone, fase)
             return
 
         # Negli altri casi resta in attesa; GPT interviene solo per chiarimenti/rinvii/dati aggiunti.
-        q_analysis = classify_questionnaire_stage_message(phone, fase, combined_raw)
         if q_analysis.get("needs_reply"):
             reply = generate_questionnaire_context_reply(phone, fase, combined_raw, q_analysis)
             if reply:
@@ -5780,9 +5948,9 @@ def webhook():
         elif fase == 2:
             delay = 1800
         elif fase == 5:
-            delay = 1800   # 30 minuti — aspetta la conferma della mamma
+            delay = 5      # conferma finale: va elaborata subito
         elif fase == 6:
-            delay = 1800   # 30 minuti — silenzio totale, aspetta solo conferma
+            delay = 5      # conferma finale: va elaborata subito
         elif fase == 4:
             if is_immediate_question(text_to_process):
                 delay = random.randint(180, 420)
@@ -6143,7 +6311,7 @@ def background_job():
 
         except Exception as e:
             logger.error(f"Errore background job: {e}")
-        time.sleep(300)
+        time.sleep(max(30, BACKGROUND_JOB_INTERVAL_SECONDS))
 
 def setup_telegram_webhook():
     """Registra il webhook Telegram per ricevere risposte dal topic."""
@@ -6165,7 +6333,7 @@ def startup():
     init_db()
     threading.Thread(target=background_job, daemon=True).start()
     setup_telegram_webhook()
-    logger.info("Bot avviato — V57: GPT controlla Q1/Q2, il codice invia gli step fissi e avvia il piano")
+    logger.info("Bot avviato — V58: conferma finale robusta e invio piano atomico con retry")
 
 if __name__ == "__main__":
     startup()
