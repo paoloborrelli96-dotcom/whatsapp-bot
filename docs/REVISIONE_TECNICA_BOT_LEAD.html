@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Revisione tecnica — Bot LEAD WhatsApp</title>
+  <style>
+    @page { margin: 2cm; size: A4; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.45;
+      color: #1a1a1a;
+      max-width: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    h1 { font-size: 20pt; border-bottom: 2px solid #333; padding-bottom: 8px; margin-top: 0; }
+    h2 { font-size: 14pt; margin-top: 1.4em; color: #222; page-break-after: avoid; }
+    h3 { font-size: 11.5pt; margin-top: 1.1em; color: #333; page-break-after: avoid; }
+    p { margin: 0.5em 0; }
+    ul, ol { margin: 0.4em 0; padding-left: 1.4em; }
+    li { margin: 0.25em 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.8em 0;
+      font-size: 9.5pt;
+      page-break-inside: avoid;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 6px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #f0f0f0; font-weight: 600; }
+    code, pre {
+      font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
+      font-size: 9pt;
+      background: #f5f5f5;
+    }
+    pre {
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      page-break-inside: avoid;
+    }
+    .meta {
+      color: #555;
+      font-size: 9.5pt;
+      margin-bottom: 1.5em;
+    }
+    .highlight { background: #fff8e6; padding: 2px 4px; }
+    .severity-high { color: #b00020; font-weight: 600; }
+    .severity-medium { color: #c45c00; }
+    .box {
+      border-left: 4px solid #444;
+      padding: 8px 12px;
+      margin: 1em 0;
+      background: #fafafa;
+      page-break-inside: avoid;
+    }
+    .page-break { page-break-before: always; }
+  </style>
+</head>
+<body>
+
+<h1>Revisione tecnica del bot LEAD</h1>
+<p class="meta">
+  <strong>Progetto:</strong> Genitori in Armonia — WhatsApp Bot<br />
+  <strong>Focus:</strong> Sequenze automatiche e fase acquisto<br />
+  <strong>Data:</strong> 5 agosto 2026<br />
+  <strong>Fonte codice:</strong> <code>origin/main:app.py</code> (6.344 righe)
+</p>
+
+<h2>1. Sintesi esecutiva</h2>
+<p>Il codice <strong>ha già una macchina a stati</strong> con testi fissi per regole, Q1, Q2 e conferma, ma la fase acquisto resta fragile per tre motivi strutturali:</p>
+<ol>
+  <li><strong>Rilevamento acquisto incompleto</strong> — frasi colloquiali reali non passano <code>acquisto_dichiarato()</code> e finiscono in <code>get_ai_response()</code> (GPT commerciale).</li>
+  <li><strong>GPT genera transizioni al posto del codice</strong> — intro acquisto, risposte commerciali e chiarimenti questionario sono testo libero, non JSON di classificazione.</li>
+  <li><strong>Percorsi duplicati e non atomici</strong> — due gate acquisto, fase impostata a 1 prima che la sequenza sia completata, <code>bonifico_effettuato</code> promette il questionario senza avviarlo.</li>
+</ol>
+<p>Il flusso Q1→Q2→conferma→piano è <strong>relativamente solido</strong> (<code>classify_questionnaire_stage_message</code> + <code>send_fixed_questionnaire_step</code> + <code>transition_phase_atomic</code>). Il problema principale è la <strong>fase 0 → fase 1</strong>.</p>
+
+<div class="box">
+  <strong>Nota workspace:</strong> al momento della revisione, il checkout locale conteneva solo <code>bot-consulenze/app.py</code> (bot fase 4 su Meta API). Il bot LEAD con le sequenze automatiche risiede in <code>origin/main:app.py</code>.
+</div>
+
+<h2>2. Modello a stati: attuale vs desiderato</h2>
+<table>
+  <thead>
+    <tr><th>Fase</th><th>Stato attuale</th><th>Stato desiderato</th><th>Allineamento</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>0</td><td>Lead / non acquistato</td><td>Lead / non acquistato</td><td>OK</td></tr>
+    <tr><td>1</td><td>Benvenuto + regole + Q1 inviati</td><td>Attesa risposte Q1</td><td>OK</td></tr>
+    <tr><td>2</td><td>Q1 risposto, Q2 inviato</td><td>Attesa risposte Q2</td><td>OK</td></tr>
+    <tr><td>5</td><td>Attesa conferma finale</td><td>Attesa conferma finale</td><td>OK</td></tr>
+    <tr><td>3</td><td>Piano schedulato (~1h)</td><td>Piano programmato</td><td>OK</td></tr>
+    <tr><td>4</td><td>Piano inviato, supporto</td><td>Supporto attivo</td><td>OK</td></tr>
+    <tr><td>99</td><td>Pausa manuale</td><td>Pausa manuale</td><td>OK</td></tr>
+    <tr><td><strong>6</strong></td><td>Documentata, <strong>mai impostata</strong></td><td>—</td><td><span class="severity-high">Codice morto</span></td></tr>
+  </tbody>
+</table>
+<p>La fase 6 compare in timer (<code>delay=5</code>), in <code>classify_questionnaire_stage_message</code> e in <code>process_response</code>, ma <strong>nessun <code>set_fase(phone, 6)</code></strong> esiste nel codice. Transizione reale: <code>2 → 5</code> direttamente.</p>
+
+<h2>3. Sequenza acquisto: cosa fa il codice oggi</h2>
+<h3>Flusso previsto (<code>invia_sequenza_acquisto</code>, ~riga 5072)</h3>
+<pre>fase == 0  →  set_fase(1) subito
+           →  intro GPT (build_contextual_purchase_intro)   ← NON MSG_BENVENUTO
+           →  regole (spezzate in più messaggi Twilio)
+           →  Q1 fisso
+           →  fase resta 1</pre>
+
+<h3>Problemi rispetto alla sequenza rigida richiesta</h3>
+<table>
+  <thead>
+    <tr><th>Aspetto</th><th>Comportamento attuale</th><th>Problema</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Benvenuto</td><td><code>MSG_BENVENUTO</code> definito (riga 231) ma <strong>mai usato</strong></td><td>Sequenza non deterministica</td></tr>
+    <tr><td>Intro</td><td>GPT genera testo contestuale</td><td>Può promettere questionario con formulazioni diverse</td></tr>
+    <tr><td><code>set_fase(1)</code></td><td>Prima di tutti gli invii Twilio</td><td>Se Twilio fallisce a metà → fase 1 senza Q1</td></tr>
+    <tr><td>Rollback errori</td><td>Nessuno su fallimento invio</td><td>Stato inconsistente</td></tr>
+  </tbody>
+</table>
+
+<h2>4. Rilevamento acquisto: analisi delle frasi</h2>
+<h3><code>acquisto_dichiarato()</code> (riga 2370)</h3>
+<p><strong>Funziona per:</strong></p>
+<ul>
+  <li><code>"Abbiamo acquistato il Premium"</code> — pattern <code>abbiamo ... acquistato</code></li>
+  <li><code>"Abbiamo iniziato a leggere le guide"</code> — accesso + materiale</li>
+  <li><code>"ho pagato"</code>, <code>"abbiamo fatto l'ordine"</code> — con pronome esplicito</li>
+</ul>
+
+<p><strong>Non funziona per:</strong></p>
+<table>
+  <thead><tr><th>Frase</th><th>Perché fallisce</th></tr></thead>
+  <tbody>
+    <tr><td><code>"Acquisto"</code></td><td>Serve <code>ho/abbiamo acquistato</code>; parola sola non matcha</td></tr>
+    <tr><td><code>"Pagato"</code></td><td>Stesso problema — niente pronome</td></tr>
+    <tr><td><code>"Ordine fatto"</code></td><td>Serve <code>ho/abbiamo fatto l'ordine</code></td></tr>
+    <tr><td><code>"Comprato quello da 47€"</code></td><td><code>comprato</code> senza <code>ho/abbiamo</code></td></tr>
+  </tbody>
+</table>
+
+<p><strong>Falsi positivi correttamente esclusi:</strong> <code>"Vorrei acquistare"</code>, <code>"Non ho ancora acquistato"</code>, <code>"Lo compro domani"</code>, <code>"Quanto costa quello da 47€?"</code>.</p>
+
+<h3>Cosa succede quando il match fallisce</h3>
+<pre>Messaggio → acquisto_dichiarato() = False
+         → should_silence_with_gpt() (fase 0)
+         → classify_message() router
+         → se intent != acquisto_completato (conf &lt; 0.75)
+         → get_ai_response()  ← GPT COMMERCIALE</pre>
+<p>Il prompt commerciale (<code>CHAT_RESPONSE_PROMPT</code>, riga 521) dice che il codice avvia la sequenza se l'acquisto è dichiarato, ma GPT <strong>non può chiamare funzioni</strong>: capisce l'acquisto e risponde con testo che promette questionario/piano senza avviare <code>invia_sequenza_acquisto</code>. La chat resta in fase 0.</p>
+
+<h3>Secondo gate acquisto (riga 5410)</h3>
+<p>Dopo il router, un secondo blocco ricontrolla:</p>
+<ul>
+  <li><code>acquisto_dichiarato()</code> di nuovo</li>
+  <li><code>router intent == acquisto_completato</code> con confidence ≥ 0.75</li>
+  <li>immagine ricevuta → GPT vision SI/NO</li>
+</ul>
+<p>Se il router classifica correttamente <code>"Pagato"</code> come <code>acquisto_completato</code>, il secondo gate può salvare il caso — ma è fragile e dipende dalla confidence GPT.</p>
+
+<div class="page-break"></div>
+
+<h2>5. Conflitti GPT vs codice deterministico</h2>
+<h3>Dove GPT classifica (corretto)</h3>
+<table>
+  <thead><tr><th>Funzione</th><th>Output</th><th>Uso</th></tr></thead>
+  <tbody>
+    <tr><td><code>classify_message</code></td><td>JSON intent</td><td>Router fase 0/4</td></tr>
+    <tr><td><code>classify_questionnaire_stage_message</code></td><td>JSON completezza</td><td>Q1/Q2/conferma</td></tr>
+    <tr><td><code>should_silence_with_gpt</code></td><td>JSON no_reply</td><td>Cortesia fase 0/4</td></tr>
+    <tr><td>Receipt image check</td><td>SI/NO</td><td>Acquisto con screenshot</td></tr>
+  </tbody>
+</table>
+
+<h3>Dove GPT genera testo (conflitto)</h3>
+<table>
+  <thead><tr><th>Funzione</th><th>Fase</th><th>Rischio</th></tr></thead>
+  <tbody>
+    <tr><td><code>build_contextual_purchase_intro</code></td><td>0→1</td><td>Sostituisce benvenuto fisso</td></tr>
+    <tr><td><code>get_ai_response</code></td><td>0, 4</td><td>Può inventare questionari, promettere invii</td></tr>
+    <tr><td><code>generate_questionnaire_context_reply</code></td><td>1, 2, 5</td><td>Chiarimenti OK, enforcement soft</td></tr>
+    <tr><td><code>build_product_clarification</code></td><td>0</td><td>GPT per disambiguazione prodotto</td></tr>
+    <tr><td><code>send_piano</code></td><td>3→4</td><td>Generazione piano (corretto qui)</td></tr>
+  </tbody>
+</table>
+
+<h3>Caso critico: <code>bonifico_effettuato</code> (riga 3773)</h3>
+<pre>if intent == "bonifico_effettuato" and confidence >= 0.80:
+    return "Perfetto, appena verifico il pagamento ti avvio il questionario..."</pre>
+<p>Risposta fissa via <code>direct_reply_for_intent</code>, ma <strong>non chiama <code>invia_sequenza_acquisto</code></strong>. Promessa senza esecuzione.</p>
+
+<h3>Filtro cortesia: tre layer sovrapposti in fase 0</h3>
+<ol>
+  <li><code>acquisto_dichiarato</code> — prima del filtro (corretto)</li>
+  <li><code>should_silence_with_gpt</code> — GPT + <code>must_reply_patterns</code> statici</li>
+  <li>Router <code>messaggio_cortesia</code> → <code>NO_REPLY</code> via <code>direct_reply_for_intent</code></li>
+</ol>
+<p><code>must_reply_patterns</code> include <code>"ho acquistato"</code>, <code>"ho pagato"</code> ma <strong>non</strong> <code>"pagato"</code>, <code>"ordine fatto"</code>, <code>"acquisto"</code> da soli.</p>
+
+<h2>6. Pipeline completa: ordine dei controlli</h2>
+<h3>Webhook (<code>/webhook</code>, riga 5683)</h3>
+<pre>Twilio POST
+  ├─ Dedup MessageSid (RAM, max 1000, perso al restart)
+  ├─ Comandi admin (/acquisto, /fase, /pausa...)
+  ├─ Trascrizione audio / gestione media
+  ├─ save_message(user)
+  ├─ Notifica Telegram
+  ├─ fase 99 → stop
+  ├─ Orario silenzio 23-07 → stop
+  ├─ Timer già attivo → stop (messaggio batchato, timer NON resettato)
+  └─ threading.Timer(delay) → process_response(phone, image_url)</pre>
+
+<h3><code>process_response</code> (riga 5270)</h3>
+<pre>fase 0:
+  1. stop-followup
+  2. handle_special_manual_request
+  3. awaiting product choice branches
+  4. acquisto_dichiarato → invia_sequenza / chiarimento prodotto    ← GATE 1
+  5. should_silence_with_gpt → NO_REPLY
+  6. classify_message (router)
+  7. normalize_phase0_intent
+  8. should_hold_for_human → pausa
+  9. fase 4 checkup (se applicabile)
+  10. GATE 2: acquisto (router + immagine) → invia_sequenza
+  11. else: get_ai_response (GPT commerciale)                      ← BUG PRINCIPALE
+
+fase 1: classify Q1 → GPT chiarimento → send_fixed_questionnaire_step(1→2)
+fase 2: classify Q2 → GPT chiarimento → send_fixed_questionnaire_step(2→5)
+fase 5: conferma deterministica/GPT → schedule_plan_after_confirmation → fase 3
+fase 3: (background) send_piano → fase 4
+fase 4: get_ai_response (supporto)</pre>
+
+<h2>7. Timer, debounce e messaggi stale</h2>
+<table>
+  <thead><tr><th>Fase</th><th>Delay timer</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td>0</td><td>300s (5 min)</td><td>Lead commerciale</td></tr>
+    <tr><td>1</td><td>600s (10 min)</td><td>Compilazione Q1</td></tr>
+    <tr><td>2</td><td>1800s (30 min)</td><td>Compilazione Q2</td></tr>
+    <tr><td>5/6</td><td>5s</td><td>Conferma rapida</td></tr>
+    <tr><td>4</td><td>180-420s o 1800-2400s</td><td>Supporto</td></tr>
+  </tbody>
+</table>
+<ul>
+  <li>Timer <strong>non si resetta</strong> su nuovi messaggi — batching fisso, non sliding debounce</li>
+  <li><code>image_url</code> catturato al primo webhook del batch</li>
+  <li>Orario silenzio: messaggi salvati ma non processati fino al job mattutino</li>
+</ul>
+
+<h2>8. Prevenzione doppi invii</h2>
+<table>
+  <thead><tr><th>Meccanismo</th><th>Robustezza</th></tr></thead>
+  <tbody>
+    <tr><td><code>MessageSid</code> in-memory</td><td>Debole — perso al restart</td></tr>
+    <tr><td><code>transition_phase_atomic</code></td><td>Buono — SQL WHERE fase = ANY(expected)</td></tr>
+    <tr><td><code>claim_due_plan</code></td><td>Buono — lock 20 min su piano</td></tr>
+    <tr><td><code>invia_sequenza_acquisto</code> guard fase==0</td><td>Buono ma fase già 1 se sequenza parziale</td></tr>
+    <tr><td><code>save_message</code></td><td>Nessun vincolo unique</td></tr>
+  </tbody>
+</table>
+
+<div class="page-break"></div>
+
+<h2>9. Gestione errori</h2>
+<table>
+  <thead><tr><th>Servizio</th><th>Comportamento</th><th>Lacuna</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Twilio</strong></td><td>try/except per chunk, log + Telegram alert</td><td>Fallimento mid-sequenza non rollback fase</td></tr>
+    <tr><td><strong>OpenAI</strong></td><td>Fallback dict + alert Telegram</td><td>Router fallito → intent default</td></tr>
+    <tr><td><strong>DB</strong></td><td>try/except per operazione</td><td>save_message fallito → webhook 200 comunque</td></tr>
+    <tr><td><strong>Piano</strong></td><td>reschedule_plan_retry(10 min)</td><td>Buono — mantiene fase 3 e riprova</td></tr>
+  </tbody>
+</table>
+
+<h2>10. Codice morto / duplicato</h2>
+<table>
+  <thead><tr><th>Elemento</th><th>Stato</th></tr></thead>
+  <tbody>
+    <tr><td><code>MSG_BENVENUTO</code></td><td>Definito, mai usato</td></tr>
+    <tr><td>Fase 6</td><td>Referenziata, mai impostata</td></tr>
+    <tr><td><code>handle_sleep_lead_followup</code></td><td>~200 righe, flusso mergiato in fase 0</td></tr>
+    <tr><td>Follow-up worker V46</td><td><code>process_followups</code> disabilitato</td></tr>
+    <tr><td>Doppio gate acquisto</td><td>Stessa logica in due punti (~5336 e ~5410)</td></tr>
+    <tr><td><code>bot-consulenze/</code> (locale)</td><td>Prodotto diverso (Meta API, no fasi LEAD)</td></tr>
+  </tbody>
+</table>
+
+<h2>11. Test automatici</h2>
+<p><strong>Zero test</strong> in tutto il repository. Nessun pytest per:</p>
+<ul>
+  <li>Matrice frasi <code>acquisto_dichiarato</code></li>
+  <li>Sequenza completa acquisto</li>
+  <li>Transizioni fase atomiche</li>
+  <li>Filtro cortesia vs acquisto</li>
+  <li>Timer batching</li>
+  <li><code>bonifico_effettuato</code> senza sequenza</li>
+</ul>
+
+<h2>12. Architettura consigliata: vera macchina a stati</h2>
+<pre>MESSAGE HANDLER (codice)
+  1. Parse + dedup + save
+  2. Leggi fase corrente
+  3. Switch(fase):
+     0 → classifica_acquisto() → JSON only
+     1 → classifica_q1_complete() → JSON only
+     2 → classifica_q2_complete() → JSON only
+     5 → classifica_conferma() → JSON only
+     3 → (wait background)
+     4 → classifica_supporto() + genera risposta
+     99 → stop
+  4. Esegui TRANSIZIONE (solo codice):
+     if acquisto_confermato: send_sequence()
+     if q1_sufficiente: send_q2()
+     if q2_sufficiente: send_conferma()
+     if conferma: schedule_piano()</pre>
+
+<h3>Principi chiave</h3>
+<ol>
+  <li><strong>Un solo gate acquisto</strong> — unifica regex + router + immagine</li>
+  <li><strong>Sequenza atomica</strong> — <code>set_fase(1)</code> solo dopo invio completo benvenuto+regole+Q1</li>
+  <li><strong><code>MSG_BENVENUTO</code> fisso</strong> — eliminare <code>build_contextual_purchase_intro</code> dalla sequenza standard</li>
+  <li><strong>GPT = JSON only</strong> nelle fasi 0, 1, 2, 5</li>
+  <li><strong><code>bonifico_effettuato</code></strong> → <code>invia_sequenza_acquisto</code> o pausa manuale</li>
+  <li><strong>Rimuovere fase 6</strong> o implementarla davvero</li>
+  <li><strong>Estendere regex</strong> con guard negative per frasi colloquiali</li>
+  <li><strong>Test pytest</strong> con mock Twilio/OpenAI/DB</li>
+</ol>
+
+<h3>Esempi regex da aggiungere</h3>
+<pre>r"^(?:acquisto|pagato|comprato)\s*[.!]?\s*$"
+r"\bordine\s+fatto\b"
+r"\bcomprato\s+(?:quello|il|la)\b"
+r"\b(?:l[' ]?)?ho\s+comprato\b"</pre>
+
+<h2>13. Priorità interventi</h2>
+<table>
+  <thead><tr><th>Priorità</th><th>Intervento</th><th>Impatto</th></tr></thead>
+  <tbody>
+    <tr><td><span class="severity-high">P0</span></td><td>Allineare workspace a origin/main</td><td>Prerequisito patch</td></tr>
+    <tr><td><span class="severity-high">P0</span></td><td>Estendere acquisto_dichiarato per frasi colloquiali</td><td>Risolve bug principale</td></tr>
+    <tr><td><span class="severity-high">P0</span></td><td>bonifico_effettuato → avvia sequenza o pausa</td><td>Elimina promessa vuota</td></tr>
+    <tr><td><span class="severity-medium">P1</span></td><td>Sostituire intro GPT con MSG_BENVENUTO</td><td>Sequenza rigida</td></tr>
+    <tr><td><span class="severity-medium">P1</span></td><td>Unificare gate acquisto in un solo punto</td><td>Manutenibilità</td></tr>
+    <tr><td><span class="severity-medium">P1</span></td><td>set_fase(1) dopo invii completati</td><td>Atomicità</td></tr>
+    <tr><td>P2</td><td>Rimuovere fase 6 / codice morto</td><td>Chiarezza</td></tr>
+    <tr><td>P2</td><td>Dedup MessageSid su DB</td><td>Robustezza restart</td></tr>
+    <tr><td>P2</td><td>Suite test frasi + sequenze</td><td>Prevenzione regressioni</td></tr>
+    <tr><td>P3</td><td>Refactor moduli separati</td><td>Manutenibilità long-term</td></tr>
+  </tbody>
+</table>
+
+<h2>14. Conclusione</h2>
+<p>Il flusso questionario (fasi 1→2→5→3→4) è già vicino al modello desiderato. Il lavoro critico è <strong>confinare GPT alla classificazione in fase 0</strong> e <strong>rendere la sequenza acquisto completamente deterministica</strong>.</p>
+<p>Sequenza corretta target:</p>
+<pre>ACQUISTO RILEVATO → benvenuto → regole → Q1 → fase 1
+RISPOSTE Q1 COMPLETE → GPT verifica → codice invia Q2 → fase 2
+RISPOSTE Q2 COMPLETE → GPT verifica → codice invia "Hai risposto a tutto?" → fase 5
+CONFERMA → programmazione piano → invio piano → fase 4</pre>
+
+<p class="meta" style="margin-top: 2em; border-top: 1px solid #ccc; padding-top: 1em;">
+  Documento generato automaticamente — Revisione tecnica bot LEAD WhatsApp<br />
+  Genitori in Armonia — Agosto 2026
+</p>
+
+</body>
+</html>
