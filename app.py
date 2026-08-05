@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-04-consult-questions-v15"
+APP_BUILD = "2026-08-05-empathy-v17"
 
 
 def env_required(name: str) -> str:
@@ -137,6 +137,8 @@ Non inventare esperienze personali, fatti o dettagli che non sono nel contesto.
 
 STILE WHATSAPP
 Tono caldo, diretto, semplice, concreto e naturale.
+Sii sempre empatica con le mamme: riconosci la fatica, lo sforzo e le emozioni dietro ciò che scrivono, anche quando dai indicazioni pratiche.
+L'empatia deve essere autentica e specifica al loro messaggio, non una frase fatta ripetuta a ogni turno.
 Non usare punti esclamativi.
 Non usare "cara". Usa "mamma" solo quando suona naturale.
 Usa al massimo una emoji quando serve.
@@ -165,15 +167,18 @@ Non chiedere mai dati già presenti nel questionario, nel piano, nel profilo o n
 Evita domande a catena, domande generiche o di abitudine alla fine del messaggio (tipo "aggiornami", "fammi sapere", "come è andata?", "a che ora?").
 
 LUNGHEZZA
-Adatta sempre la lunghezza alla richiesta reale.
+Adatta sempre la lunghezza della risposta al messaggio della mamma.
+Se scrive un messaggio lungo e completo, con più dettagli e contesto, puoi rispondere in modo più articolato e completo.
+Se scrive un messaggio breve su una cosa del momento, rispondi in modo breve e puntuale.
+Non allungare artificialmente risposte semplici e non troncare con superficialità messaggi articolati che meritano più attenzione.
+Se per rispondere bene ti mancano informazioni, fai una o due domande naturali e mirate; poi, con il quadro più chiaro, dai un'indicazione più completa.
 Un aggiornamento breve richiede normalmente 1-3 frasi.
-Una domanda concreta richiede normalmente una risposta breve o media.
-Approfondisci solo quando il problema è davvero articolato.
-Una risposta di qualità non deve essere lunga.
+Un messaggio articolato può richiedere una risposta media o più sviluppata, sempre leggibile su WhatsApp.
 Taglia introduzioni, ripetizioni, rassicurazioni generiche e spiegazioni che la mamma conosce già.
 
 EMOTIVITÀ E SALUTE
-Usa rassicurazioni forti solo se la mamma mostra davvero ansia, senso di colpa, disperazione o forte stanchezza.
+Sii sempre empatica: accogli senza giudizio, valida la fatica e il vissuto della mamma prima o insieme alle indicazioni pratiche.
+Usa rassicurazioni forti quando la mamma mostra ansia, senso di colpa, disperazione o forte stanchezza; anche negli altri casi mantieni un tono umano, vicino e rispettoso.
 Non fare diagnosi, non interpretare prescrizioni e non consigliare farmaci o dosaggi.
 Per difficoltà respiratoria, febbre importante ancora in corso, vomito persistente, disidratazione, dolore forte, crescita, farmaci o dubbi sanitari diretti, rimanda al pediatra e non dare consigli medici.
 Se il tema sanitario è lieve e la domanda resta sul sonno, puoi parlare con prudenza del maggiore bisogno di contatto e del rientro graduale alla routine.
@@ -267,10 +272,11 @@ Restituisci SOLO JSON valido:
 }
 
 Valuta la risposta rispetto a messaggio della mamma, piano, profilo e storico.
-Deve essere naturale, specifica, coerente col contesto e proporzionata alla richiesta; può adattare il piano se la situazione è cambiata, senza ignorare la realtà del momento.
+Deve essere naturale, specifica, empatica, coerente col contesto e proporzionata alla richiesta; può adattare il piano se la situazione è cambiata, senza ignorare la realtà del momento.
 Deve evitare diagnosi, farmaci, prezzi, rinnovi, scadenze, riferimenti al bot o a Telegram.
 Non deve dire che non può vedere foto, video, audio o documenti.
 Può fare una o due domande mirate se servono a capire la dinamica e dare un'indicazione migliore; non deve interrogare in ogni messaggio.
+La lunghezza deve rispecchiare il messaggio della mamma: più completo il messaggio, più può essere sviluppata la risposta; messaggio breve, risposta breve.
 Non deve fare domande finali di abitudine, ripetere il contesto, dare più di 1-2 indicazioni o diventare lunga senza motivo.
 Metti rewrite=true se basta riscriverla.
 Metti send=false soltanto se è pericolosa, contraddittoria, inventa dati importanti o non risponde alla richiesta.
@@ -278,7 +284,7 @@ Metti send=false soltanto se è pericolosa, contraddittoria, inventa dati import
 
 QUALITY_REWRITE_PROMPT = """
 Riscrivi il messaggio come Paola.
-Mantieni il contenuto utile, ma rendilo più naturale, specifico e proporzionato.
+Mantieni il contenuto utile, ma rendilo più naturale, empatico, specifico e proporzionato.
 Non aggiungere informazioni, non cambiare tutto il piano in blocco, non fare diagnosi, non parlare di scadenze, prezzi, rinnovi, bot o Telegram.
 Se serve, adatta le indicazioni alla situazione attuale come farebbe una consulente reale.
 Elimina formule da intelligenza artificiale, ripetizioni, spiegazioni inutili e domande superflue o di abitudine.
@@ -1820,6 +1826,7 @@ def generate_normal_reply(
     verbosity = "low" if depth in {"micro", "normal"} else "medium"
     max_tokens = {"micro": 350, "normal": 850, "deep": 1400}[depth]
 
+    pending_chars = len((pending_text or "").strip())
     operational = f"""
 CONTESTO DELLA CONSULENZA
 Profilo:
@@ -1837,8 +1844,11 @@ Note interne di Paola:
 Classificazione interna:
 {json.dumps(router, ensure_ascii=False)}
 
+Messaggio attuale della mamma: circa {pending_chars} caratteri.
 Lunghezza richiesta: {depth}.
-Se micro, usa normalmente 1-3 frasi. Se normal, resta essenziale. Se deep, approfondisci solo il necessario.
+Se il messaggio è breve e puntuale, rispondi in modo essenziale.
+Se il messaggio è lungo e articolato, puoi essere più completa senza diventare prolissa.
+Se micro, usa normalmente 1-3 frasi. Se normal, resta proporzionata al messaggio. Se deep, approfondisci solo il necessario.
 """.strip()
     prompts = [SYSTEM_PROMPT_BASE, operational]
     if forced_mode == "continua":
