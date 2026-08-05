@@ -5,6 +5,7 @@ from app import acquisto_dichiarato, is_acquisto_confermato, MSG_BENVENUTO
 
 @pytest.mark.parametrize("text", [
     "Acquisto",
+    "Acquisto ☺️",
     "Pagato",
     "Comprato",
     "ordine fatto",

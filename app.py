@@ -532,6 +532,7 @@ Se la persona scrive solo ciao, info, vorrei informazioni, quanto costa o come f
 Se invece non ha ancora acquistato ma descrive per la prima volta un problema concreto di sonno o spannolinamento, non vendere subito e non inserire il link: ringrazia in modo umano se naturale, fai una lettura breve e personalizzata, poi fai una sola domanda intelligente per capire meglio.
 Se la mamma sta rispondendo a una domanda intelligente precedente, allora apri in modo accogliente, fai un'analisi più completa ma ancora breve e introduci il percorso/link seguendo la regola business.
 In fase 0 la persona non ha ancora acquistato: puoi dare soltanto una piccola lettura personalizzata e al massimo una direzione generale. Non fornire orari dettagliati, sequenze passo passo, correzioni continue o un piano completo gratuito. Dopo una domanda sostanziale, riportala sempre con delicatezza verso l'acquisto del percorso adatto. Se il link è già stato inviato, non ripeterlo: dille che lo trova nel messaggio sopra, salvo richiesta esplicita.
+In fase 0 NON inviare mai un questionario numerato, NON chiedere di rispondere punto per punto e NON promettere di preparare o inviare il piano personalizzato: quelle azioni le gestisce solo il codice dopo acquisto confermato.
 Per il sonno, i prezzi possono essere comunicati quando previsti dalla regola business: 47 euro per 30 giorni e Premium in offerta a 67 euro invece di 197 euro per 60 giorni. Solo alle mamme spontanee provenienti dalla landing delle guide si può presentare anche la soluzione da 37 euro. Alle mamme riconosciute come provenienti dal modulo Meta sonno si presentano esclusivamente 47 e 67 euro, consigliando il Premium. Per lo spannolinamento c'è un unico percorso da 19 euro con 30 giorni di supporto WhatsApp; nel flusso modulo Meta è una super promo valida soltanto fino a oggi.
 Il supporto emotivo forte va usato solo se lei lo palesa con frasi come "sono distrutta", "non ce la faccio", "mi sento in colpa", "sono disperata". Se racconta solo il problema, resta concreta, calda e professionale.
 Se dichiara di aver già acquistato, il codice avvia la sequenza acquisto corretta; se l'acquisto è generico, prima chiede sonno o spannolinamento.
@@ -2409,6 +2410,16 @@ def handle_sleep_guides_purchase(phone):
     )
     return True
 
+def _normalize_purchase_text(text):
+    """Normalizza il testo per il rilevamento acquisto, rimuovendo emoji e rumore."""
+    t = normalize_text(text or "")
+    t = t.replace("'", "'")
+    t = re.sub(r"\s+", " ", t).strip()
+    t_clean = re.sub(r"[^\w\s€']+", " ", t, flags=re.UNICODE)
+    t_clean = re.sub(r"\s+", " ", t_clean).strip()
+    return t, t_clean
+
+
 def acquisto_dichiarato(text):
     """Rileva in modo deterministico un acquisto gia completato.
 
@@ -2428,9 +2439,7 @@ def acquisto_dichiarato(text):
     - lo compro domani
     - non abbiamo ancora acquistato
     """
-    t = normalize_text(text or "")
-    t = t.replace("’", "'")
-    t = re.sub(r"\s+", " ", t).strip()
+    t, t_clean = _normalize_purchase_text(text)
     if not t:
         return False
 
@@ -2470,6 +2479,12 @@ def acquisto_dichiarato(text):
         r"\bcomprato\s+(?:quello|il|la)\b",
     ]
     if any(re.search(pattern, t, flags=re.I) for pattern in colloquial_patterns):
+        return True
+    if any(re.search(pattern, t_clean, flags=re.I) for pattern in colloquial_patterns):
+        return True
+
+    # Messaggi brevi tipo "Acquisto ☺️" dopo pulizia emoji.
+    if len(t_clean.split()) <= 3 and re.search(r"\b(?:acquisto|pagato|comprato)\b", t_clean):
         return True
 
     # Accesso a materiale del percorso gia ricevuto/letto/scaricato.
@@ -4136,6 +4151,10 @@ def get_ai_response(phone, image_url=None, router_result=None):
     if direct:
         return direct
 
+    if fase == 0 and is_acquisto_confermato(user_message, image_url=image_url, router_result=router_result):
+        logger.info(f"get_ai_response bloccato in fase 0 per acquisto confermato: {phone}")
+        return None
+
     context = build_ai_context(phone, fase, router_result, user_message)
 
     if image_url:
@@ -4286,6 +4305,8 @@ def should_silence_with_gpt(phone, fase, text, image_url=None):
         return False
     if image_url:
         return False
+    if fase == 0 and acquisto_dichiarato(text):
+        return False
 
     raw = (text or "").strip()
     if not raw:
@@ -4299,7 +4320,7 @@ def should_silence_with_gpt(phone, fase, text, image_url=None):
     must_reply_patterns = [
         "ho finito", "ho risposto a tutto", "questionario completato",
         "ho acquistato", "ho comprato", "ho pagato", "bonifico",
-        "pagato", "comprato", "ordine fatto",
+        "pagato", "comprato", "ordine fatto", "acquisto",
         "rimborso", "non funziona", "non riesco", "ho bisogno",
         "voglio parlare con paola", "mi chiami", "urgente",
         "che faccio", "cosa faccio", "come faccio", "non ho capito",
@@ -5117,6 +5138,75 @@ def send_piano(phone, force=False):
     return True
 
 # ─── SEQUENZA ACQUISTO ─────────────────────────────────────────────────────────
+def get_last_assistant_message_text(phone):
+    for item in reversed(get_recent_history(phone, limit=20) or []):
+        if item.get("role") == "assistant":
+            return str(item.get("content") or "")
+    return ""
+
+
+def assistant_sent_official_questionnaire(phone):
+    text = get_last_assistant_message_text(phone)
+    if not text:
+        return False
+    if "Per prepararti un piano su misura ho bisogno di conoscerti meglio" in text:
+        return True
+    if "Per prepararti un piano personalizzato sullo spannolinamento" in text:
+        return True
+    return False
+
+
+def assistant_sent_invented_questionnaire(phone):
+    """True se GPT ha inviato un questionario inventato in fase 0."""
+    text = get_last_assistant_message_text(phone)
+    if not text or assistant_sent_official_questionnaire(phone):
+        return False
+    numbered = re.findall(r"\d+\.", text)
+    if len(numbered) < 3:
+        return False
+    normalized = normalize_text(text)
+    markers = ("questionario", "rispondimi", "domande", "punto per punto", "ecco le domande")
+    return any(marker in normalized for marker in markers)
+
+
+def recover_from_gpt_fake_questionnaire(phone, combined_raw):
+    """Recupera chat rimaste in fase 0 dopo un questionario GPT inventato."""
+    if get_fase(phone) != 0:
+        return False
+    if not assistant_sent_invented_questionnaire(phone):
+        return False
+    if len((combined_raw or "").strip()) < 100:
+        return False
+
+    product_type = get_product_type(phone)
+    if product_type not in (PRODUCT_SLEEP, PRODUCT_POTTY):
+        product_type = product_from_context_or_text(phone, combined_raw) or PRODUCT_SLEEP
+    set_product_type(phone, product_type)
+    set_awaiting_product_choice(phone, False)
+    clear_lead_state(phone)
+
+    bridge = (
+        "Perfetto mamma, grazie per tutte le informazioni che mi hai scritto 😊\n\n"
+        "Ora continuiamo dal questionario ufficiale così preparo il piano nel modo corretto."
+    )
+    save_message(phone, "assistant", bridge)
+    send_whatsapp_message(phone, bridge)
+    time.sleep(1.5)
+
+    q1 = get_questionario_1(product_type)
+    save_message(phone, "assistant", q1)
+    set_fase(phone, 1)
+
+    q_analysis = classify_questionnaire_stage_message(phone, 1, combined_raw)
+    if q_analysis.get("answers_sufficient"):
+        q2 = get_questionario_2(product_type)
+        send_fixed_questionnaire_step(phone, 1, 2, q2, "Questionario parte 2")
+    else:
+        send_whatsapp_message(phone, q1)
+    logger.info(f"Recupero questionario GPT inventato per {phone}")
+    return True
+
+
 def receipt_image_confirms_purchase(image_url):
     """True se l'immagine allegata sembra una ricevuta o conferma d'ordine."""
     if not image_url:
@@ -5481,6 +5571,11 @@ def process_response(phone, image_url=None):
         if detected_product in (PRODUCT_SLEEP, PRODUCT_POTTY) and get_product_type(phone) == PRODUCT_UNKNOWN:
             set_product_type(phone, detected_product)
 
+        # Priorità assoluta: acquisto dichiarato prima del filtro silenzio e del router.
+        if acquisto_dichiarato(combined_raw):
+            if handle_acquisto_phase0(phone, combined_raw, image_url=image_url):
+                return
+
     # V52: ogni messaggio nelle fasi 0 e 4 passa prima da un classificatore dedicato.
     # Se è soltanto una chiusura/ringraziamento/conferma operativa senza nuovi contenuti,
     # viene salvato e mostrato su Telegram ma il bot non invia nulla su WhatsApp.
@@ -5529,6 +5624,8 @@ def process_response(phone, image_url=None):
 
     if fase == 0:
         if handle_acquisto_phase0(phone, combined_raw, image_url=image_url, router_result=router_result):
+            return
+        if recover_from_gpt_fake_questionnaire(phone, combined_raw):
             return
 
         ai_reply = get_ai_response(phone, image_url=image_url, router_result=router_result)
