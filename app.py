@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-05-empathy-v17"
+APP_BUILD = "2026-08-05-gap-clarify-v19"
 
 
 def env_required(name: str) -> str:
@@ -95,7 +95,11 @@ QUIET_HOURS_START = int(os.environ.get("QUIET_HOURS_START", "23"))
 QUIET_HOURS_END = int(os.environ.get("QUIET_HOURS_END", "7"))
 SUPPORT_DURATION_DAYS = int(os.environ.get("SUPPORT_DURATION_DAYS", "30"))
 EXPIRATION_POLL_SECONDS = int(os.environ.get("EXPIRATION_POLL_SECONDS", "900"))
-RECENT_HISTORY_LIMIT = int(os.environ.get("RECENT_HISTORY_LIMIT", "30"))
+RECENT_HISTORY_LIMIT = int(os.environ.get("RECENT_HISTORY_LIMIT", "40"))
+MEMORY_GAP_DAYS = int(os.environ.get("MEMORY_GAP_DAYS", "3"))
+MEMORY_SUMMARY_MIN_MESSAGES = int(os.environ.get("MEMORY_SUMMARY_MIN_MESSAGES", "4"))
+MEMORY_SUMMARY_REFRESH_MESSAGES = int(os.environ.get("MEMORY_SUMMARY_REFRESH_MESSAGES", "8"))
+MEMORY_QUESTIONNAIRE_MAX_CHARS = int(os.environ.get("MEMORY_QUESTIONNAIRE_MAX_CHARS", "10000"))
 RECOVERY_POLL_SECONDS = int(os.environ.get("RECOVERY_POLL_SECONDS", "300"))
 RECOVERY_DELAY_MIN_SECONDS = int(os.environ.get("RECOVERY_DELAY_MIN_SECONDS", "300"))
 RECOVERY_DELAY_MAX_SECONDS = int(os.environ.get("RECOVERY_DELAY_MAX_SECONDS", "600"))
@@ -148,7 +152,7 @@ Evita termini tecnici come "associazione seno-sonno", "igiene del sonno" o "stim
 Puoi usare espressioni naturali come "guarda", "ti dico", "secondo me", "io manterrei", "per ora farei così".
 
 FASE 4
-Usa questionario, piano di Paola, profilo, note interne e storico recente come base di lavoro.
+Usa questionario, piano di Paola, profilo, riepilogo memoria, note interne e storico recente come base di lavoro.
 Il piano consegnato è il punto di partenza, non un copione fisso: agisci come una vera consulente del sonno.
 Se cambiano le circostanze (miglioramenti, peggioramenti, malattia, viaggio, cambio routine, nuovi dubbi), adatta le indicazioni al momento.
 Non devi attenersi rigidamente al piano se la situazione reale richiede un aggiustamento prudente e graduale.
@@ -201,12 +205,16 @@ Restituisci SOLO JSON valido con questo schema:
   "needs_human": false,
   "pause_chat": false,
   "response_depth": "micro|normal|deep",
+  "sufficient_current_context": true,
   "reason": "breve motivo"
 }
 
 Regole:
 - Cortesie, ok, grazie ed emoji isolate sono "cortesia".
 - Una domanda pratica immediata può ricevere risposta automatica breve.
+- Se sono passati almeno 3 giorni dall'ultima risposta di Paola e il messaggio non aggiorna la situazione attuale con dettagli concreti su questi giorni (come sono andate le notti, addormentamento, risvegli, aiuti richiesti, cambiamenti, eventi nuovi), imposta sufficient_current_context=false.
+- Domande brevi o generiche dopo una pausa lunga, senza aggiornamento sulla situazione di adesso, hanno sufficient_current_context=false.
+- Se la mamma descrive già cosa è successo in questi giorni con dettagli utili, sufficient_current_context=true anche dopo una pausa lunga.
 - Febbre, tosse, raffreddore, dentini o malessere lieve citati nel contesto del sonno sono tema_medico_lieve, safe_auto_reply=true.
 - Difficoltà respiratoria, febbre alta in corso o peggioramento, vomito persistente, disidratazione, dolore forte, farmaci/dosaggi, richiesta di diagnosi o urgenza sono tema_medico_delicato, needs_human=true, pause_chat=true.
 - Se chiede Paola o una persona reale: richiesta_paola, needs_human=true, pause_chat=true.
@@ -280,6 +288,7 @@ La lunghezza deve rispecchiare il messaggio della mamma: più completo il messag
 Non deve fare domande finali di abitudine, ripetere il contesto, dare più di 1-2 indicazioni o diventare lunga senza motivo.
 Metti rewrite=true se basta riscriverla.
 Metti send=false soltanto se è pericolosa, contraddittoria, inventa dati importanti o non risponde alla richiesta.
+Se la mamma torna dopo 3+ giorni senza aggiornamenti e la risposta fa solo 1-2 domande mirate per capire la situazione attuale, va bene così: non serve rewrite per aggiungere indicazioni operative in quel turno.
 """.strip()
 
 QUALITY_REWRITE_PROMPT = """
@@ -301,6 +310,21 @@ Non dire che non vedi foto, video o audio. Non chiedere screenshot o di scrivere
 Resta sul vago se serve, con una o due frasi brevi, come se stessi seguendo il filo del discorso.
 """.strip()
 
+AFTER_GAP_CLARIFICATION_PROMPT = """
+La mamma torna a scrivere dopo almeno 3 giorni senza aggiornamenti e la situazione attuale non è ancora chiara.
+In questo turno il tuo compito principale è capire com'è andata in questi giorni, non dare subito una nuova indicazione operativa dettagliata.
+
+Regole per questo messaggio:
+- Riconosci brevemente il legame con la storia precedente, senza ripetere tutto il piano.
+- Fai 1 o 2 domande mirate e pertinenti alla domanda che ha fatto, per aggiornare il quadro attuale.
+- Le domande devono riguardare cosa è successo in questi giorni: notti, addormentamento, risvegli, aiuti richiesti, peggioramenti o miglioramenti, eventuali cambiamenti o eventi nuovi.
+- Le domande devono essere concrete e facili da rispondere su WhatsApp.
+- Non fare un interrogatorio lungo: massimo 2 domande.
+- Non chiedere dati già noti da profilo, piano, riepilogo memoria o storico.
+- In questo turno NON dare consigli pratici dettagliati né cambiare il piano: rimanda l'indicazione al messaggio successivo, quando avrai il quadro aggiornato.
+- Se c'è un accenno emotivo o stanchezza, riconoscilo brevemente prima delle domande.
+""".strip()
+
 
 PROFILE_PROMPT = """
 Estrai un profilo strutturato da questionario, piano e storico di una consulenza sul sonno infantile.
@@ -310,6 +334,26 @@ mother_name, child_name, child_age, birth_date, main_problem, goal, sleep_associ
 night_wakings, naps, bedtime, wake_time, sleep_place, feeding, father_role,
 health_notes, work_stage, admin_notes.
 Ometti i campi non chiari.
+""".strip()
+
+MEMORY_SUMMARY_PROMPT = """
+Sei Paola e devi aggiornare il riepilogo interno di una consulenza sul sonno infantile già in corso.
+Il riepilogo serve a ricordare tutta la storia della mamma anche se torna a scrivere dopo giorni o settimane.
+
+Scrivi in italiano, in prosa chiara e densa, senza markdown o elenchi puntati.
+Includi solo ciò che emerge dai dati: non inventare.
+Copri, quando presenti:
+- bambino/a, età, contesto familiare rilevante
+- problema iniziale e obiettivo della consulenza
+- cosa prevedeva il piano e cosa è stato davvero applicato
+- miglioramenti, peggioramenti, passi indietro e momenti difficili
+- indicazioni già date da Paola e cosa la mamma ha provato
+- temi ricorrenti, dubbi aperti, promesse o follow-up impliciti
+- eventi recenti (malattia, viaggio, cambio routine, dentini, ecc.)
+- tono emotivo e livello di stanchezza o fiducia della mamma
+
+Se esiste un riepilogo precedente, integralo con le novità senza ripetere tutto da capo.
+Mantieni il riepilogo sotto circa 2500 caratteri, privilegiando ciò che serve per rispondere bene al prossimo messaggio.
 """.strip()
 
 
@@ -395,6 +439,8 @@ def init_db() -> None:
         "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS checkup_started_at TIMESTAMPTZ",
         "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS checkup_ready_alert_sent BOOLEAN DEFAULT FALSE",
         "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS last_alert_at TIMESTAMPTZ",
+        "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS conversation_summary TEXT",
+        "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS summary_updated_at TIMESTAMPTZ",
 
         "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS plan_filename TEXT",
         "ALTER TABLE support_cases ADD COLUMN IF NOT EXISTS plan_file_mime TEXT",
@@ -477,6 +523,7 @@ def update_case(phone: str, **fields: Any) -> None:
         "capture_mode", "capture_buffer", "activated_at", "support_end_at",
         "expiration_alert_sent", "checkup_started_at", "checkup_ready_alert_sent",
         "last_alert_at", "plan_filename", "plan_file_mime", "plan_file_data",
+        "conversation_summary", "summary_updated_at",
     }
     clean = {k: v for k, v in fields.items() if k in allowed}
     if not clean:
@@ -695,7 +742,233 @@ def sync_case_memory(phone: str) -> Dict[str, int]:
         "mother_messages": count_whatsapp_user_messages(phone),
         "questionnaire_chars": len(questionnaire or ""),
         "plan_chars": len((case.get("plan") or "")),
+        "summary_chars": len((case.get("conversation_summary") or "")),
     }
+
+
+def get_last_assistant_message_at(phone: str) -> Optional[datetime]:
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT timestamp FROM messages
+        WHERE phone = %s AND role IN ('assistant', 'admin')
+        ORDER BY timestamp DESC, id DESC
+        LIMIT 1
+    """, (phone,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row:
+        return None
+    value = row.get("timestamp")
+    if value and value.tzinfo is None:
+        value = pytz.UTC.localize(value)
+    return value
+
+
+def days_since_last_assistant_reply(phone: str) -> Optional[float]:
+    last_at = get_last_assistant_message_at(phone)
+    if not last_at:
+        return None
+    return (now_local() - last_at.astimezone(TZ)).total_seconds() / 86400
+
+
+def count_messages_since(phone: str, since: Optional[datetime]) -> int:
+    conn = get_db()
+    cur = conn.cursor()
+    if since is None:
+        cur.execute("""
+            SELECT COUNT(*) FROM messages
+            WHERE phone = %s AND content <> %s
+        """, (phone, SILENT_NO_REPLY_MARKER))
+    else:
+        cur.execute("""
+            SELECT COUNT(*) FROM messages
+            WHERE phone = %s AND timestamp > %s AND content <> %s
+        """, (phone, since, SILENT_NO_REPLY_MARKER))
+    count = int(cur.fetchone()[0])
+    cur.close()
+    conn.close()
+    return count
+
+
+def build_messages_for_summary(phone: str, since: Optional[datetime] = None, limit: int = 120) -> str:
+    conn = get_db()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    if since:
+        cur.execute("""
+            SELECT role, content, timestamp FROM messages
+            WHERE phone = %s AND timestamp > %s AND content <> %s
+            ORDER BY timestamp ASC, id ASC
+            LIMIT %s
+        """, (phone, since, SILENT_NO_REPLY_MARKER, limit))
+    else:
+        cur.execute("""
+            SELECT role, content, timestamp FROM messages
+            WHERE phone = %s AND content <> %s
+            ORDER BY timestamp ASC, id ASC
+            LIMIT %s
+        """, (phone, SILENT_NO_REPLY_MARKER, limit))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    lines: List[str] = []
+    for row in rows:
+        content = (row.get("content") or "").strip()
+        if not content or is_media_placeholder(content):
+            continue
+        role = row.get("role") or "user"
+        if role == "admin":
+            role = "paola"
+        elif role == "assistant":
+            role = "paola"
+        elif role == "system":
+            continue
+        else:
+            role = "mamma"
+        ts = row.get("timestamp")
+        prefix = format_dt(ts) if ts else "-"
+        lines.append(f"[{prefix}] {role}: {content}")
+    return "\n\n".join(lines)
+
+
+def truncate_text(text: str, max_chars: int) -> str:
+    clean = (text or "").strip()
+    if len(clean) <= max_chars:
+        return clean
+    return f"... (troncato, {len(clean)} caratteri totali) ...\n\n{clean[-max_chars:]}"
+
+
+def build_long_term_context(case: Dict[str, Any]) -> str:
+    profile = profile_to_text(case.get("profile_json") or {})
+    plan = case.get("plan") or "[mancante]"
+    notes = case.get("admin_notes") or "[nessuna]"
+    summary = (case.get("conversation_summary") or "").strip()
+    parts = [
+        f"Profilo:\n{profile}",
+        f"Piano scritto da Paola:\n{plan}",
+        f"Note interne di Paola:\n{notes}",
+    ]
+    if summary:
+        parts.insert(1, f"Riepilogo completo della consulenza (memoria di tutta la storia fino a ora):\n{summary}")
+    else:
+        questionnaire = truncate_text(case.get("questionnaire") or "", MEMORY_QUESTIONNAIRE_MAX_CHARS)
+        parts.insert(1, f"Storico messaggi mamma:\n{questionnaire or '[mancante]'}")
+    return "\n\n".join(parts)
+
+
+def refresh_conversation_summary(phone: str, force: bool = False) -> str:
+    case = get_case(phone)
+    mother_messages = count_whatsapp_user_messages(phone)
+    if mother_messages < MEMORY_SUMMARY_MIN_MESSAGES and not force:
+        return case.get("conversation_summary") or ""
+
+    previous = (case.get("conversation_summary") or "").strip()
+    since = case.get("summary_updated_at")
+    if previous and since:
+        transcript = build_messages_for_summary(phone, since=since)
+        if not transcript.strip() and not force:
+            return previous
+        user_payload = f"""
+RIEPILOGO PRECEDENTE:
+{previous}
+
+NUOVI MESSAGGI DAL RIEPILOGO:
+{transcript or '[nessun nuovo messaggio testuale]'}
+
+PROFILO:
+{profile_to_text(case.get('profile_json') or {})}
+
+PIANO:
+{truncate_text(case.get('plan') or '', 6000)}
+
+NOTE INTERNE:
+{case.get('admin_notes') or '[nessuna]'}
+""".strip()
+    else:
+        transcript = build_messages_for_summary(phone, since=None, limit=160)
+        questionnaire = truncate_text(case.get("questionnaire") or transcript, MEMORY_QUESTIONNAIRE_MAX_CHARS)
+        user_payload = f"""
+MESSAGGI E STORICO:
+{questionnaire or '[mancante]'}
+
+PROFILO:
+{profile_to_text(case.get('profile_json') or {})}
+
+PIANO:
+{truncate_text(case.get('plan') or '', 6000)}
+
+NOTE INTERNE:
+{case.get('admin_notes') or '[nessuna]'}
+""".strip()
+
+    try:
+        summary = ai_text(
+            model=MODEL_PROFILE,
+            system_prompts=[MEMORY_SUMMARY_PROMPT],
+            user_text=user_payload,
+            reasoning_effort="low",
+            verbosity="low",
+            max_output_tokens=1100,
+        )
+        summary = (summary or "").strip()
+        if summary:
+            update_case(phone, conversation_summary=summary, summary_updated_at=now_local())
+            logger.info("Riepilogo memoria aggiornato per %s (%s caratteri)", phone, len(summary))
+            return summary
+    except Exception as exc:
+        logger.exception("Errore riepilogo memoria %s: %s", phone, exc)
+    return previous
+
+
+def schedule_summary_refresh(phone: str) -> None:
+    def _worker() -> None:
+        try:
+            refresh_conversation_summary(phone)
+        except Exception as exc:
+            logger.exception("Errore refresh memoria in background %s: %s", phone, exc)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def ensure_memory_fresh(phone: str) -> None:
+    case = get_case(phone)
+    mother_messages = count_whatsapp_user_messages(phone)
+    if mother_messages < MEMORY_SUMMARY_MIN_MESSAGES:
+        return
+
+    gap_days = days_since_last_assistant_reply(phone)
+    summary = (case.get("conversation_summary") or "").strip()
+    summary_at = case.get("summary_updated_at")
+    new_messages = count_messages_since(phone, summary_at)
+
+    needs_summary = not summary
+    if gap_days is not None and gap_days >= MEMORY_GAP_DAYS:
+        needs_summary = True
+    if new_messages >= MEMORY_SUMMARY_REFRESH_MESSAGES:
+        needs_summary = True
+
+    if needs_summary:
+        refresh_conversation_summary(phone, force=gap_days is not None and gap_days >= MEMORY_GAP_DAYS)
+        if gap_days is not None and gap_days >= MEMORY_GAP_DAYS:
+            try:
+                extract_profile(phone)
+            except Exception as exc:
+                logger.exception("Errore refresh profilo dopo pausa %s: %s", phone, exc)
+
+
+def should_clarify_after_gap(router: Dict[str, Any], gap_days: Optional[float]) -> bool:
+    if gap_days is None or gap_days < MEMORY_GAP_DAYS:
+        return False
+    if router.get("needs_human") or router.get("pause_chat"):
+        return False
+    intent = router.get("intent", "")
+    if intent in {
+        "cortesia", "miglioramento", "sfogo", "richiesta_paola",
+        "perdita_fiducia", "reclamo_rimborso", "tema_medico_delicato",
+    }:
+        return False
+    return not bool(router.get("sufficient_current_context", True))
 
 
 def add_alert(phone: str, category: str, severity: str, reason: str) -> None:
@@ -1746,13 +2019,23 @@ def classify_support_message(phone: str, pending_text: str) -> Dict[str, Any]:
     default = {
         "intent": "altro", "confidence": 0.0, "safe_auto_reply": True,
         "needs_human": False, "pause_chat": False, "response_depth": "normal",
+        "sufficient_current_context": True,
         "reason": "fallback",
     }
     case = get_case(phone)
+    gap_days = days_since_last_assistant_reply(phone)
+    gap_note = ""
+    if gap_days is not None and gap_days >= MEMORY_GAP_DAYS:
+        gap_note = (
+            f"\nGiorni dall'ultima risposta di Paola: {gap_days:.1f} "
+            f"(pausa lunga: valuta se il messaggio aggiorna la situazione attuale)."
+        )
+    elif gap_days is not None and gap_days >= 1:
+        gap_note = f"\nGiorni dall'ultima risposta di Paola: {gap_days:.1f}"
     context = f"""
-Stato attuale: {case.get('status')}
-Profilo:
-{profile_to_text(case.get('profile_json') or {})}
+Stato attuale: {case.get('status')}{gap_note}
+
+{build_long_term_context(case)}
 
 Ultimi messaggi della mamma:
 {pending_text}
@@ -1778,9 +2061,13 @@ Ultimi messaggi della mamma:
 def extract_profile(phone: str) -> Dict[str, Any]:
     case = get_case(phone)
     history = get_recent_history(phone, 50)
+    summary = (case.get("conversation_summary") or "").strip()
     context = f"""
+RIEPILOGO MEMORIA:
+{summary or '[non ancora disponibile]'}
+
 QUESTIONARIO:
-{case.get('questionnaire') or ''}
+{truncate_text(case.get('questionnaire') or '', MEMORY_QUESTIONNAIRE_MAX_CHARS)}
 
 PIANO:
 {case.get('plan') or ''}
@@ -1818,28 +2105,37 @@ def generate_normal_reply(
 ) -> Optional[str]:
     case = get_case(phone)
     history = get_history_before_pending(phone, RECENT_HISTORY_LIMIT)
-    profile = case.get("profile_json") or {}
+    gap_days = days_since_last_assistant_reply(phone)
+    clarify_after_gap = should_clarify_after_gap(router, gap_days)
     depth = router.get("response_depth", "normal")
     if depth not in {"micro", "normal", "deep"}:
         depth = "normal"
+    if clarify_after_gap:
+        depth = "normal"
     effort = {"micro": "low", "normal": "low", "deep": "medium"}[depth]
     verbosity = "low" if depth in {"micro", "normal"} else "medium"
-    max_tokens = {"micro": 350, "normal": 850, "deep": 1400}[depth]
+    max_tokens = 500 if clarify_after_gap else {"micro": 350, "normal": 850, "deep": 1400}[depth]
 
     pending_chars = len((pending_text or "").strip())
+    gap_note = ""
+    if gap_days is not None and gap_days >= MEMORY_GAP_DAYS:
+        gap_note = (
+            f"\nLa mamma torna a scrivere dopo circa {gap_days:.0f} giorni senza aggiornamenti. "
+            "Ricollega la risposta a tutta la storia della consulenza, non solo all'ultimo scambio."
+        )
+        if clarify_after_gap:
+            gap_note += (
+                "\nLa situazione attuale non è ancora chiara: in questo turno fai domande mirate "
+                "per aggiornare il quadro, senza dare ancora indicazioni operative dettagliate."
+            )
+        else:
+            gap_note += (
+                "\nLa mamma ha già dato aggiornamenti sufficienti su questi giorni: "
+                "puoi rispondere in modo concreto alla domanda."
+            )
     operational = f"""
 CONTESTO DELLA CONSULENZA
-Profilo:
-{profile_to_text(profile)}
-
-Questionario iniziale:
-{case.get('questionnaire') or '[mancante]'}
-
-Piano scritto da Paola:
-{case.get('plan') or '[mancante]'}
-
-Note interne di Paola:
-{case.get('admin_notes') or '[nessuna]'}
+{build_long_term_context(case)}{gap_note}
 
 Classificazione interna:
 {json.dumps(router, ensure_ascii=False)}
@@ -1851,6 +2147,8 @@ Se il messaggio è lungo e articolato, puoi essere più completa senza diventare
 Se micro, usa normalmente 1-3 frasi. Se normal, resta proporzionata al messaggio. Se deep, approfondisci solo il necessario.
 """.strip()
     prompts = [SYSTEM_PROMPT_BASE, operational]
+    if clarify_after_gap:
+        prompts.append(AFTER_GAP_CLARIFICATION_PROMPT)
     if forced_mode == "continua":
         prompts.append(FORCED_CONTINUE_PROMPT)
     if media_only and not (pending_text or "").strip():
@@ -1877,7 +2175,9 @@ Se micro, usa normalmente 1-3 frasi. Se normal, resta proporzionata al messaggio
             image_data_url=image_data_url,
         )
         clean = clean_reply(reply)
-        return quality_control_reply(phone, user_text, clean, router)
+        return quality_control_reply(
+            phone, user_text, clean, router, clarify_after_gap=clarify_after_gap,
+        )
     except Exception as exc:
         logger.exception("Errore risposta AI %s: %s", phone, exc)
         send_to_topic(phone, f"Errore OpenAI: {exc}", kind="alert")
@@ -1890,10 +2190,17 @@ def quality_control_reply(
     pending_text: str,
     reply: str,
     router: Dict[str, Any],
+    clarify_after_gap: bool = False,
 ) -> Optional[str]:
     if not reply:
         return None
     case = get_case(phone)
+    clarification_note = ""
+    if clarify_after_gap:
+        clarification_note = (
+            "\nNOTA: risposta dopo pausa di 3+ giorni senza aggiornamenti sufficienti. "
+            "In questo turno è corretto fare solo 1-2 domande mirate, senza indicazioni operative dettagliate."
+        )
     context = f"""
 MESSAGGIO DELLA MAMMA:
 {pending_text}
@@ -1902,13 +2209,9 @@ RISPOSTA PROPOSTA:
 {reply}
 
 CLASSIFICAZIONE:
-{json.dumps(router, ensure_ascii=False)}
+{json.dumps(router, ensure_ascii=False)}{clarification_note}
 
-PROFILO:
-{profile_to_text(case.get('profile_json') or {})}
-
-PIANO:
-{case.get('plan') or ''}
+{build_long_term_context(case)}
 """.strip()
     default = {"send": True, "rewrite": False, "reason": "fallback"}
     try:
@@ -2123,6 +2426,7 @@ def process_response(phone: str) -> None:
     if case.get("status") != STATUS_ACTIVE:
         logger.info("Nessuna risposta per %s: stato %s", phone, case.get("status"))
         return
+    ensure_memory_fresh(phone)
     pending = get_pending_user_messages(phone)
     pending_text, media_only = build_pending_user_text(pending)
     if not pending_text and not media_only:
@@ -2148,7 +2452,8 @@ def process_response(phone: str) -> None:
 
     reply = generate_normal_reply(phone, pending_text, router, media_only=media_only)
     if reply:
-        send_whatsapp_message(phone, reply, source="bot")
+        if send_whatsapp_message(phone, reply, source="bot"):
+            schedule_summary_refresh(phone)
 
 
 def expiration_worker() -> None:
@@ -2349,6 +2654,7 @@ def case_status_text(phone: str) -> str:
         f"Stato bot: {case.get('status')}\n"
         f"Messaggi WhatsApp mamma: {memory['mother_messages']}\n"
         f"Memoria questionario: {memory['questionnaire_chars']} caratteri\n"
+        f"Memoria riepilogo: {memory['summary_chars']} caratteri\n"
         f"Memoria piano: {memory['plan_chars']} caratteri\n"
         f"PDF piano salvato: {'sì' if case.get('plan_file_data') else 'no'}\n"
         f"Attivazione: {format_dt(case.get('activated_at'))}\n"
@@ -2398,6 +2704,7 @@ def handle_telegram_command(phone: str, text: str) -> None:
             )
         cancel_timer(phone, "attivazione")
         profile = extract_profile(phone)
+        summary = refresh_conversation_summary(phone, force=True)
         activated = now_local()
         end_at = activated + timedelta(days=SUPPORT_DURATION_DAYS)
         update_case(
@@ -2418,9 +2725,10 @@ def handle_telegram_command(phone: str, text: str) -> None:
             f"Alert fine consulenza: {format_dt(end_at)}\n"
             f"Messaggi mamma in memoria: {memory['mother_messages']}\n"
             f"Questionario (da chat): {memory['questionnaire_chars']} caratteri\n"
+            f"Riepilogo memoria: {len(summary or '')} caratteri\n"
             f"Piano in memoria: {memory['plan_chars']} caratteri\n"
             f"Profilo estratto: {'sì' if profile else 'parziale'}\n"
-            "Il bot usa la chat WhatsApp e il piano caricato. Continua anche dopo l'alert dei 30 giorni.",
+            "Il bot usa la chat WhatsApp, il riepilogo memoria e il piano caricato. Continua anche dopo l'alert dei 30 giorni.",
             kind="system",
         )
         return
@@ -2463,6 +2771,7 @@ def handle_telegram_command(phone: str, text: str) -> None:
         return
     if cmd in {"/continua", "/rispondi"}:
         cancel_timer(phone, cmd)
+        ensure_memory_fresh(phone)
         pending = get_pending_user_messages(phone)
         pending_text, media_only = build_pending_user_text(pending)
         if not pending_text and not media_only:
@@ -2475,6 +2784,7 @@ def handle_telegram_command(phone: str, text: str) -> None:
         )
         if reply and send_whatsapp_message(phone, reply, source="bot"):
             update_case(phone, status=STATUS_ACTIVE)
+            schedule_summary_refresh(phone)
         return
     if cmd in {"/rinnova30", "/rinnova60"}:
         days = 30 if cmd == "/rinnova30" else 60
