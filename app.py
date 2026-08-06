@@ -3132,6 +3132,50 @@ def is_explicit_finish_confirmation(text):
     return any(re.fullmatch(pattern, t) for pattern in positive_patterns)
 
 
+GPT_CONTEXT_CHECK_CONFIRMATION_PROMPT = (
+    "Analizza se questo messaggio intende comunicare che l'utente ha completato "
+    "un questionario/forma con le sue risposte. Rispondi solo: True o False"
+)
+
+
+def gpt_context_check_confirmation(phone, message_text):
+    """Seconda rete di sicurezza per la fase 5 quando il router semantico ha confidence bassa.
+
+    Usa MODEL_CHAT (gpt-5.1) con un prompt breve e deterministico (temperature 0) per
+    capire, guardando il messaggio della mamma e lo storico recente della conversazione,
+    se l'intenzione è comunicare che il questionario è stato completato.
+    Ritorna True/False. In caso di errore ritorna False (comportamento conservativo,
+    resta invariato: si attende una conferma esplicita).
+    """
+    try:
+        history = get_recent_history(phone, limit=10)
+        history_text = "\n".join(
+            f"{'Mamma' if h.get('role') == 'user' else 'Bot'}: {h.get('content', '')}"
+            for h in history
+        )
+        user_content = (
+            f"Messaggio della mamma: {message_text}\n\n"
+            f"Contesto conversazione precedente (il bot ha chiesto di completare le risposte):\n{history_text}"
+        )
+        response = openai_chat_completion(
+            model=MODEL_CHAT,
+            messages=[
+                {"role": "system", "content": GPT_CONTEXT_CHECK_CONFIRMATION_PROMPT},
+                {"role": "user", "content": user_content}
+            ],
+            max_tokens=5,
+            temperature=0,
+            timeout=30
+        )
+        raw = (response.choices[0].message.content or "").strip().lower()
+        result = raw.startswith("true")
+        logger.info(f"GPT context check: {result} per {phone}")
+        return result
+    except Exception as e:
+        logger.error(f"Errore gpt_context_check_confirmation per {phone}: {e}")
+        return False
+
+
 def latest_message_has_real_question(text):
     """Riconosce una domanda reale senza confondere frasi come
     "so che mi risponderai domani" con una richiesta di chiarimento.
@@ -5831,6 +5875,18 @@ def process_response(phone, image_url=None):
         if q_analysis.get("is_courtesy_only"):
             mark_silent_no_reply(phone, f"fase {fase}: cortesia durante attesa conferma")
             return
+
+        # Terza rete di sicurezza: il router semantico non ha alta fiducia nella sua risposta
+        # (confidence bassa o intent generico "altro"). In questi casi chiediamo a GPT (MODEL_CHAT)
+        # se, guardando il contesto della conversazione, il messaggio comunica il completamento
+        # del questionario. Riduce i falsi negativi su formule informali come "Sisi fatto tutto".
+        router_confidence = float((router_result or {}).get("confidence", 0) or 0)
+        router_intent = (router_result or {}).get("intent", "altro")
+        if router_confidence < 0.7 or router_intent == "altro":
+            if gpt_context_check_confirmation(phone, latest):
+                logger.info(f"Conferma finale via GPT context check rilevata per {phone}: {latest[:120]}")
+                schedule_plan_after_confirmation(phone, fase)
+                return
 
         logger.info(f"Fase {fase} per {phone} — attendo una conferma esplicita senza avviare il piano")
         return
