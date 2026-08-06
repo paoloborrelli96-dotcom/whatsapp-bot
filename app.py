@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-05-gap-clarify-v19"
+APP_BUILD = "2026-08-06-clarification-depth-v20"
 
 
 def env_required(name: str) -> str:
@@ -178,7 +178,14 @@ Non allungare artificialmente risposte semplici e non troncare con superficialit
 Se per rispondere bene ti mancano informazioni, fai una o due domande naturali e mirate; poi, con il quadro più chiaro, dai un'indicazione più completa.
 Un aggiornamento breve richiede normalmente 1-3 frasi.
 Un messaggio articolato può richiedere una risposta media o più sviluppata, sempre leggibile su WhatsApp.
-Taglia introduzioni, ripetizioni, rassicurazioni generiche e spiegazioni che la mamma conosce già.
+Quando la mamma chiede chiarimenti su un'indicazione precedente o esprime dubbi su orari e regole, puoi usare 5-8 frasi per spiegare il ragionamento e offrire scenari possibili.
+Taglia ripetizioni e rassicurazioni generiche, ma non tagliare le spiegazioni del perché quando la mamma ha bisogno di capire come applicare un consiglio nella pratica.
+
+DOMANDE DI CHIARIMENTO
+Quando la mamma chiede chiarimenti su qualcosa che le hai già detto, esprime confusione su orari o regole, o dice "come faccio a...?", non limitarti a una risposta secca con un solo consiglio operativo.
+Riconosci che il dubbio è normale e spiega brevemente il ragionamento dietro l'indicazione: non è una regola rigida, ma un riferimento per evitare un effetto indesiderato (es. troppa stanchezza serale o un riposo troppo tardo che sposta il sonno notturno).
+Poi offri 2 scenari possibili basati su come potrebbe andare oggi (es. pisolino breve vs lungo, stanchezza nel tardo pomeriggio vs no), con indicazioni diverse ma coerenti.
+Chiudi rassicurando che nei primi giorni l'obiettivo è osservare i ritmi reali del bambino e adattarsi, senza guardare troppo l'orologio.
 
 EMOTIVITÀ E SALUTE
 Sii sempre empatica: accogli senza giudizio, valida la fatica e il vissuto della mamma prima o insieme alle indicazioni pratiche.
@@ -221,7 +228,7 @@ Regole:
 - Se dice che le risposte sono copiate, incoerenti, che ha perso fiducia o che il metodo non funziona: perdita_fiducia, needs_human=true, pause_chat=true.
 - Rimborso, denuncia, avvocato, truffa o reclamo forte: reclamo_rimborso, needs_human=true, pause_chat=true.
 - Un normale peggioramento o alcuni giorni difficili non richiedono automaticamente l'umano, salvo forte rabbia, perdita di fiducia o necessità di cambiare completamente piano.
-- response_depth micro per aggiornamenti semplici; normal per domande concrete; deep solo per situazioni articolate.
+- response_depth micro per aggiornamenti semplici; normal per domande concrete puntuali; deep per situazioni articolate, messaggi lunghi con più domande, o quando la mamma chiede chiarimenti su indicazioni precedenti, esprime dubbi su orari/regole o dice "come faccio a...?".
 """.strip()
 
 CHECKUP_PROMPT = """
@@ -285,7 +292,8 @@ Deve evitare diagnosi, farmaci, prezzi, rinnovi, scadenze, riferimenti al bot o 
 Non deve dire che non può vedere foto, video, audio o documenti.
 Può fare una o due domande mirate se servono a capire la dinamica e dare un'indicazione migliore; non deve interrogare in ogni messaggio.
 La lunghezza deve rispecchiare il messaggio della mamma: più completo il messaggio, più può essere sviluppata la risposta; messaggio breve, risposta breve.
-Non deve fare domande finali di abitudine, ripetere il contesto, dare più di 1-2 indicazioni o diventare lunga senza motivo.
+Per domande di chiarimento o messaggi articolati con dubbi su indicazioni precedenti, una risposta più sviluppata che spiega il perché e presenta scenari possibili è corretta.
+Non deve fare domande finali di abitudine, ripetere il contesto o diventare lunga senza motivo.
 Metti rewrite=true se basta riscriverla.
 Metti send=false soltanto se è pericolosa, contraddittoria, inventa dati importanti o non risponde alla richiesta.
 Se la mamma torna dopo 3+ giorni senza aggiornamenti e la risposta fa solo 1-2 domande mirate per capire la situazione attuale, va bene così: non serve rewrite per aggiungere indicazioni operative in quel turno.
@@ -299,8 +307,19 @@ Se serve, adatta le indicazioni alla situazione attuale come farebbe una consule
 Elimina formule da intelligenza artificiale, ripetizioni, spiegazioni inutili e domande superflue o di abitudine.
 Mantieni domande mirate solo se servono davvero a chiarire la situazione.
 Non dire che non puoi vedere foto, video, audio o documenti.
-Dai al massimo una o due indicazioni pratiche.
+Per domande di chiarimento, mantieni le spiegazioni del perché e gli scenari possibili; non accorciare in una risposta secca.
+Altrimenti dai al massimo una o due indicazioni pratiche.
 Scrivi solo il testo finale da inviare su WhatsApp.
+""".strip()
+
+CLARIFICATION_PROMPT = """
+La mamma chiede chiarimenti su un'indicazione precedente o esprime confusione su come applicarla nella pratica.
+In questo turno:
+- Riconosci che il dubbio è normale e spiega perché vale quell'indicazione: non è un orario fisso da rispettare a tutti i costi, ma un riferimento per evitare un effetto indesiderato.
+- Parti dalla situazione concreta di oggi e offri 2 scenari possibili (es. pisolino breve con stanchezza nel tardo pomeriggio vs pisolino lungo che la porta avanti bene), con indicazioni diverse ma coerenti.
+- Spiega cosa si vuole evitare: arrivare alla sera troppo stanca oppure fare un riposo troppo tardo che sposta la spinta al sonno notturno.
+- Chiudi rassicurando che nei primi giorni l'obiettivo è osservare i ritmi reali del bambino e adattarsi, senza guardare troppo l'orologio.
+- Non limitarti a un solo orario o consiglio secco: la mamma ha bisogno di capire il ragionamento.
 """.strip()
 
 MEDIA_ONLY_INTERNAL_PROMPT = """
@@ -955,6 +974,20 @@ def ensure_memory_fresh(phone: str) -> None:
                 extract_profile(phone)
             except Exception as exc:
                 logger.exception("Errore refresh profilo dopo pausa %s: %s", phone, exc)
+
+
+def is_clarification_question(pending_text: str, router: Dict[str, Any]) -> bool:
+    if router.get("intent") != "domanda_pratica":
+        return False
+    text = (pending_text or "").lower()
+    cues = (
+        "come faccio", "come posso", "non capisco", "non ho capito",
+        "mi ha detto", "mi avevi detto", "mi aveva detto", "quindi",
+        "ma come", "significa che", "in teoria", "altrimenti",
+        "però", "ma tu", "avevi detto", "aveva detto", "devo fare",
+        "dovrei", "è normale", "non so se", "non so come",
+    )
+    return any(cue in text for cue in cues) or len(text) > 250
 
 
 def should_clarify_after_gap(router: Dict[str, Any], gap_days: Optional[float]) -> bool:
@@ -2107,13 +2140,16 @@ def generate_normal_reply(
     history = get_history_before_pending(phone, RECENT_HISTORY_LIMIT)
     gap_days = days_since_last_assistant_reply(phone)
     clarify_after_gap = should_clarify_after_gap(router, gap_days)
+    clarification_question = is_clarification_question(pending_text, router)
     depth = router.get("response_depth", "normal")
     if depth not in {"micro", "normal", "deep"}:
         depth = "normal"
     if clarify_after_gap:
         depth = "normal"
+    elif clarification_question:
+        depth = "deep"
     effort = {"micro": "low", "normal": "low", "deep": "medium"}[depth]
-    verbosity = "low" if depth in {"micro", "normal"} else "medium"
+    verbosity = "low" if depth == "micro" else "medium"
     max_tokens = 500 if clarify_after_gap else {"micro": 350, "normal": 850, "deep": 1400}[depth]
 
     pending_chars = len((pending_text or "").strip())
@@ -2144,9 +2180,11 @@ Messaggio attuale della mamma: circa {pending_chars} caratteri.
 Lunghezza richiesta: {depth}.
 Se il messaggio è breve e puntuale, rispondi in modo essenziale.
 Se il messaggio è lungo e articolato, puoi essere più completa senza diventare prolissa.
-Se micro, usa normalmente 1-3 frasi. Se normal, resta proporzionata al messaggio. Se deep, approfondisci solo il necessario.
+Se micro, usa normalmente 1-3 frasi. Se normal, resta proporzionata al messaggio. Se deep, spiega il ragionamento e offri scenari possibili quando la mamma ha dubbi.
 """.strip()
     prompts = [SYSTEM_PROMPT_BASE, operational]
+    if clarification_question and not clarify_after_gap:
+        prompts.append(CLARIFICATION_PROMPT)
     if clarify_after_gap:
         prompts.append(AFTER_GAP_CLARIFICATION_PROMPT)
     if forced_mode == "continua":
@@ -2176,7 +2214,9 @@ Se micro, usa normalmente 1-3 frasi. Se normal, resta proporzionata al messaggio
         )
         clean = clean_reply(reply)
         return quality_control_reply(
-            phone, user_text, clean, router, clarify_after_gap=clarify_after_gap,
+            phone, user_text, clean, router,
+            clarify_after_gap=clarify_after_gap,
+            clarification_question=clarification_question,
         )
     except Exception as exc:
         logger.exception("Errore risposta AI %s: %s", phone, exc)
@@ -2191,6 +2231,7 @@ def quality_control_reply(
     reply: str,
     router: Dict[str, Any],
     clarify_after_gap: bool = False,
+    clarification_question: bool = False,
 ) -> Optional[str]:
     if not reply:
         return None
@@ -2200,6 +2241,11 @@ def quality_control_reply(
         clarification_note = (
             "\nNOTA: risposta dopo pausa di 3+ giorni senza aggiornamenti sufficienti. "
             "In questo turno è corretto fare solo 1-2 domande mirate, senza indicazioni operative dettagliate."
+        )
+    elif clarification_question:
+        clarification_note = (
+            "\nNOTA: domanda di chiarimento su indicazioni precedenti. "
+            "Una risposta più sviluppata che spiega il perché e presenta scenari possibili è corretta."
         )
     context = f"""
 MESSAGGIO DELLA MAMMA:
