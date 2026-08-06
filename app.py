@@ -2502,8 +2502,105 @@ def acquisto_dichiarato(text):
     if any(re.search(pattern, t, flags=re.I) for pattern in access_patterns) and any(term in t for term in material_terms):
         return True
 
+    # Scelta esplicita del tier sonno: non serve contesto conversazione.
+    tier_patterns = [
+        r"\b(?:ho|abbiamo|l[' ]?ho|l[' ]?abbiamo)\s+preso\s+(?:il\s+|la\s+|lo\s+|le\s+)?(?:47|67|base|premium|percorso|pacchetto)\b",
+        r"\bpreso\s+(?:il\s+|la\s+|lo\s+|le\s+)?(?:47|67|base|premium|percorso)\b",
+        r"\b(?:47|67)\s*(?:€|euro)?\b.*\b(?:preso|acquistato|comprato|pagato)\b",
+        r"\b(?:preso|acquistato|comprato|pagato)\b.*\b(?:47|67|base|premium)\b",
+        r"\b(?:ho|abbiamo)\s+(?:preso|acquistato|comprato)\s+quello\s+(?:da\s+)?(?:47|67)\b",
+    ]
+    if any(re.search(pattern, t, flags=re.I) for pattern in tier_patterns):
+        return True
+
     return False
 
+
+def conversation_has_purchase_context(phone):
+    """True se nella chat recente è già stato proposto o inviato un link/checkout."""
+    if link_gia_inviato(phone):
+        return True
+
+    meta = get_lead_meta(phone)
+    if meta.get("last_link_sent_at") or meta.get("lead_status") == LEAD_STATUS_LINK_SENT:
+        return True
+
+    try:
+        recent = get_recent_history(phone, limit=14)
+        assistant_text = " ".join(
+            str(m.get("content", ""))
+            for m in recent
+            if m.get("role") == "assistant"
+        ).lower()
+        purchase_markers = [
+            PURCHASE_CTA.lower(),
+            "shop.genitorinarmonia.com",
+            "genitorinarmonia.com/sonno",
+            "spannolinamento",
+            "ti lascio il link",
+            "link per procedere",
+            "47 euro", "67 euro", "19 euro", "37 euro",
+            "premium", "bonifico", "checkout", "carrello",
+            "quando hai acquistato", "dimmi quando hai effettuato",
+            "mando il questionario", "iniziamo",
+        ]
+        if any(marker in assistant_text for marker in purchase_markers):
+            return True
+    except Exception as e:
+        logger.error(f"Errore conversation_has_purchase_context per {phone}: {e}")
+
+    return False
+
+
+def acquisto_dichiarato_in_contesto(phone, text):
+    """Rileva acquisto anche da conferme brevi (fatto, preso) se la chat è in fase commerciale."""
+    if acquisto_dichiarato(text):
+        return True
+
+    t, t_clean = _normalize_purchase_text(text)
+    if not t:
+        return False
+
+    # Conferme brevi che da sole non bastano, ma con link/prezzi già proposti sì.
+    if conversation_has_purchase_context(phone):
+        short_context_patterns = [
+            r"^(?:fatto|preso|acquistato|comprato|pagato)\s*[.!]?\s*$",
+            r"^(?:ho\s+)?(?:fatto|preso)\s*[.!]?\s*$",
+            r"^l[' ]?ho\s+preso\s*[.!]?\s*$",
+            r"^l[' ]?abbiamo\s+preso\s*[.!]?\s*$",
+            r"^(?:ok\s+)?(?:fatto|preso|acquistato|comprato|pagato)\s*[.!]?\s*$",
+        ]
+        if any(re.search(pattern, t_clean, flags=re.I) for pattern in short_context_patterns):
+            return True
+        if len(t_clean.split()) <= 4 and re.search(r"\b(?:fatto|preso|acquistato|comprato|pagato)\b", t_clean):
+            return True
+
+    return False
+
+
+def send_purchase_telegram_alert(phone, message_text, product_type=None, detection_source="codice"):
+    """Avvisa Paola su Telegram quando un acquisto viene confermato."""
+    profile = get_child_profile(phone) or {}
+    mother_name = (profile.get("mother_name") or "").strip()
+    child_name = (profile.get("child_name") or "").strip()
+    product = product_label(product_type or get_product_type(phone))
+
+    lines = [
+        "🛒 ACQUISTO CONFERMATO",
+        "",
+        f"Telefono: {phone}",
+    ]
+    if mother_name:
+        lines.append(f"Mamma: {mother_name}")
+    if child_name:
+        lines.append(f"Bambino: {child_name}")
+    lines.extend([
+        f"Prodotto: {product}",
+        f"Rilevamento: {detection_source}",
+        "",
+        f"Messaggio:\n{(message_text or '').strip() or '-'}",
+    ])
+    threading.Thread(target=send_telegram, args=["\n".join(lines)], daemon=True).start()
 
 
 def normalize_text(text):
@@ -4151,7 +4248,7 @@ def get_ai_response(phone, image_url=None, router_result=None):
     if direct:
         return direct
 
-    if fase == 0 and is_acquisto_confermato(user_message, image_url=image_url, router_result=router_result):
+    if fase == 0 and is_acquisto_confermato(user_message, image_url=image_url, router_result=router_result, phone=phone):
         logger.info(f"get_ai_response bloccato in fase 0 per acquisto confermato: {phone}")
         return None
 
@@ -4305,7 +4402,7 @@ def should_silence_with_gpt(phone, fase, text, image_url=None):
         return False
     if image_url:
         return False
-    if fase == 0 and acquisto_dichiarato(text):
+    if fase == 0 and acquisto_dichiarato_in_contesto(phone, text):
         return False
 
     raw = (text or "").strip()
@@ -4321,6 +4418,8 @@ def should_silence_with_gpt(phone, fase, text, image_url=None):
         "ho finito", "ho risposto a tutto", "questionario completato",
         "ho acquistato", "ho comprato", "ho pagato", "bonifico",
         "pagato", "comprato", "ordine fatto", "acquisto",
+        "fatto", "preso", "ho preso", "l'ho preso", "l ho preso",
+        "ho preso il 47", "ho preso il 67", "preso il premium", "preso il base",
         "rimborso", "non funziona", "non riesco", "ho bisogno",
         "voglio parlare con paola", "mi chiami", "urgente",
         "che faccio", "cosa faccio", "come faccio", "non ho capito",
@@ -5234,17 +5333,23 @@ def receipt_image_confirms_purchase(image_url):
         return False
 
 
-def is_acquisto_confermato(combined_raw, image_url=None, router_result=None):
-    """Unico punto di rilevamento acquisto: regex, router GPT e ricevuta immagine."""
+def is_acquisto_confermato(combined_raw, image_url=None, router_result=None, phone=None):
+    """Unico punto di rilevamento acquisto: regex, contesto chat, router GPT e ricevuta immagine."""
     if acquisto_dichiarato(combined_raw):
+        return True
+
+    if phone and acquisto_dichiarato_in_contesto(phone, combined_raw):
         return True
 
     if router_result:
         intent = router_result.get("intent", "")
         confidence = float(router_result.get("confidence", 0) or 0)
-        if intent == "acquisto_completato" and confidence >= 0.75:
+        purchase_context = phone and conversation_has_purchase_context(phone)
+        acquisto_threshold = 0.60 if purchase_context else 0.75
+        bonifico_threshold = 0.70 if purchase_context else 0.80
+        if intent == "acquisto_completato" and confidence >= acquisto_threshold:
             return True
-        if intent == "bonifico_effettuato" and confidence >= 0.80:
+        if intent == "bonifico_effettuato" and confidence >= bonifico_threshold:
             return True
 
     if image_url and receipt_image_confirms_purchase(image_url):
@@ -5255,11 +5360,17 @@ def is_acquisto_confermato(combined_raw, image_url=None, router_result=None):
 
 def handle_acquisto_phase0(phone, combined_raw, image_url=None, router_result=None):
     """Gate unico fase 0: avvia sequenza acquisto o chiede chiarimento prodotto."""
-    if not is_acquisto_confermato(combined_raw, image_url=image_url, router_result=router_result):
+    if not is_acquisto_confermato(combined_raw, image_url=image_url, router_result=router_result, phone=phone):
         return False
 
     logger.info(f"Acquisto confermato per {phone}")
     product_type = product_from_context_or_text(phone, combined_raw)
+    detection_source = "regex"
+    if router_result and router_result.get("intent") in ("acquisto_completato", "bonifico_effettuato"):
+        detection_source = f"router:{router_result.get('intent')}"
+    elif acquisto_dichiarato_in_contesto(phone, combined_raw) and not acquisto_dichiarato(combined_raw):
+        detection_source = "contesto_conversazione"
+    send_purchase_telegram_alert(phone, combined_raw, product_type=product_type, detection_source=detection_source)
     if product_type == PRODUCT_UNKNOWN:
         set_awaiting_product_choice(phone, True, "purchase")
         risposta = build_product_clarification(phone, combined_raw, reason="purchase")
@@ -5571,8 +5682,8 @@ def process_response(phone, image_url=None):
         if detected_product in (PRODUCT_SLEEP, PRODUCT_POTTY) and get_product_type(phone) == PRODUCT_UNKNOWN:
             set_product_type(phone, detected_product)
 
-        # Priorità assoluta: acquisto dichiarato prima del filtro silenzio e del router.
-        if acquisto_dichiarato(combined_raw):
+        # Priorità assoluta: acquisto dichiarato (anche da contesto chat) prima del filtro silenzio e del router.
+        if acquisto_dichiarato_in_contesto(phone, combined_raw):
             if handle_acquisto_phase0(phone, combined_raw, image_url=image_url):
                 return
 
