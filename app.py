@@ -1403,6 +1403,91 @@ def get_contact_origin(phone):
         return "unknown"
 
 
+def _parse_lead_source_note(note_text):
+    """Estrae chiavi da una nota lead salvata come '[NOTA LEAD: origine=...; campagna=...]'."""
+    if not note_text:
+        return {}
+    parsed = {}
+    for piece in note_text.split(";"):
+        piece = piece.strip()
+        if "=" in piece:
+            key, value = piece.split("=", 1)
+            parsed[key.strip()] = value.strip()
+    return parsed
+
+
+def get_lead_source_note_meta(phone):
+    """Legge la prima nota lead (es. payload GHL) salvata nei messaggi."""
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT content FROM messages
+            WHERE phone = %s AND role = 'user' AND content LIKE '[NOTA LEAD:%%'
+            ORDER BY timestamp ASC
+            LIMIT 1
+        """, (phone,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return {}
+        content = row[0] or ""
+        prefix = "[NOTA LEAD: "
+        if content.startswith(prefix) and content.endswith("]"):
+            return _parse_lead_source_note(content[len(prefix):-1])
+        return {}
+    except Exception as e:
+        logger.error(f"Errore get_lead_source_note_meta per {phone}: {e}")
+        return {}
+
+
+def get_lead_provenance_label(phone):
+    """Label leggibile per alert Telegram: modulo Meta, template o altro."""
+    form_state = get_meta_form_state(phone)
+    form_type = form_state.get("form_lead_type", FORM_LEAD_NONE)
+    if form_type == FORM_LEAD_SLEEP:
+        return "Modulo Meta (sonno)"
+    if form_type == FORM_LEAD_POTTY:
+        return "Modulo Meta (pannolino)"
+
+    lead_meta = get_lead_meta(phone)
+    lead_flow = lead_meta.get("lead_flow", LEAD_FLOW_NONE)
+    source_note = get_lead_source_note_meta(phone) if lead_flow in (
+        LEAD_FLOW_SLEEP_GHL, LEAD_FLOW_POTTY_GHL
+    ) else {}
+
+    if lead_flow == LEAD_FLOW_SLEEP_MANUAL:
+        return "Template (outreach manuale sonno)"
+    if lead_flow == LEAD_FLOW_POTTY_MANUAL:
+        return "Template (outreach manuale pannolino)"
+    if lead_flow == LEAD_FLOW_SLEEP_GHL:
+        details = []
+        if source_note.get("origine"):
+            details.append(source_note["origine"])
+        if source_note.get("campagna"):
+            details.append(source_note["campagna"])
+        suffix = f", {', '.join(details)}" if details else ""
+        return f"Template GHL (sonno{suffix})"
+    if lead_flow == LEAD_FLOW_POTTY_GHL:
+        details = []
+        if source_note.get("origine"):
+            details.append(source_note["origine"])
+        if source_note.get("campagna"):
+            details.append(source_note["campagna"])
+        suffix = f", {', '.join(details)}" if details else ""
+        return f"Template GHL (pannolino{suffix})"
+
+    contact_origin = lead_meta.get("contact_origin", "unknown")
+    if contact_origin == "outbound_template":
+        return "Template"
+    if contact_origin == "inbound_spontaneous":
+        return "Altro (inbound spontaneo)"
+    if contact_origin == "existing_contact":
+        return "Altro (contatto esistente)"
+    return "Altro"
+
+
 def is_spontaneous_inbound_lead(phone):
     return get_contact_origin(phone) == "inbound_spontaneous"
 
@@ -2632,6 +2717,7 @@ def send_purchase_telegram_alert(phone, message_text, product_type=None, detecti
         lines.append(f"Bambino: {child_name}")
     lines.extend([
         f"Prodotto: {product}",
+        f"Provenienza: {get_lead_provenance_label(phone)}",
         f"Rilevamento: {detection_source}",
         "",
         f"Messaggio:\n{(message_text or '').strip() or '-'}",

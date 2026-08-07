@@ -6,7 +6,14 @@ from app import (
     acquisto_dichiarato,
     acquisto_dichiarato_in_contesto,
     conversation_has_purchase_context,
+    FORM_LEAD_POTTY,
+    FORM_LEAD_SLEEP,
     is_acquisto_confermato,
+    LEAD_FLOW_POTTY_GHL,
+    LEAD_FLOW_SLEEP_GHL,
+    LEAD_FLOW_SLEEP_MANUAL,
+    get_lead_provenance_label,
+    _parse_lead_source_note,
 )
 
 
@@ -117,3 +124,38 @@ def test_is_acquisto_confermato_router_soglia_con_testo_pagamento():
 
 def test_msg_benvenuto_is_non_empty():
     assert len(MSG_BENVENUTO.strip()) > 20
+
+
+def test_parse_lead_source_note():
+    note = "origine=meta; prodotto=sonno infantile; campagna=Campagna Sonno Q1"
+    parsed = _parse_lead_source_note(note)
+    assert parsed["origine"] == "meta"
+    assert parsed["campagna"] == "Campagna Sonno Q1"
+
+
+def test_get_lead_provenance_label_meta_form():
+    phone = "+393331234567"
+    with patch("app.get_meta_form_state", return_value={"form_lead_type": FORM_LEAD_SLEEP}):
+        assert get_lead_provenance_label(phone) == "Modulo Meta (sonno)"
+
+
+def test_get_lead_provenance_label_template_ghl():
+    phone = "+393331234567"
+    with patch("app.get_meta_form_state", return_value={"form_lead_type": "none"}), \
+         patch("app.get_lead_meta", return_value={"lead_flow": LEAD_FLOW_SLEEP_GHL, "contact_origin": "outbound_template"}), \
+         patch("app.get_lead_source_note_meta", return_value={"origine": "meta", "campagna": "Campagna Sonno"}):
+        assert get_lead_provenance_label(phone) == "Template GHL (sonno, meta, Campagna Sonno)"
+
+
+def test_get_lead_provenance_label_template_manual():
+    phone = "+393331234567"
+    with patch("app.get_meta_form_state", return_value={"form_lead_type": "none"}), \
+         patch("app.get_lead_meta", return_value={"lead_flow": LEAD_FLOW_SLEEP_MANUAL, "contact_origin": "outbound_template"}):
+        assert get_lead_provenance_label(phone) == "Template (outreach manuale sonno)"
+
+
+def test_get_lead_provenance_label_inbound():
+    phone = "+393331234567"
+    with patch("app.get_meta_form_state", return_value={"form_lead_type": "none"}), \
+         patch("app.get_lead_meta", return_value={"lead_flow": "none", "contact_origin": "inbound_spontaneous"}):
+        assert get_lead_provenance_label(phone) == "Altro (inbound spontaneo)"
