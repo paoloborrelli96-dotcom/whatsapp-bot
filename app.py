@@ -2131,6 +2131,20 @@ def model_prefers_default_temperature(model):
     return m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4")
 
 
+# Sui modelli reasoning i token di ragionamento consumano lo stesso budget dell'output:
+# con soli 180-350 token le classificazioni finivano in 400 "output limit reached".
+REASONING_TOKEN_HEADROOM = 1500
+REASONING_TOKEN_MAX = 16000
+
+
+def _is_output_limit_error(error):
+    """Riconosce il 400 di OpenAI quando il budget di output/reasoning si esaurisce."""
+    msg = str(error or "").lower()
+    if "model output limit" in msg:
+        return True
+    return "max_tokens" in msg and "limit was reached" in msg
+
+
 def openai_chat_completion(model, messages, max_tokens=1000, temperature=None, response_format=None, timeout=60):
     """
     Wrapper robusto per Chat Completions.
@@ -2145,7 +2159,7 @@ def openai_chat_completion(model, messages, max_tokens=1000, temperature=None, r
 
     if max_tokens is not None:
         if model_prefers_max_completion_tokens(model):
-            base_kwargs["max_completion_tokens"] = max_tokens
+            base_kwargs["max_completion_tokens"] = max_tokens + REASONING_TOKEN_HEADROOM
         else:
             base_kwargs["max_tokens"] = max_tokens
 
@@ -2179,7 +2193,9 @@ def openai_chat_completion(model, messages, max_tokens=1000, temperature=None, r
 
     last_error = None
     seen = set()
-    for kwargs in attempts:
+    escalations = 0
+    while attempts:
+        kwargs = attempts.pop(0)
         key = tuple(sorted(kwargs.keys())) + tuple((k, str(v)) for k, v in kwargs.items() if k in ("model", "max_tokens", "max_completion_tokens", "temperature"))
         if key in seen:
             continue
@@ -2194,6 +2210,17 @@ def openai_chat_completion(model, messages, max_tokens=1000, temperature=None, r
         except Exception as e:
             last_error = e
             logger.warning(f"OpenAI retry con parametri diversi per modello {model}: {e}")
+
+            # Budget esaurito dal reasoning: ritenta subito con un tetto più alto.
+            token_key = "max_completion_tokens" if "max_completion_tokens" in kwargs else "max_tokens" if "max_tokens" in kwargs else None
+            if token_key and escalations < 2 and _is_output_limit_error(e):
+                bigger = min(int(kwargs[token_key]) * 3, REASONING_TOKEN_MAX)
+                if bigger > int(kwargs[token_key]):
+                    escalations += 1
+                    retry = dict(kwargs)
+                    retry[token_key] = bigger
+                    logger.warning(f"OpenAI budget output esaurito per {model}: ritento con {token_key}={bigger}")
+                    attempts.insert(0, retry)
     raise last_error
 
 
@@ -2431,7 +2458,8 @@ def acquisto_dichiarato(text):
     - ho acquistato / abbiamo acquistato
     - ho pagato / abbiamo pagato
     - ho fatto l'ordine / abbiamo fatto l'ordine
-    - mio marito ha acquistato
+    - ho appena fatto il pagamento del piano base
+    - mio marito ha acquistato / ha fatto il pagamento
     - abbiamo gia ricevuto o iniziato a leggere le guide
 
     Non considera acquisto completato intenzioni future o negazioni come:
@@ -2443,32 +2471,39 @@ def acquisto_dichiarato(text):
     if not t:
         return False
 
+    # Articoli ammessi prima di ordine/acquisto/pagamento/bonifico.
+    _art = r"(?:il\s+|lo\s+|la\s+|l[' ]?)?"
+    _adv = r"(?:gia\s+|già\s+|appena\s+)?"
+    _pay_noun = r"(?:ordine|acquisto|pagamento|bonifico)"
+
     # Prima blocca negazioni esplicite: evitano falsi positivi come
     # "non abbiamo acquistato" o "non ho ancora fatto l'ordine".
     negative_patterns = [
         r"\bnon\s+(?:ho|abbiamo|ha)\s+(?:ancora\s+|gia\s+|già\s+)?(?:acquistato|comprato|pagato|ordinato)\b",
-        r"\bnon\s+(?:ho|abbiamo|ha)\s+(?:ancora\s+)?fatto\s+(?:l[' ]?)?(?:ordine|acquisto|pagamento|bonifico)\b",
-        r"\b(?:ordine|pagamento|bonifico)\s+non\s+(?:e|è)\s+(?:stato\s+)?(?:completato|effettuato|eseguito|confermato)\b",
+        rf"\bnon\s+(?:ho|abbiamo|ha)\s+(?:ancora\s+)?{_adv}(?:fatto|effettuato|completato)\s+{_art}{_pay_noun}\b",
+        rf"\b{_pay_noun}\s+non\s+(?:e|è)\s+(?:stato\s+)?(?:completato|effettuato|eseguito|confermato)\b",
     ]
     if any(re.search(pattern, t, flags=re.I) for pattern in negative_patterns):
         return False
 
     completed_patterns = [
         # Prima persona singolare e plurale.
-        r"\b(?:io\s+)?ho\s+(?:gia\s+|già\s+|appena\s+)?(?:acquistato|comprato|pagato|ordinato)\b",
-        r"\b(?:noi\s+)?abbiamo\s+(?:gia\s+|già\s+|appena\s+)?(?:acquistato|comprato|pagato|ordinato)\b",
+        rf"\b(?:io\s+)?ho\s+{_adv}(?:acquistato|comprato|pagato|ordinato)\b",
+        rf"\b(?:noi\s+)?abbiamo\s+{_adv}(?:acquistato|comprato|pagato|ordinato)\b",
 
-        # Ordine/acquisto/pagamento eseguito.
-        r"\b(?:ho|abbiamo)\s+fatto\s+(?:l[' ]?)?(?:ordine|acquisto|pagamento|bonifico)\b",
-        r"\b(?:ho|abbiamo)\s+effettuato\s+(?:l[' ]?)?(?:ordine|acquisto|pagamento|bonifico)\b",
-        r"\b(?:ordine|pagamento|bonifico)\s+(?:e|è)\s+(?:stato\s+)?(?:completato|effettuato|eseguito|confermato|andato\s+a\s+buon\s+fine)\b",
+        # Ordine/acquisto/pagamento eseguito (con appena/già e articolo il/lo/la/l').
+        # Copre anche: "Ho appena fatto il pagamento del piano base".
+        rf"\b(?:ho|abbiamo)\s+{_adv}(?:fatto|effettuato|completato|concluso)\s+{_art}{_pay_noun}\b",
+        rf"\b{_pay_noun}\s+(?:e|è)\s+(?:stato\s+)?(?:completato|effettuato|eseguito|confermato|andato\s+a\s+buon\s+fine)\b",
+        rf"\b{_pay_noun}\s+{_adv}(?:fatto|effettuato|completato|eseguito|ok)\b",
 
         # Pronomi e forme colloquiali.
-        r"\b(?:l[' ]?ho|lo\s+ho|l[' ]?abbiamo|lo\s+abbiamo)\s+(?:gia\s+|già\s+|appena\s+)?(?:acquistato|comprato|pagato|preso)\b",
+        rf"\b(?:l[' ]?ho|lo\s+ho|l[' ]?abbiamo|lo\s+abbiamo)\s+{_adv}(?:acquistato|comprato|pagato|preso)\b",
         r"\b(?:ho|abbiamo)\s+preso\s+(?:il\s+|la\s+|le\s+|i\s+)?(?:pacchetto|percorso|premium|consulenza|guida|guide)\b",
 
         # Acquisto eseguito da partner/coniuge.
-        r"\b(?:mio\s+marito|mia\s+moglie|il\s+mio\s+compagno|la\s+mia\s+compagna|il\s+papa|il\s+papà|la\s+mamma)\s+ha\s+(?:gia\s+|già\s+|appena\s+)?(?:acquistato|comprato|pagato|ordinato)\b",
+        rf"\b(?:mio\s+marito|mia\s+moglie|il\s+mio\s+compagno|la\s+mia\s+compagna|il\s+papa|il\s+papà|la\s+mamma)\s+ha\s+{_adv}(?:acquistato|comprato|pagato|ordinato)\b",
+        rf"\b(?:mio\s+marito|mia\s+moglie|il\s+mio\s+compagno|la\s+mia\s+compagna|il\s+papa|il\s+papà|la\s+mamma)\s+ha\s+{_adv}(?:fatto|effettuato|completato)\s+{_art}{_pay_noun}\b",
     ]
     if any(re.search(pattern, t, flags=re.I) for pattern in completed_patterns):
         return True
@@ -2476,6 +2511,7 @@ def acquisto_dichiarato(text):
     colloquial_patterns = [
         r"^(?:acquisto|pagato|comprato)\s*[.!]?\s*$",
         r"\bordine\s+fatto\b",
+        r"\bpagamento\s+fatto\b",
         r"\bcomprato\s+(?:quello|il|la)\b",
     ]
     if any(re.search(pattern, t, flags=re.I) for pattern in colloquial_patterns):
@@ -3077,12 +3113,16 @@ def get_questionnaire_stage_text(phone, fase):
 def is_explicit_finish_confirmation(text):
     """Riconosce una conferma finale reale dopo "Hai risposto a tutto?".
 
-    Accetta anche formule naturali come "Sì sì fatto", "sì, tutto fatto" e
-    "ho fatto tutto grazie", ma esclude rinvii o negazioni come "non ancora".
+    Accetta formule naturali come "Sì sì fatto", "sì, tutto fatto",
+    "ho fatto tutto grazie" e "Sì ho risposto a questo su Diego",
+    ma esclude rinvii, negazioni e risposte parziali come "non ancora"
+    o "ho risposto solo alla prima".
     """
     raw = normalize_text(text or "")
     if not raw:
         return False
+
+    has_question_mark = "?" in raw
 
     # Uniforma accenti e punteggiatura per rendere robusto il riconoscimento.
     t = "".join(
@@ -3097,9 +3137,15 @@ def is_explicit_finish_confirmation(text):
     negative_patterns = [
         "non ho finito", "non ancora", "devo finire", "devo completare",
         "finisco dopo", "finisco domani", "completo dopo", "completo domani",
-        "manca ancora", "non e tutto", "non ho risposto a tutto"
+        "manca ancora", "non e tutto", "non ho risposto a tutto",
+        # Risposte parziali: non devono far partire il piano.
+        "solo alla", "solo alle", "solo a una", "solo una", "non tutte",
+        "manca", "mancano", "a meta", "quasi tutto", "ancora no",
     ]
     if any(pattern in t for pattern in negative_patterns):
+        return False
+
+    if is_questionnaire_deferral(raw):
         return False
 
     # Elimina cortesie/appellativi iniziali o finali che non cambiano il significato.
@@ -3118,7 +3164,7 @@ def is_explicit_finish_confirmation(text):
         "ho risposto a tutte", "ho risposto a tutti", "ho completato",
         "completato", "ho completato tutto", "ecco tutto", "questo e tutto",
         "ho concluso", "concluso", "ho fatto tutto", "si ho fatto tutto",
-        "sono pronta", "pronta", "yes"
+        "sono pronta", "pronta", "yes", "esatto", "confermo", "tutto qui",
     }
     if t in exact:
         return True
@@ -3129,7 +3175,26 @@ def is_explicit_finish_confirmation(text):
         r"^(?:si\s+)?(?:ho\s+)?risposto\s+a\s+tutt[ioe]$",
         r"^(?:si\s+)?(?:questo|ecco)\s+e\s+tutto$",
     ]
-    return any(re.fullmatch(pattern, t) for pattern in positive_patterns)
+    if any(re.fullmatch(pattern, t) for pattern in positive_patterns):
+        return True
+
+    # Conferme naturali con contesto breve, ad esempio:
+    # "si ho risposto a questo su diego", "si ho scritto tutto su marco".
+    # La fase 5 arriva solo dopo la domanda fissa "Hai risposto a tutto?",
+    # quindi un assenso breve senza domande vale come conferma.
+    if has_question_mark or len(words) > 14:
+        return False
+
+    affirmative_start = r"^(?:si|gia|certo|esatto|confermo|assolutamente|yes|yep|ecco|tutto)\b"
+    if not re.match(affirmative_start, t):
+        return False
+
+    done_verbs = r"\b(?:risposto|rispose|finito|completato|concluso|fatto|scritto|mandato|inviato|detto)\b"
+    if re.search(done_verbs, t):
+        return True
+
+    # Assenso secco tipo "si certo", "esatto tutto".
+    return len(words) <= 4
 
 
 GPT_CONTEXT_CHECK_CONFIRMATION_PROMPT = (
@@ -4461,9 +4526,10 @@ def should_silence_with_gpt(phone, fase, text, image_url=None):
     must_reply_patterns = [
         "ho finito", "ho risposto a tutto", "questionario completato",
         "ho acquistato", "ho comprato", "ho pagato", "bonifico",
-        "pagato", "comprato", "ordine fatto", "acquisto",
+        "pagato", "pagamento", "comprato", "ordine fatto", "acquisto",
         "fatto", "preso", "ho preso", "l'ho preso", "l ho preso",
         "ho preso il 47", "ho preso il 67", "preso il premium", "preso il base",
+        "piano base", "piano premium",
         "rimborso", "non funziona", "non riesco", "ho bisogno",
         "voglio parlare con paola", "mi chiami", "urgente",
         "che faccio", "cosa faccio", "come faccio", "non ho capito",
@@ -5377,6 +5443,32 @@ def receipt_image_confirms_purchase(image_url):
         return False
 
 
+def _testo_suggerisce_pagamento_completato(text):
+    """Segnale lessicale forte di pagamento già fatto (rete di sicurezza per il router).
+
+    Più permissivo di acquisto_dichiarato sulle varianti, ma richiede ancora
+    verbo di completamento vicino a pagamento/ordine/piano.
+    """
+    t, _ = _normalize_purchase_text(text)
+    if not t:
+        return False
+    if re.search(r"\bnon\s+(?:ho|abbiamo|ha)\b", t, flags=re.I):
+        return False
+
+    patterns = [
+        # "ho appena / già / oggi pagato|acquistato..."
+        r"\b(?:ho|abbiamo|ha)\s+(?:\w+\s+){0,3}(?:pagato|acquistato|comprato|ordinato)\b",
+        # "ho ... fatto/effettuato il pagamento/ordine"
+        r"\b(?:ho|abbiamo|ha)\s+(?:\w+\s+){0,3}(?:fatto|effettuato|completato)\s+(?:il\s+|lo\s+|la\s+|l[' ]?)?(?:ordine|acquisto|pagamento|bonifico)\b",
+        # "pagamento/bonifico fatto|completato"
+        r"\b(?:pagamento|bonifico|ordine)\s+(?:del\s+piano\s+)?(?:base|premium)?\s*(?:fatto|effettuato|completato|ok)\b",
+        # "piano base" vicino a pagamento/pagato
+        r"\bpiano\s+(?:base|premium).{0,48}\b(?:pagato|pagamento|acquistato|comprato|ordine)\b",
+        r"\b(?:pagato|pagamento|acquistato|comprato|ordine).{0,48}\bpiano\s+(?:base|premium)\b",
+    ]
+    return any(re.search(pattern, t, flags=re.I) for pattern in patterns)
+
+
 def is_acquisto_confermato(combined_raw, image_url=None, router_result=None, phone=None):
     """Unico punto di rilevamento acquisto: regex, contesto chat, router GPT e ricevuta immagine."""
     if acquisto_dichiarato(combined_raw):
@@ -5389,8 +5481,14 @@ def is_acquisto_confermato(combined_raw, image_url=None, router_result=None, pho
         intent = router_result.get("intent", "")
         confidence = float(router_result.get("confidence", 0) or 0)
         purchase_context = phone and conversation_has_purchase_context(phone)
-        acquisto_threshold = 0.60 if purchase_context else 0.75
-        bonifico_threshold = 0.70 if purchase_context else 0.80
+        strong_payment_text = _testo_suggerisce_pagamento_completato(combined_raw)
+        # Con testo chiaramente di pagamento già fatto, abbassa la soglia del router.
+        if purchase_context and strong_payment_text:
+            acquisto_threshold, bonifico_threshold = 0.50, 0.55
+        elif purchase_context or strong_payment_text:
+            acquisto_threshold, bonifico_threshold = 0.55, 0.60
+        else:
+            acquisto_threshold, bonifico_threshold = 0.75, 0.80
         if intent == "acquisto_completato" and confidence >= acquisto_threshold:
             return True
         if intent == "bonifico_effettuato" and confidence >= bonifico_threshold:

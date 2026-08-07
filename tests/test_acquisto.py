@@ -16,6 +16,7 @@ from app import (
     "Pagato",
     "Comprato",
     "ordine fatto",
+    "pagamento fatto",
     "Comprato quello da 47€",
     "ho acquistato",
     "abbiamo acquistato il Premium",
@@ -24,6 +25,14 @@ from app import (
     "preso il premium",
     "ho preso il base",
     "preso quello da 47",
+    # Caso reale monitor: prima falliva per "appena" + articolo "il".
+    "Ho appena fatto il pagamento del piano base",
+    "ho fatto il pagamento",
+    "ho effettuato il pagamento",
+    "ho appena effettuato il bonifico",
+    "abbiamo già fatto l'ordine",
+    "mio marito ha fatto il pagamento",
+    "ho completato l'acquisto",
 ])
 def test_acquisto_dichiarato_positive(text):
     assert acquisto_dichiarato(text) is True
@@ -32,8 +41,10 @@ def test_acquisto_dichiarato_positive(text):
 @pytest.mark.parametrize("text", [
     "Vorrei acquistare",
     "Non ho ancora acquistato",
+    "Non ho ancora fatto il pagamento",
     "Lo compro domani",
     "Quanto costa quello da 47€?",
+    "Vorrei fare il pagamento del piano base",
     "fatto",
     "preso",
     "",
@@ -88,6 +99,20 @@ def test_is_acquisto_confermato_router_con_contesto_soglia_bassa():
 def test_is_acquisto_confermato_low_confidence():
     router = {"intent": "bonifico_effettuato", "confidence": 0.50}
     assert is_acquisto_confermato("ok", router_result=router) is False
+
+
+def test_is_acquisto_confermato_frase_reale_senza_router():
+    # Deve partire anche senza router: gate deterministico prima di GPT.
+    assert is_acquisto_confermato("Ho appena fatto il pagamento del piano base") is True
+
+
+def test_is_acquisto_confermato_router_soglia_con_testo_pagamento():
+    router = {"intent": "acquisto_completato", "confidence": 0.56}
+    # Frase non coperta dal regex stretto, ma segnale lessicale + router.
+    assert is_acquisto_confermato(
+        "oggi il pagamento piano base ok fatto da me",
+        router_result=router,
+    ) is True
 
 
 def test_msg_benvenuto_is_non_empty():
