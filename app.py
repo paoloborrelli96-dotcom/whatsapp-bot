@@ -115,6 +115,10 @@ LEAD_STATUS_STOPPED = "stopped"
 LEAD_STATUS_LINK_FOLLOWUP_SENT = "link_followup_sent"
 LEAD_STATUS_COLD = "cold"
 
+PHASE0_OBJECTION_INTENTS = frozenset({
+    "obiezione_prezzo", "obiezione_posticipo", "obiezione_generica"
+})
+
 # V49/V50: lead che arrivano inviando direttamente su WhatsApp le risposte del modulo Meta.
 FORM_LEAD_NONE = "none"
 FORM_LEAD_SLEEP = "sleep_form"
@@ -460,6 +464,8 @@ Intenti possibili:
 - richiesta_consiglio_gratuito
 - richiesta_differenza_percorsi
 - obiezione_prezzo
+- obiezione_posticipo
+- obiezione_generica
 - richiesta_link
 - intenzione_acquisto_non_completato
 - acquisto_completato
@@ -493,6 +499,9 @@ Se dice che ha già fatto il bonifico, usa bonifico_effettuato.
 Non classificare come richiesta_rimborso solo perché compare la parola rimborso. È richiesta_rimborso solo se vuole indietro i soldi o chiede la procedura.
 Non classificare come problema_checkout_importo solo perché compaiono 19, 37, 47 o 67. È problema_checkout_importo solo se parla di carrello, checkout, importo sbagliato, prezzo che non torna, prodotto aggiunto più volte.
 Non classificare come acquisto_completato se scrive "lo compro", "lo prendo", "acquisto subito". Quello è intenzione_acquisto_non_completato.
+Usa obiezione_posticipo se dice che non può adesso, deve aspettare, partire in vacanza, rientra più avanti, è un periodo impegnato o non ha tempo per iniziare il percorso in questo momento.
+Usa obiezione_generica per altre obiezioni commerciali non legate al prezzo né al timing: devo pensarci, ne parlo col marito/partner, non sono sicura, devo valutare, forse più avanti senza motivo temporale chiaro.
+Usa obiezione_prezzo se l'obiezione principale riguarda costo, soldi, troppo caro, budget o confronto con altre spese.
 È acquisto_completato solo se dice che ha già pagato, completato ordine, fatto acquisto, mostra ricevuta/conferma, oppure dice di aver scaricato/letto/ricevuto la guida, il PDF, il materiale o il percorso. Se l'acquisto è generico non devi decidere tu il prodotto: il codice chiederà sonno o spannolinamento.
 Sono acquisto_completato anche le forme plurali e familiari: "abbiamo acquistato", "abbiamo comprato", "abbiamo pagato", "abbiamo fatto l'ordine", "mio marito ha acquistato", "abbiamo iniziato a leggere le guide". Non confonderle con "vorremmo acquistare", "lo compriamo domani" o "non abbiamo ancora acquistato".
 Se la mamma è già in percorso attivo e chiede "che faccio ora", "lo sveglio", "la attacco", "come mi muovo adesso", usa richiesta_pratica_immediata.
@@ -538,6 +547,13 @@ Se invece non ha ancora acquistato ma descrive per la prima volta un problema co
 Se la mamma sta rispondendo a una domanda intelligente precedente, allora apri in modo accogliente, fai un'analisi più completa ma ancora breve e introduci il percorso/link seguendo la regola business.
 In fase 0 la persona non ha ancora acquistato: puoi dare soltanto una piccola lettura personalizzata e al massimo una direzione generale. Non fornire orari dettagliati, sequenze passo passo, correzioni continue o un piano completo gratuito. Dopo una domanda sostanziale, riportala sempre con delicatezza verso l'acquisto del percorso adatto. Se il link è già stato inviato, non ripeterlo: dille che lo trova nel messaggio sopra, salvo richiesta esplicita.
 In fase 0 NON inviare mai un questionario numerato, NON chiedere di rispondere punto per punto e NON promettere di preparare o inviare il piano personalizzato: quelle azioni le gestisce solo il codice dopo acquisto confermato.
+
+GESTIONE OBIEZIONI IN FASE 0
+Quando la mamma solleva un'obiezione (prezzo, timing, vacanza, devo pensarci, marito, non è il momento), gestiscila con professionalità e calore.
+Prima valida sempre la sua posizione, poi fai UN SOLO tentativo morbido di portarla all'acquisto: se vuoi ti consiglio di prendere adesso il percorso a questa promo speciale così ti blocchi il posto, poi quando vuoi iniziare si parte da lì, e nel frattempo puoi leggerti le guide comprese nel prezzo con concetti fondamentali.
+Non essere invadente: un solo suggerimento commerciale per obiezione, poi fermati.
+Se la mamma insiste o ripete che non può o non vuole procedere adesso, accetta con morbidezza la sua decisione senza spingere ancora, senza reinviare link e senza riproporre il percorso. Puoi dirle che quando si sente pronta può scriverti.
+
 Per il sonno, i prezzi possono essere comunicati quando previsti dalla regola business: 47 euro per 30 giorni e Premium in offerta a 67 euro invece di 197 euro per 60 giorni. Solo alle mamme spontanee provenienti dalla landing delle guide si può presentare anche la soluzione da 37 euro. Alle mamme riconosciute come provenienti dal modulo Meta sonno si presentano esclusivamente 47 e 67 euro, consigliando il Premium. Per lo spannolinamento c'è un unico percorso da 19 euro con 30 giorni di supporto WhatsApp; nel flusso modulo Meta è una super promo valida soltanto fino a oggi.
 Il supporto emotivo forte va usato solo se lei lo palesa con frasi come "sono distrutta", "non ce la faccio", "mi sento in colpa", "sono disperata". Se racconta solo il problema, resta concreta, calda e professionale.
 Se dichiara di aver già acquistato, il codice avvia la sequenza acquisto corretta; se l'acquisto è generico, prima chiede sonno o spannolinamento.
@@ -1092,6 +1108,7 @@ def init_db():
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS form_step INTEGER DEFAULT 0")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS form_offer_sent BOOLEAN DEFAULT FALSE")
     cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS form_received_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE consultations ADD COLUMN IF NOT EXISTS objection_pitch_sent_at TIMESTAMPTZ")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS telegram_topics (
@@ -1689,6 +1706,7 @@ def get_lead_meta(phone):
                 intelligent_question_followup_sent_at,
                 last_link_sent_at,
                 link_followup_sent_at,
+                objection_pitch_sent_at,
                 COALESCE(product_type, 'unknown') AS product_type
             FROM consultations WHERE phone = %s
         """, (phone,))
@@ -1706,7 +1724,7 @@ def update_lead_followup_fields(phone, **fields):
     allowed = {
         "lead_status", "followup_enabled", "template_followup_sent_at",
         "last_intelligent_question_sent_at", "intelligent_question_followup_sent_at",
-        "last_link_sent_at", "link_followup_sent_at"
+        "last_link_sent_at", "link_followup_sent_at", "objection_pitch_sent_at"
     }
     updates = []
     values = []
@@ -1989,14 +2007,19 @@ def mark_phase0_after_assistant_reply(phone, reply, router_result=None):
         return
     # Nel flusso Meta lo step avanza dopo ogni risposta effettivamente inviata da Paola.
     update_meta_form_after_assistant_reply(phone, reply)
+    intent = (router_result or {}).get("intent", "")
     if reply_contains_product_link(reply):
         update_lead_followup_fields(
             phone,
             lead_status=LEAD_STATUS_LINK_SENT,
             last_link_sent_at=datetime.now(pytz.timezone(TIMEZONE))
         )
+        if intent in PHASE0_OBJECTION_INTENTS and not objection_pitch_already_sent(phone):
+            update_lead_followup_fields(
+                phone,
+                objection_pitch_sent_at=datetime.now(pytz.timezone(TIMEZONE))
+            )
         return
-    intent = (router_result or {}).get("intent", "")
     lower = reply.lower()
     looks_like_question = "?" in reply or "ti chiedo" in lower or "dimmi" in lower or "raccontami" in lower
     if phase0_intent_is_problem(intent) and looks_like_question:
@@ -2004,6 +2027,12 @@ def mark_phase0_after_assistant_reply(phone, reply, router_result=None):
             phone,
             lead_status=LEAD_STATUS_INITIAL_QUESTION_SENT,
             last_intelligent_question_sent_at=datetime.now(pytz.timezone(TIMEZONE))
+        )
+        return
+    if intent in PHASE0_OBJECTION_INTENTS and not objection_pitch_already_sent(phone):
+        update_lead_followup_fields(
+            phone,
+            objection_pitch_sent_at=datetime.now(pytz.timezone(TIMEZONE))
         )
 
 def get_lead_state(phone):
@@ -3870,6 +3899,83 @@ Ultimi messaggi da classificare:
         return default
 
 
+def objection_pitch_already_sent(phone):
+    """True se in fase 0 è già stato fatto un tentativo di conversione dopo un'obiezione."""
+    if not phone:
+        return False
+    return bool(get_lead_meta(phone).get("objection_pitch_sent_at"))
+
+
+def phase0_objection_soft_accept_rule():
+    return """
+La mamma ha già ricevuto un tentativo di proposta dopo un'obiezione precedente e ora insiste o ripete che non può o non vuole procedere adesso.
+Accetta con calore e senza pressione la sua scelta. Non riproporre il percorso, non reinviare link, non insistere sull'acquisto.
+Puoi dirle che quando si sente pronta può scriverti, e augurarle buon proseguimento o buona vacanza se pertinente.
+Risposta breve, morbida, umana. Nessuna vendita.
+"""
+
+
+def phase0_objection_product_context(product_type, spontaneous, guide_mentioned, link_sent):
+    if product_type == PRODUCT_POTTY:
+        link_note = f"Inserisci una sola volta il link se non è ancora stato inviato: {LINK_POTTY}" if not link_sent else "Il link è già stato inviato: non ripeterlo salvo richiesta esplicita."
+        return f"""
+Percorso spannolinamento da {POTTY_PRICE} euro (super promo valida fino a oggi per chi arriva dal modulo Meta): guida, questionario, piano personalizzato e 30 giorni di supporto WhatsApp.
+Le guide/materiali sono inclusi e può leggerli nel frattempo prima di iniziare il lavoro attivo.
+{link_note}
+"""
+    if product_type == PRODUCT_SLEEP:
+        if spontaneous or guide_mentioned:
+            link_note = f"Inserisci una sola volta il link percorsi se non è ancora stato inviato: {LINK_PREMIUM}" if not link_sent else "Il link è già stato inviato: non ripeterlo salvo richiesta esplicita."
+            return f"""
+Promo riservata a chi scrive spontaneamente: percorso da {SLEEP_BASE_PRICE} euro con 30 giorni di supporto, oppure Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro con 60 giorni (consigliato).
+Le guide sono comprese nel prezzo e può leggerle nel frattempo: hanno concetti fondamentali utili prima di iniziare il percorso attivo.
+{link_note}
+"""
+        link_note = f"Inserisci una sola volta il link percorsi se non è ancora stato inviato: {LINK_PREMIUM}" if not link_sent else "Il link è già stato inviato: non ripeterlo salvo richiesta esplicita."
+        return f"""
+Percorsi sonno da {SLEEP_BASE_PRICE} euro con 30 giorni di supporto, oppure Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro con 60 giorni (consigliato).
+Le guide sono comprese nel prezzo e può leggerle nel frattempo: hanno concetti fondamentali utili prima di iniziare il percorso attivo.
+{link_note}
+"""
+    return "Chiedi prima se si riferisce al sonno o allo spannolinamento, poi applica la stessa logica morbida di blocco posto e guide incluse."
+
+
+def build_phase0_objection_rule(intent, product_type, link_sent, spontaneous, guide_mentioned, phone):
+    if objection_pitch_already_sent(phone):
+        return phase0_objection_soft_accept_rule()
+
+    product_ctx = phase0_objection_product_context(product_type, spontaneous, guide_mentioned, link_sent)
+
+    if intent == "obiezione_posticipo":
+        return f"""
+La mamma dice che non può adesso, deve partire in vacanza, aspettare o posticipare l'inizio del percorso.
+Convalida assolutamente la sua scelta con calore: fai benissimo, capisco perfettamente.
+Poi fai UN SOLO tentativo morbido di conversione, senza essere invadente: se vuoi ti consiglio di prendere adesso il percorso a questa promo speciale così ti blocchi il posto, poi quando vuoi iniziare iniziamo, e nel frattempo puoi leggerti le guide comprese nel prezzo con concetti fondamentali.
+Non insistere oltre questo unico suggerimento. Non fare più di un invito all'acquisto in questo messaggio.
+{product_ctx}
+"""
+
+    if intent == "obiezione_prezzo":
+        extra = ""
+        if product_type == PRODUCT_SLEEP and (spontaneous or guide_mentioned):
+            extra = f" Con 10 euro in più rispetto alle sole guide da {SLEEP_GUIDES_PRICE} euro c'è il percorso da {SLEEP_BASE_PRICE} euro; il Premium in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro con 60 giorni è quello consigliato."
+        return f"""
+La mamma solleva un'obiezione sul prezzo.
+Rispondi con calore e concretezza: valida la sua preoccupazione, poi fai UN SOLO tentativo morbido di conversione.
+Spiega che il valore non è solo nei PDF ma nel questionario, piano su misura e supporto WhatsApp passo passo.{extra}
+Puoi anche suggerire di bloccare il posto ora alla promo e leggere le guide incluse nel frattempo, prima di iniziare quando è pronta.
+Non insistere oltre questo unico suggerimento. Non regalare un piano operativo completo.
+{product_ctx}
+"""
+
+    return f"""
+La mamma solleva un'obiezione commerciale (devo pensarci, marito, dubbi, non sono sicura, ecc.).
+Ascolta con empatia e valida la sua posizione, poi fai UN SOLO tentativo morbido di portarla all'acquisto: promo speciale, blocco del posto, inizio quando vuole, guide comprese nel prezzo da leggere nel frattempo con concetti fondamentali.
+Non essere invadente: un solo suggerimento, poi fermati.
+{product_ctx}
+"""
+
+
 def get_business_rule(intent, fase, link_sent=False, product_type=PRODUCT_UNKNOWN, phone=None, pending_text=""):
     """Regole commerciali dinamiche per lead non ancora acquistate."""
     product_type = product_type if product_type in (PRODUCT_SLEEP, PRODUCT_POTTY) else PRODUCT_UNKNOWN
@@ -3916,21 +4022,10 @@ Link percorsi 47/67: {LINK_PREMIUM}
 Non spingere in modo aggressivo.
 """
 
-    if intent == "obiezione_prezzo":
-        if product_type == PRODUCT_POTTY:
-            return f"""
-Rispondi con calore e concretezza. Il percorso spannolinamento costa {POTTY_PRICE} euro e comprende guida, questionario, piano personalizzato e 30 giorni di supporto WhatsApp.
-Spiega il valore senza pressione e senza proporre altri pacchetti.
-Link se serve: {LINK_POTTY}
-"""
-        extra = ""
-        if spontaneous or guide_mentioned:
-            extra = f" La guida da {SLEEP_GUIDES_PRICE} euro è solo digitale e senza supporto; con 10 euro in più c'è il percorso da {SLEEP_BASE_PRICE} euro con 30 giorni, mentre il Premium è in offerta a {SLEEP_PREMIUM_PRICE} euro invece di {SLEEP_PREMIUM_ORIGINAL_PRICE} euro, offre 60 giorni ed è quello consigliato."
-        return f"""
-Rispondi all'obiezione sul prezzo con calore e concretezza.
-Spiega che il valore non è solo nei PDF, ma nel questionario, nel piano su misura e nel supporto WhatsApp passo passo.{extra}
-Non fare pressione e non regalare un piano operativo completo.
-"""
+    if intent in PHASE0_OBJECTION_INTENTS and fase == 0:
+        return build_phase0_objection_rule(
+            intent, product_type, link_sent, spontaneous, guide_mentioned, phone
+        )
 
     if intent == "richiesta_rimborso":
         return f"""
@@ -4308,7 +4403,8 @@ def meta_form_business_rule(phone, intent, product_type, link_sent, asks_link=Fa
     )
     commercial_intents = {
         "richiesta_link", "richiesta_info_percorso", "richiesta_differenza_percorsi",
-        "obiezione_prezzo", "intenzione_acquisto_non_completato", "richiesta_bonifico"
+        "obiezione_prezzo", "obiezione_posticipo", "obiezione_generica",
+        "intenzione_acquisto_non_completato", "richiesta_bonifico"
     }
 
     if offer_sent:
