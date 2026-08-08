@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Flussi del Bot — Genitori in Armonia</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"
+        integrity="sha384-WmdflGW9aGfoBdHc4rRyWzYuAjEmDwMdGdiPNacbwfGKxBW/SO6guzuQ76qjnSlr"
+        crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.1/dist/svg-pan-zoom.min.js"
+        integrity="sha384-yc/c2Lk1s2V2ir1rxvjo8YyVD9PlOlYTqpNr3Wm1WIuAA30GlDYNx6U5104OiavY"
+        crossorigin="anonymous"></script>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --panel: #ffffff;
+    --border: #e1e4e8;
+    --text: #1f2328;
+    --muted: #6a737d;
+    --accent: #1565c0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  header h1 {
+    font-size: 17px;
+    margin: 0;
+    font-weight: 600;
+  }
+  header .sub {
+    font-size: 12.5px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .toolbar button {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--text);
+  }
+  .toolbar button:hover {
+    background: #f0f2f5;
+    border-color: var(--accent);
+  }
+  #status {
+    font-size: 12px;
+    color: var(--muted);
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: #eef4fb;
+  }
+  #viewer {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background:
+      linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px) 0 0/24px 24px,
+      linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px) 0 0/24px 24px,
+      var(--bg);
+  }
+  #diagram {
+    width: 100%;
+    height: 100%;
+  }
+  #diagram svg {
+    width: 100%;
+    height: 100%;
+  }
+  #error {
+    display: none;
+    margin: 30px auto;
+    max-width: 700px;
+    background: #fff5f5;
+    border: 1px solid #ffc9c9;
+    color: #a51616;
+    padding: 16px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+  }
+  #loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: var(--muted);
+    font-size: 14px;
+  }
+  footer {
+    text-align: center;
+    font-size: 11.5px;
+    color: var(--muted);
+    padding: 6px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+  }
+  a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🧩 Flussi del Bot — Genitori in Armonia</h1>
+    <div class="sub">Diagramma interattivo, sempre sincronizzato con il file <code>diagramma_flussi_bot_semplice.mmd</code> nel repository</div>
+  </div>
+  <div class="toolbar">
+    <span id="status">Caricamento…</span>
+    <button id="zoomIn">➕ Zoom</button>
+    <button id="zoomOut">➖ Zoom</button>
+    <button id="reset">↺ Adatta a schermo</button>
+    <button id="reload">⟳ Ricarica</button>
+  </div>
+</header>
+
+<div id="viewer">
+  <div id="loading">Generazione del diagramma…</div>
+  <div id="diagram"></div>
+  <div id="error"></div>
+</div>
+
+<footer>
+  Generato automaticamente da <code>docs/diagramma_flussi_bot_semplice.mmd</code> — aggiorna quel file e fai push per pubblicare le modifiche.
+</footer>
+
+<script>
+  const MMD_SOURCE_URL = "diagramma_flussi_bot_semplice.mmd";
+  let panZoomInstance = null;
+
+  mermaid.initialize({ startOnLoad: false, theme: "default", flowchart: { useMaxWidth: false, htmlLabels: true } });
+
+  async function loadDiagram() {
+    const statusEl = document.getElementById("status");
+    const errorEl = document.getElementById("error");
+    const loadingEl = document.getElementById("loading");
+    const diagramEl = document.getElementById("diagram");
+
+    errorEl.style.display = "none";
+    loadingEl.style.display = "block";
+    diagramEl.innerHTML = "";
+    statusEl.textContent = "Caricamento…";
+
+    try {
+      const res = await fetch(MMD_SOURCE_URL + "?t=" + Date.now());
+      if (!res.ok) throw new Error("File non trovato (" + res.status + ")");
+      const source = await res.text();
+
+      const { svg } = await mermaid.render("mermaidSvg", source);
+      diagramEl.innerHTML = svg;
+      loadingEl.style.display = "none";
+
+      const svgEl = diagramEl.querySelector("svg");
+      svgEl.style.maxWidth = "none";
+
+      if (panZoomInstance) panZoomInstance.destroy();
+      panZoomInstance = svgPanZoom(svgEl, {
+        zoomEnabled: true,
+        controlIconsEnabled: false,
+        fit: true,
+        center: true,
+        minZoom: 0.2,
+        maxZoom: 10,
+        zoomScaleSensitivity: 0.4
+      });
+
+      statusEl.textContent = "Aggiornato ✓";
+    } catch (err) {
+      loadingEl.style.display = "none";
+      errorEl.style.display = "block";
+      errorEl.textContent = "Errore nel caricamento del diagramma: " + err.message;
+      statusEl.textContent = "Errore";
+      console.error(err);
+    }
+  }
+
+  document.getElementById("zoomIn").addEventListener("click", () => panZoomInstance && panZoomInstance.zoomIn());
+  document.getElementById("zoomOut").addEventListener("click", () => panZoomInstance && panZoomInstance.zoomOut());
+  document.getElementById("reset").addEventListener("click", () => { if (panZoomInstance) { panZoomInstance.resetZoom(); panZoomInstance.center(); panZoomInstance.fit(); } });
+  document.getElementById("reload").addEventListener("click", loadDiagram);
+
+  loadDiagram();
+</script>
+
+</body>
+</html>
