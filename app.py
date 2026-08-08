@@ -41,7 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger("supporto_fase4")
 app = Flask(__name__)
 
-APP_BUILD = "2026-08-06-clarification-depth-v20"
+APP_BUILD = "2026-08-08-multi-part-qc-v21"
 
 
 def env_required(name: str) -> str:
@@ -283,12 +283,14 @@ La revisione può essere più completa delle risposte normali, ma deve restare l
 """.strip()
 
 FORCED_CONTINUE_PROMPT = """
-Rispondi all'ultimo messaggio come Paola dopo un alert autorizzato da Paola.
-Non dire che c'è stato un alert.
-Rispondi alla domanda concreta come consulente del sonno: usa il piano come riferimento ma adatta al momento se la situazione è cambiata.
-Dai massimo una o due indicazioni per oggi o stanotte.
+Rispondi all'ultimo messaggio come Paola dopo che Paola ha autorizzato la risposta.
+Non dire che c'è stato un alert o un blocco.
+La mamma può aver fatto più domande in un unico messaggio lungo: rispondi a tutte, in prosa fluida, nell'ordine che suona più naturale.
+Se chiede cosa significa un termine (es. finestra di veglia), spiegalo in modo semplice e concreto prima o insieme all'indicazione pratica.
+Se chiede come applicare di notte qualcosa che di giorno non funziona così, parti dalla realtà che descrive e spiega cosa tenere come obiettivo e cosa può restare flessibile stanotte.
+Non troncare la risposta dopo il primo punto: deve coprire tutto ciò che ha chiesto.
 Se il tema sanitario è delicato, rimanda al pediatra e non dare indicazioni mediche.
-Tono prudente, umano, diretto e non eccessivamente lungo.
+Tono caldo, umano e completo, non eccessivamente lungo ma neanche incompleto.
 """.strip()
 
 QUALITY_PROMPT = """
@@ -310,8 +312,9 @@ Può fare una o due domande mirate se servono a capire la dinamica e dare un'ind
 La lunghezza deve rispecchiare il messaggio della mamma: più completo il messaggio, più può essere sviluppata la risposta; messaggio breve, risposta breve.
 Per domande di chiarimento o messaggi articolati con dubbi su indicazioni precedenti, una risposta più sviluppata che spiega il perché e presenta scenari possibili è corretta.
 Non deve fare domande finali di abitudine, ripetere il contesto o diventare lunga senza motivo.
-Metti rewrite=true se basta riscriverla.
-Metti send=false soltanto se è pericolosa, contraddittoria, inventa dati importanti o non risponde alla richiesta.
+Metti rewrite=true se basta riscriverla o se la risposta è utile ma incompleta (manca un pezzo della domanda, si interrompe a metà, non spiega un termine richiesto).
+Metti send=false soltanto se è pericolosa, contraddittoria in modo grave, inventa dati importanti o non risponde affatto alla richiesta.
+Una risposta parziale va riscritta e completata, non bloccata.
 Se la mamma torna dopo 3+ giorni senza aggiornamenti e la risposta fa solo 1-2 domande mirate per capire la situazione attuale, va bene così: non serve rewrite per aggiungere indicazioni operative in quel turno.
 """.strip()
 
@@ -324,9 +327,18 @@ Se serve, adatta le indicazioni alla situazione attuale come farebbe una consule
 Elimina formule da intelligenza artificiale, ripetizioni, spiegazioni inutili e domande superflue o di abitudine.
 Mantieni domande mirate solo se servono davvero a chiarire la situazione.
 Non dire che non puoi vedere foto, video, audio o documenti.
-Per domande di chiarimento, mantieni le spiegazioni del perché e gli scenari possibili; non accorciare in una risposta secca.
-Altrimenti dai al massimo una o due indicazioni pratiche.
+Per domande di chiarimento o messaggi con più domande, mantieni le spiegazioni del perché e rispondi a ogni punto; non accorciare in una risposta secca o incompleta.
+Se manca una parte della risposta, aggiungila senza inventare dati nuovi.
 Scrivi solo il testo finale da inviare su WhatsApp.
+""".strip()
+
+MULTI_PART_PROMPT = """
+La mamma ha fatto più domande o dubbi nello stesso messaggio.
+In questo turno:
+- Rispondi a tutti i punti che ha sollevato, nell'ordine più naturale.
+- Se chiede cosa significa un termine del piano (es. finestra di veglia), spiegalo in parole semplici con un esempio concreto legato alla sua situazione.
+- Se chiede come applicare di notte un consiglio che di giorno non riesce a seguire, riconosci la difficoltà reale e distingui obiettivo a medio termine da ciò che può restare flessibile stanotte.
+- Non fermarti al primo argomento: la risposta deve essere completa.
 """.strip()
 
 CLARIFICATION_PROMPT = """
@@ -994,17 +1006,36 @@ def ensure_memory_fresh(phone: str) -> None:
 
 
 def is_clarification_question(pending_text: str, router: Dict[str, Any]) -> bool:
-    if router.get("intent") != "domanda_pratica":
-        return False
     text = (pending_text or "").lower()
     cues = (
-        "come faccio", "come posso", "non capisco", "non ho capito",
+        "come faccio", "come facciamo", "come posso", "non capisco", "non ho capito",
         "mi ha detto", "mi avevi detto", "mi aveva detto", "quindi",
-        "ma come", "significa che", "in teoria", "altrimenti",
-        "però", "ma tu", "avevi detto", "aveva detto", "devo fare",
-        "dovrei", "è normale", "non so se", "non so come",
+        "ma come", "significa che", "che cosa significa", "cosa significa",
+        "in teoria", "altrimenti", "però", "ma tu", "avevi detto", "aveva detto",
+        "devo fare", "dovrei", "è normale", "non so se", "non so come",
+        "finestra di veglia", "finestra",
     )
-    return any(cue in text for cue in cues) or len(text) > 250
+    if any(cue in text for cue in cues):
+        return True
+    if text.count("?") >= 2:
+        return True
+    if len(text) > 400:
+        return True
+    return router.get("intent") == "domanda_pratica" and len(text) > 250
+
+
+def is_multi_part_question(pending_text: str) -> bool:
+    text = (pending_text or "").strip().lower()
+    if text.count("?") >= 2:
+        return True
+    if len(text) > 500:
+        return True
+    markers = (
+        "e poi", "ultima cosa", "anche", "inoltre", "però", "pero",
+        "che cosa significa", "come facciamo", "come faccio", "di notte",
+    )
+    hits = sum(1 for marker in markers if marker in text)
+    return hits >= 2
 
 
 def should_clarify_after_gap(router: Dict[str, Any], gap_days: Optional[float]) -> bool:
@@ -2158,16 +2189,19 @@ def generate_normal_reply(
     gap_days = days_since_last_assistant_reply(phone)
     clarify_after_gap = should_clarify_after_gap(router, gap_days)
     clarification_question = is_clarification_question(pending_text, router)
+    multi_part_question = is_multi_part_question(pending_text)
     depth = router.get("response_depth", "normal")
     if depth not in {"micro", "normal", "deep"}:
         depth = "normal"
     if clarify_after_gap:
         depth = "normal"
-    elif clarification_question:
+    elif clarification_question or multi_part_question:
         depth = "deep"
     effort = {"micro": "low", "normal": "low", "deep": "medium"}[depth]
     verbosity = "low" if depth == "micro" else "medium"
     max_tokens = 500 if clarify_after_gap else {"micro": 350, "normal": 850, "deep": 1400}[depth]
+    if multi_part_question or (clarification_question and len((pending_text or "").strip()) > 400):
+        max_tokens = max(max_tokens, 2000)
 
     pending_chars = len((pending_text or "").strip())
     gap_note = ""
@@ -2200,6 +2234,8 @@ Se il messaggio è lungo e articolato, puoi essere più completa senza diventare
 Se micro, usa normalmente 1-3 frasi. Se normal, resta proporzionata al messaggio. Se deep, spiega il ragionamento e offri scenari possibili quando la mamma ha dubbi.
 """.strip()
     prompts = [SYSTEM_PROMPT_BASE, operational]
+    if multi_part_question and not clarify_after_gap:
+        prompts.append(MULTI_PART_PROMPT)
     if clarification_question and not clarify_after_gap:
         prompts.append(CLARIFICATION_PROMPT)
     if clarify_after_gap:
@@ -2234,12 +2270,50 @@ Se micro, usa normalmente 1-3 frasi. Se normal, resta proporzionata al messaggio
             phone, user_text, clean, router,
             clarify_after_gap=clarify_after_gap,
             clarification_question=clarification_question,
+            multi_part_question=multi_part_question,
         )
     except Exception as exc:
         logger.exception("Errore risposta AI %s: %s", phone, exc)
         send_to_topic(phone, f"Errore OpenAI: {exc}", kind="alert")
         send_private_alert(f"⚠️ Errore OpenAI per {phone}: {exc}")
         return None
+
+
+def qc_reason_implies_incomplete(reason: str) -> bool:
+    text = (reason or "").lower()
+    markers = (
+        "incomplet", "manca", "non risponde", "interrompe", "tronca",
+        "non copre", "non spiega", "non chiarisce", "parziale",
+    )
+    return any(marker in text for marker in markers)
+
+
+def rewrite_quality_reply(
+    phone: str,
+    pending_text: str,
+    reply: str,
+    reason: str = "",
+    max_output_tokens: int = 900,
+) -> str:
+    rewrite_note = ""
+    if reason:
+        rewrite_note = (
+            f"\nMotivo del controllo qualità: {reason}\n"
+            "Completa la risposta coprendo tutte le domande della mamma."
+        )
+    rewritten = ai_text(
+        model=MODEL_CHAT,
+        system_prompts=[SYSTEM_PROMPT_BASE, QUALITY_REWRITE_PROMPT],
+        user_text=f"""Messaggio mamma:
+{pending_text}
+
+Risposta da correggere:
+{reply}{rewrite_note}""",
+        reasoning_effort="low",
+        verbosity="medium",
+        max_output_tokens=max_output_tokens,
+    )
+    return clean_reply(rewritten)
 
 
 def quality_control_reply(
@@ -2249,6 +2323,7 @@ def quality_control_reply(
     router: Dict[str, Any],
     clarify_after_gap: bool = False,
     clarification_question: bool = False,
+    multi_part_question: bool = False,
 ) -> Optional[str]:
     if not reply:
         return None
@@ -2259,10 +2334,10 @@ def quality_control_reply(
             "\nNOTA: risposta dopo pausa di 3+ giorni senza aggiornamenti sufficienti. "
             "In questo turno è corretto fare solo 1-2 domande mirate, senza indicazioni operative dettagliate."
         )
-    elif clarification_question:
+    elif clarification_question or multi_part_question:
         clarification_note = (
-            "\nNOTA: domanda di chiarimento su indicazioni precedenti. "
-            "Una risposta più sviluppata che spiega il perché e presenta scenari possibili è corretta."
+            "\nNOTA: messaggio con chiarimenti o più domande. "
+            "La risposta deve coprire tutti i punti sollevati, anche se più lunga."
         )
     context = f"""
 MESSAGGIO DELLA MAMMA:
@@ -2287,24 +2362,24 @@ CLASSIFICAZIONE:
             max_output_tokens=300,
         )
         result = safe_json_loads(result_text, default)
+        reason = str(result.get("reason", "") or "")
+        rewrite_tokens = 900
+        if multi_part_question or clarification_question or len((pending_text or "").strip()) > 400:
+            rewrite_tokens = max(1600, min(2400, len((pending_text or "").strip()) // 2 + 1000))
         if not bool(result.get("send", True)):
-            send_to_topic(phone, f"Risposta bloccata dal controllo qualità: {result.get('reason', '')}", kind="alert")
+            if qc_reason_implies_incomplete(reason):
+                completed = rewrite_quality_reply(
+                    phone, pending_text, reply, reason=reason, max_output_tokens=rewrite_tokens,
+                )
+                if completed:
+                    return completed
+            send_to_topic(phone, f"Risposta bloccata dal controllo qualità: {reason}", kind="alert")
             return None
         if not bool(result.get("rewrite", False)):
             return reply
-        rewritten = ai_text(
-            model=MODEL_CHAT,
-            system_prompts=[SYSTEM_PROMPT_BASE, QUALITY_REWRITE_PROMPT],
-            user_text=f"""Messaggio mamma:
-{pending_text}
-
-Risposta da correggere:
-{reply}""",
-            reasoning_effort="low",
-            verbosity="low",
-            max_output_tokens=900,
+        return rewrite_quality_reply(
+            phone, pending_text, reply, reason=reason, max_output_tokens=rewrite_tokens,
         )
-        return clean_reply(rewritten)
     except Exception as exc:
         logger.exception("Errore controllo qualità %s: %s", phone, exc)
         return reply
